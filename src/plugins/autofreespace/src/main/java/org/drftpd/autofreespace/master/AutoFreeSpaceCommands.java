@@ -32,25 +32,30 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class AutoFreeSpaceCommands extends CommandInterface {
+    private static final Pattern LIMIT_OPTION_PATTERN =
+            Pattern.compile("(?i)^(.*)\\s+(?:-l|-limit|--limit)(?:\\s+|=)(\\d+)\\s*$");
 
     public CommandResponse doSITE_DUPE2(CommandRequest request) throws ImproperUsageException {
         if (!request.hasArgument()) {
             throw new ImproperUsageException();
         }
 
-        String argument = request.getArgument().trim();
-        int limit = Integer.parseInt(request.getProperties().getProperty("limit", "50"));
-        int sectionLimit = Integer.parseInt(request.getProperties().getProperty("section.limit",
-                String.valueOf(limit)));
+        int defaultLimit = Integer.parseInt(request.getProperties().getProperty("limit", "50"));
+        int defaultSectionLimit = Integer.parseInt(request.getProperties().getProperty("section.limit",
+                String.valueOf(defaultLimit)));
+        ParsedArgument parsedArgument = parseArgument(request.getArgument().trim(), defaultLimit, defaultSectionLimit);
+        String argument = parsedArgument.getQuery();
         boolean observePrivPath = request.getProperties().getProperty("observe.privpath", "true")
                 .equalsIgnoreCase("true");
         User user = request.getSession().getUserNull(request.getUser());
 
         SectionInterface section = findSection(argument);
         if (section != null) {
-            return doSectionDupe2(section, sectionLimit, observePrivPath, user);
+            return doSectionDupe2(section, parsedArgument.getSectionLimit(), observePrivPath, user);
         }
 
         String releaseName = getReleaseName(argument);
@@ -70,7 +75,7 @@ public class AutoFreeSpaceCommands extends CommandInterface {
             return response;
         }
 
-        addCandidateGroup(response, candidates, limit);
+        addCandidateGroup(response, candidates, parsedArgument.getLimit());
         return response;
     }
 
@@ -90,7 +95,7 @@ public class AutoFreeSpaceCommands extends CommandInterface {
         Collections.sort(keys);
         int groups = 0;
         for (String key : keys) {
-            if (groups >= limit) {
+            if (limit > 0 && groups >= limit) {
                 response.addComment("Section result limit reached (" + limit + " group(s)).");
                 break;
             }
@@ -175,5 +180,45 @@ public class AutoFreeSpaceCommands extends CommandInterface {
             return argument.substring(slash + 1);
         }
         return argument;
+    }
+
+    private ParsedArgument parseArgument(String argument, int defaultLimit, int defaultSectionLimit)
+            throws ImproperUsageException {
+        Matcher matcher = LIMIT_OPTION_PATTERN.matcher(argument);
+        if (!matcher.matches()) {
+            return new ParsedArgument(argument, defaultLimit, defaultSectionLimit);
+        }
+
+        String query = matcher.group(1).trim();
+        if (query.equals("")) {
+            throw new ImproperUsageException();
+        }
+
+        int overrideLimit = Integer.parseInt(matcher.group(2));
+        return new ParsedArgument(query, overrideLimit, overrideLimit);
+    }
+
+    private static class ParsedArgument {
+        private final String query;
+        private final int limit;
+        private final int sectionLimit;
+
+        private ParsedArgument(String query, int limit, int sectionLimit) {
+            this.query = query;
+            this.limit = limit;
+            this.sectionLimit = sectionLimit;
+        }
+
+        private String getQuery() {
+            return query;
+        }
+
+        private int getLimit() {
+            return limit;
+        }
+
+        private int getSectionLimit() {
+            return sectionLimit;
+        }
     }
 }

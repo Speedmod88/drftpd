@@ -54,6 +54,7 @@ keepFree=100GB
 # SITE DUPE2 / !dupe2 <release> scans all sections and reports duplicates for the same key.
 # SITE DUPE2 / !dupe2 <section> uses that section's dirlisting, deduplicates by Dupe2 key,
 # then reports matching duplicate groups found across all sections.
+# Add -l N or -limit N to override the configured command limit for one lookup.
 # AutoFreeSpace Dupe2 cleanup also scans all sections, but only wipes from sections with x.dupeonly=true.
 # Commands show status=completed or status=incomplete. Cleanup ignores incomplete releases.
 # Completion is checked from zipscript SFV/DIZ metadata.
