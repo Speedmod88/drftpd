@@ -50,9 +50,13 @@ final class Dupe2Utils {
     }
 
     static Map<String, List<DupeCandidate>> getAllSectionCandidates() {
+        return getAllSectionCandidates(false);
+    }
+
+    static Map<String, List<DupeCandidate>> getAllSectionCandidates(boolean includeIncomplete) {
         Map<String, List<DupeCandidate>> candidatesByKey = new HashMap<>();
         for (SectionInterface section : GlobalContext.getGlobalContext().getSectionManager().getSections()) {
-            addSectionCandidates(candidatesByKey, section);
+            addSectionCandidates(candidatesByKey, section, includeIncomplete);
         }
         return candidatesByKey;
     }
@@ -76,6 +80,22 @@ final class Dupe2Utils {
             keepersByBucket.put("fallback", candidates.get(0));
         }
         return new HashSet<>(keepersByBucket.values());
+    }
+
+    static Map<String, List<DupeCandidate>> getSectionCandidates(SectionInterface section, boolean includeIncomplete) {
+        Map<String, List<DupeCandidate>> candidatesByKey = new HashMap<>();
+        addSectionCandidates(candidatesByKey, section, includeIncomplete);
+        return candidatesByKey;
+    }
+
+    static List<DupeCandidate> getCompletedCandidates(List<DupeCandidate> candidates) {
+        List<DupeCandidate> completed = new ArrayList<>();
+        for (DupeCandidate candidate : candidates) {
+            if (candidate.isComplete()) {
+                completed.add(candidate);
+            }
+        }
+        return completed;
     }
 
     static String makeDupeKey(String releaseName) {
@@ -108,11 +128,12 @@ final class Dupe2Utils {
         return null;
     }
 
-    private static void addSectionCandidates(Map<String, List<DupeCandidate>> candidatesByKey, SectionInterface section) {
+    private static void addSectionCandidates(Map<String, List<DupeCandidate>> candidatesByKey, SectionInterface section,
+                                             boolean includeIncomplete) {
         for (DirectoryHandle baseDirectory : section.getDirectories()) {
             try {
                 for (DirectoryHandle release : baseDirectory.getDirectoriesUnchecked()) {
-                    DupeCandidate candidate = makeDupeCandidate(release, section.getName());
+                    DupeCandidate candidate = makeDupeCandidate(release, section.getName(), includeIncomplete);
                     if (candidate != null) {
                         candidatesByKey.computeIfAbsent(candidate.getKey(), k -> new ArrayList<>()).add(candidate);
                     }
@@ -123,7 +144,8 @@ final class Dupe2Utils {
         }
     }
 
-    private static DupeCandidate makeDupeCandidate(DirectoryHandle release, String sectionName) {
+    private static DupeCandidate makeDupeCandidate(DirectoryHandle release, String sectionName,
+                                                   boolean includeIncomplete) {
         String key = makeDupeKey(release.getName());
         if (key == null) {
             return null;
@@ -131,14 +153,15 @@ final class Dupe2Utils {
         if (checkInvalidName(release.getName())) {
             return null;
         }
-        if (!isComplete(release)) {
+        boolean complete = isComplete(release);
+        if (!includeIncomplete && !complete) {
             logger.debug("DUPE2: Skipping incomplete duplicate candidate {}", release.getPath());
             return null;
         }
         try {
             int score = scoreRelease(release.getName());
             String bucket = findKeepBucket(release.getName());
-            return new DupeCandidate(key, release, sectionName, bucket, score, release.getSize(), release.creationTime());
+            return new DupeCandidate(key, release, sectionName, bucket, score, complete, release.getSize(), release.creationTime());
         } catch (FileNotFoundException e) {
             logger.warn("DUPE2: Duplicate candidate disappeared while scanning: {}", release.getPath());
             return null;
@@ -246,16 +269,18 @@ final class Dupe2Utils {
         private final String sectionName;
         private String bucket;
         private final int score;
+        private final boolean complete;
         private final long size;
         private final long creationTime;
 
         private DupeCandidate(String key, DirectoryHandle directory, String sectionName, String bucket, int score,
-                              long size, long creationTime) {
+                              boolean complete, long size, long creationTime) {
             this.key = key;
             this.directory = directory;
             this.sectionName = sectionName;
             this.bucket = bucket;
             this.score = score;
+            this.complete = complete;
             this.size = size;
             this.creationTime = creationTime;
         }
@@ -286,6 +311,14 @@ final class Dupe2Utils {
 
         int getScore() {
             return score;
+        }
+
+        boolean isComplete() {
+            return complete;
+        }
+
+        String getStatus() {
+            return complete ? "completed" : "incomplete";
         }
 
         long getSize() {

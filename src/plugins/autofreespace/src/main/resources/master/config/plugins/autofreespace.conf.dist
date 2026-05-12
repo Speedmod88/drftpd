@@ -51,15 +51,19 @@ keepFree=100GB
 ## Dupe2 duplicate release settings                                                               #
 ####################################################################################################
 
-# SITE DUPE2 / !dupe2 scans all sections and reports completed duplicates for the same key.
+# SITE DUPE2 / !dupe2 <release> scans all sections and reports duplicates for the same key.
+# SITE DUPE2 / !dupe2 <section> uses that section's dirlisting, deduplicates by Dupe2 key,
+# then reports matching duplicate groups found across all sections.
 # AutoFreeSpace Dupe2 cleanup also scans all sections, but only wipes from sections with x.dupeonly=true.
-# Incomplete releases are ignored. Completion is checked from zipscript SFV/DIZ metadata.
+# Commands show status=completed or status=incomplete. Cleanup ignores incomplete releases.
+# Completion is checked from zipscript SFV/DIZ metadata.
 
 # Remove the trailing release group before parsing/scoring.
 # Example: Release.Name.2025.FRENCH.1080p.WEB.H264-GROUP -> Release.Name.2025.FRENCH.1080p.WEB.H264
 dupe.group.regex=-([A-Za-z0-9._]+)$
 
 # First token that marks the start of variant details. The duplicate key is everything before this marker.
+# Edit this regex to add/remove markers whenever you need new release tags to split the title/key.
 # S01E01, E01, and E001 are not markers by default, so they stay in the key and different episodes do not collide.
 # Examples:
 #   My.Show.S01E01.MULTi.1080p.WEB.x264-GRP -> my.show.s01e01
