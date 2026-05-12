@@ -15,7 +15,6 @@ public class AutoFreeSpaceSettings {
     public static String MODE_DISABLED = "Disabled";
     public static String MODE_DATE = "Date";
     public static String MODE_SPACE = "Space";
-    private static final String DEFAULT_DUPE_GROUP_REGEX = "-([A-Za-z0-9._]+)$";
     private static final String DEFAULT_DUPE_MARKER_REGEX =
             "(?i)(^|[._ -])(MULTI|SUBFRENCH|FRENCH|TRUEFRENCH|VOSTFR|2160P|1080P|720P|480P|WEB[-.]?DL|WEBDL|WEB|BLURAY|BDRIP|HDRIP|DVDRIP|HDTV|UHD|HDR|DV|HEVC|H265|H264|X265|X264)([._ -]|$)";
     private static AutoFreeSpaceSettings ref;
@@ -30,7 +29,6 @@ public class AutoFreeSpaceSettings {
     private long _minFreeSpace;
     private long _cycleTime;
     private int _maxIterations;
-    private String _dupeGroupRegex;
     private String _dupeMarkerRegex;
 
     private AutoFreeSpaceSettings() {
@@ -46,7 +44,6 @@ public class AutoFreeSpaceSettings {
         _minFreeSpace = 0L;
         _cycleTime = 10080L * 60000L;
         _maxIterations = 5;
-        _dupeGroupRegex = DEFAULT_DUPE_GROUP_REGEX;
         _dupeMarkerRegex = DEFAULT_DUPE_MARKER_REGEX;
         reload();
     }
@@ -135,7 +132,6 @@ public class AutoFreeSpaceSettings {
         _excludeFiles = excludeFiles;
         logger.debug("excluded Files set to {}", _excludeFiles.toString());
 
-        _dupeGroupRegex = p.getProperty("dupe.group.regex", DEFAULT_DUPE_GROUP_REGEX);
         _dupeMarkerRegex = p.getProperty("dupe.marker.regex", DEFAULT_DUPE_MARKER_REGEX);
         _dupeKeepUnmatched = p.getProperty("dupe.keep.unmatched", "true").equalsIgnoreCase("true");
         _dupeScoreRules = loadDupeScoreRules(p);
@@ -232,10 +228,6 @@ public class AutoFreeSpaceSettings {
     public boolean isDupeOnlySection(String sectionName) {
         Section section = _sections.get(sectionName);
         return section != null && section.isDupeOnly();
-    }
-
-    public String getDupeGroupRegex() {
-        return _dupeGroupRegex;
     }
 
     public String getDupeMarkerRegex() {

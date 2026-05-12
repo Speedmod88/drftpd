@@ -99,9 +99,8 @@ final class Dupe2Utils {
     }
 
     static String makeDupeKey(String releaseName) {
-        String body = stripReleaseGroup(releaseName);
-        int markerIndex = findMarkerIndex(body);
-        String title = markerIndex >= 0 ? body.substring(0, markerIndex) : body;
+        int markerIndex = findMarkerIndex(releaseName);
+        String title = markerIndex >= 0 ? releaseName.substring(0, markerIndex) : releaseName;
         title = normalizeKeyToken(title);
         return title.equals("") ? null : title;
     }
@@ -178,10 +177,9 @@ final class Dupe2Utils {
     }
 
     private static String findKeepBucket(String releaseName) {
-        String body = stripReleaseGroup(releaseName);
         for (AutoFreeSpaceSettings.KeepRule keepRule : AutoFreeSpaceSettings.getSettings().getDupeKeepRules()) {
             try {
-                if (Pattern.compile(keepRule.getRegex(), Pattern.CASE_INSENSITIVE).matcher(body).find()) {
+                if (Pattern.compile(keepRule.getRegex(), Pattern.CASE_INSENSITIVE).matcher(releaseName).find()) {
                     return keepRule.getName();
                 }
             } catch (PatternSyntaxException e) {
@@ -204,15 +202,6 @@ final class Dupe2Utils {
         return -1;
     }
 
-    private static String stripReleaseGroup(String releaseName) {
-        try {
-            return releaseName.replaceFirst(AutoFreeSpaceSettings.getSettings().getDupeGroupRegex(), "");
-        } catch (PatternSyntaxException e) {
-            logger.error("DUPE2: Invalid dupe.group.regex, keeping release name unmodified", e);
-            return releaseName;
-        }
-    }
-
     private static String normalizeKeyToken(String value) {
         return value.toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9]+", ".")
@@ -221,10 +210,9 @@ final class Dupe2Utils {
 
     private static int scoreRelease(String releaseName) {
         int score = 0;
-        String body = stripReleaseGroup(releaseName);
         for (AutoFreeSpaceSettings.ScoreRule scoreRule : AutoFreeSpaceSettings.getSettings().getDupeScoreRules()) {
             try {
-                if (Pattern.compile(scoreRule.getRegex(), Pattern.CASE_INSENSITIVE).matcher(body).find()) {
+                if (Pattern.compile(scoreRule.getRegex(), Pattern.CASE_INSENSITIVE).matcher(releaseName).find()) {
                     score += scoreRule.getPoints();
                 }
             } catch (PatternSyntaxException e) {

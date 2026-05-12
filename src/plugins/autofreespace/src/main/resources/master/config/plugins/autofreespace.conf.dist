@@ -58,10 +58,6 @@ keepFree=100GB
 # Commands show status=completed or status=incomplete. Cleanup ignores incomplete releases.
 # Completion is checked from zipscript SFV/DIZ metadata.
 
-# Remove the trailing release group before parsing/scoring.
-# Example: Release.Name.2025.FRENCH.1080p.WEB.H264-GROUP -> Release.Name.2025.FRENCH.1080p.WEB.H264
-dupe.group.regex=-([A-Za-z0-9._]+)$
-
 # First token that marks the start of variant details. The duplicate key is everything before this marker.
 # Edit this regex to add/remove markers whenever you need new release tags to split the title/key.
 # S01E01, E01, and E001 are not markers by default, so they stay in the key and different episodes do not collide.
@@ -88,6 +84,8 @@ dupe.keep.unmatched=true
 #dupe.keep.4.regex=(?i)(^|[._ -])FRENCH([._ -]|$)
 
 # Scoring rules. Add as many as needed. Highest score wins inside each keep bucket.
+# Scoring runs against the full release name, so group scoring works too.
+# Example: dupe.score.7.regex=(?i)-GRPNAME$
 dupe.score.1.regex=(?i)(^|[._ -])MULTI([._ -]|$)
 dupe.score.1.points=200
 dupe.score.2.regex=(?i)(^|[._ -])FRENCH([._ -]|$)
