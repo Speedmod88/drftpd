@@ -20,18 +20,13 @@ package org.drftpd.autofreespace.master;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.drftpd.master.GlobalContext;
-import org.drftpd.master.exceptions.NoAvailableSlaveException;
 import org.drftpd.master.sections.SectionInterface;
-import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.vfs.DirectoryHandle;
-import org.drftpd.master.vfs.FileHandle;
-import org.drftpd.master.vfs.InodeHandle;
 import org.drftpd.zipscript.master.sfv.vfs.ZipscriptVFSDataSFV;
 import org.drftpd.zipscript.master.zip.vfs.ZipscriptVFSDataZip;
 
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -112,19 +107,6 @@ final class Dupe2Utils {
         }
         Collections.sort(names);
         return names.toString();
-    }
-
-    static RemoteSlave findEligibleSlave(InodeHandle release, Collection<RemoteSlave> availableSlaves)
-            throws NoAvailableSlaveException, FileNotFoundException {
-        for (RemoteSlave slave : availableSlaves) {
-            if (AutoFreeSpaceSettings.getSettings().getExcludeSlaves().contains(slave.getName())) {
-                continue;
-            }
-            if (gotFilesOn(release, slave)) {
-                return slave;
-            }
-        }
-        return null;
     }
 
     private static void addSectionCandidates(Map<String, List<DupeCandidate>> candidatesByKey, SectionInterface section,
@@ -235,20 +217,6 @@ final class Dupe2Utils {
         } catch (Exception ignored) {
             return false;
         }
-    }
-
-    private static boolean gotFilesOn(InodeHandle inode, RemoteSlave slave)
-            throws NoAvailableSlaveException, FileNotFoundException {
-        if (inode.isFile()) {
-            return ((FileHandle) inode).getAvailableSlaves().contains(slave);
-        } else if (inode.isDirectory()) {
-            for (FileHandle file : ((DirectoryHandle) inode).getAllFilesRecursiveUnchecked()) {
-                if (file.getAvailableSlaves().contains(slave)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     static class DupeCandidate implements Comparable<DupeCandidate> {

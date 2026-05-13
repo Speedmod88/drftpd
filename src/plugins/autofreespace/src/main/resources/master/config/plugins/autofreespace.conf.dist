@@ -40,9 +40,11 @@ keepFree=100GB
 
 # Section cleanup rules.
 # section accepts one section or comma-separated sections.
-# wipeAfter is only used if mode = date.
+# wipeAfter is used by mode=date and by Dupe2 cleanup when dupeonly=true.
+# For Dupe2, only duplicate variants older than wipeAfter are wiped. Use wipeAfter=0 for no age delay.
 # dupeonly allows AutoFreeSpace to wipe duplicate variants from this section.
 # Dupe2 still scans all sections to decide duplicates and keepers; only dupeonly sections are wiped.
+# Dupe2 uses the normal VFS delete path, so deletes on offline slaves are queued until the slave reconnects.
 #1.section=SECTION1,SECTION2,SECTION3
 #1.wipeAfter=43200
 #1.dupeonly=true

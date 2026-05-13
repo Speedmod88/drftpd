@@ -83,9 +83,14 @@ public class AFSAnnouncer extends AbstractAnnouncer {
                     env.put("size", Bytes.formatBytes(inodeSpace));
                     env.put("date", (new SimpleDateFormat("MM/dd/yy h:mma")).format(new Date(inode.lastModified())));
                 }
-                env.put("slave", slave.getName());
-                long slaveSpace = slave.getSlaveStatus().getDiskSpaceAvailable();
-                env.put("slavesize", Bytes.formatBytes(slaveSpace));
+                if (slave != null) {
+                    env.put("slave", slave.getName());
+                    long slaveSpace = slave.getSlaveStatus().getDiskSpaceAvailable();
+                    env.put("slavesize", Bytes.formatBytes(slaveSpace));
+                } else {
+                    env.put("slave", "queued");
+                    env.put("slavesize", "unknown");
+                }
             } catch (FileNotFoundException e) {
                 // Hmm, file deleted?
             } catch (SlaveUnavailableException e) {
