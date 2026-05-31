@@ -53,8 +53,8 @@ keepFree=100GB
 ## Dupe2 duplicate release settings                                                               #
 ####################################################################################################
 
-# SITE DUPE2 / !dupe2 <release> scans all sections and reports duplicates for the same key.
-# SITE DUPE2 / !dupe2 <section> uses that section's dirlisting, deduplicates by Dupe2 key,
+# SITE DUPE2 / !dupe2 <release> uses the index to scan all sections and reports duplicates for the same key.
+# SITE DUPE2 / !dupe2 <section> uses the index under that section, deduplicates by Dupe2 key,
 # then reports matching duplicate groups found across all sections.
 # Add -l N or -limit N to override the configured command limit for one lookup.
 # AutoFreeSpace Dupe2 cleanup also scans all sections, but only wipes from sections with x.dupeonly=true.
@@ -66,6 +66,7 @@ keepFree=100GB
 # S01E01, E01, and E001 are not markers by default, so they stay in the key and different episodes do not collide.
 # Examples:
 #   My.Show.S01E01.MULTi.1080p.WEB.x264-GRP -> my.show.s01e01
+#   The.Bold.Type.2017.S01E01.FRENCH.DVDRIP.X264-GRP -> the.bold.type.2017.s01e01
 #   The.Secret.Agent.2025.FRENCH.720p.WEB.H264-GRP -> the.secret.agent.2025
 dupe.marker.regex=(?i)(^|[._ -])(MULTI|SUBFRENCH|FRENCH|TRUEFRENCH|VOSTFR|2160P|1080P|720P|480P|WEB[-.]?DL|WEBDL|WEB|BLURAY|BDRIP|HDRIP|DVDRIP|HDTV|UHD|HDR|DV|HEVC|H265|H264|X265|X264)([._ -]|$)
 

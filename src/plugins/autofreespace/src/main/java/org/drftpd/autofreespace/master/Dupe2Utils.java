@@ -125,13 +125,13 @@ final class Dupe2Utils {
         }
     }
 
-    private static DupeCandidate makeDupeCandidate(DirectoryHandle release, String sectionName,
-                                                   boolean includeIncomplete) {
+    static DupeCandidate makeDupeCandidate(DirectoryHandle release, String sectionName,
+                                           boolean includeIncomplete) {
         String key = makeDupeKey(release.getName());
         if (key == null) {
             return null;
         }
-        if (checkInvalidName(release.getName())) {
+        if (isExcludedReleaseName(release.getName())) {
             return null;
         }
         boolean complete = isComplete(release);
@@ -149,7 +149,7 @@ final class Dupe2Utils {
         }
     }
 
-    private static boolean checkInvalidName(String name) {
+    static boolean isExcludedReleaseName(String name) {
         for (String regex : AutoFreeSpaceSettings.getSettings().getExcludeFiles()) {
             if (name.matches(regex)) {
                 return true;
