@@ -17,6 +17,8 @@
  */
 package org.drftpd.autofreespace.master;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.drftpd.common.util.Bytes;
 import org.drftpd.master.GlobalContext;
 import org.drftpd.master.commands.CommandInterface;
@@ -36,41 +38,61 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class AutoFreeSpaceCommands extends CommandInterface {
+    private static final Logger logger = LogManager.getLogger(AutoFreeSpaceCommands.class);
+
     private static final Pattern LIMIT_OPTION_PATTERN =
             Pattern.compile("(?i)^(.*)\\s+(?:-l|-limit|--limit)(?:\\s+|=)(\\d+)\\s*$");
 
     public CommandResponse doSITE_DUPE2(CommandRequest request) throws ImproperUsageException {
         if (!request.hasArgument()) {
+            logger.info("DUPE2 command rejected: missing argument user={} command={}",
+                    request.getUser(), request.getCommand());
             throw new ImproperUsageException();
         }
 
         int defaultLimit = Integer.parseInt(request.getProperties().getProperty("limit", "50"));
         int defaultSectionLimit = Integer.parseInt(request.getProperties().getProperty("section.limit",
                 String.valueOf(defaultLimit)));
-        ParsedArgument parsedArgument = parseArgument(request.getArgument().trim(), defaultLimit, defaultSectionLimit);
+        String rawArgument = request.getArgument().trim();
+        ParsedArgument parsedArgument = parseArgument(rawArgument, defaultLimit, defaultSectionLimit);
         String argument = parsedArgument.getQuery();
         boolean observePrivPath = request.getProperties().getProperty("observe.privpath", "true")
                 .equalsIgnoreCase("true");
         User user = request.getSession().getUserNull(request.getUser());
+        logger.info("DUPE2 command start: user={} command={} rawArgument=[{}] query=[{}] limit={} sectionLimit={} observePrivPath={}",
+                request.getUser(), request.getCommand(), rawArgument, argument, parsedArgument.getLimit(),
+                parsedArgument.getSectionLimit(), observePrivPath);
 
         SectionInterface section = findSection(argument);
         if (section != null) {
+            logger.info("DUPE2 command detected section query: user={} section={} sectionLimit={}",
+                    request.getUser(), section.getName(), parsedArgument.getSectionLimit());
             return doSectionDupe2(section, parsedArgument.getSectionLimit(), observePrivPath, user);
         }
 
         String releaseName = getReleaseName(argument);
         String key = Dupe2Utils.makeDupeKey(releaseName);
         if (key == null) {
+            logger.warn("DUPE2 command failed to build key: user={} releaseName=[{}] argument=[{}]",
+                    request.getUser(), releaseName, argument);
             return new CommandResponse(550, "Unable to build Dupe2 key from: " + releaseName);
         }
+        logger.info("DUPE2 command detected release query: user={} releaseName=[{}] key={}",
+                request.getUser(), releaseName, key);
 
         Map<String, List<Dupe2Utils.DupeCandidate>> candidatesByKey = Dupe2Utils.getAllSectionCandidates(true);
-        List<Dupe2Utils.DupeCandidate> candidates = getVisibleCandidates(candidatesByKey.get(key),
-                observePrivPath, user);
+        List<Dupe2Utils.DupeCandidate> rawCandidates = candidatesByKey.get(key);
+        VisibleCandidates visibleCandidates = getVisibleCandidates(rawCandidates, observePrivPath, user);
+        List<Dupe2Utils.DupeCandidate> candidates = visibleCandidates.getCandidates();
+        logger.info("DUPE2 release scan complete: user={} key={} totalKeys={} rawMatches={} visibleMatches={} hiddenMatches={} missingMatches={} resultLimit={}",
+                request.getUser(), key, candidatesByKey.size(), getCandidateCount(rawCandidates), candidates.size(),
+                visibleCandidates.getHiddenCount(), visibleCandidates.getMissingCount(), parsedArgument.getLimit());
 
         CommandResponse response = new CommandResponse(200, "Dupe2 complete");
         response.addComment("Dupe2 key: " + key);
         if (candidates.isEmpty()) {
+            logger.info("DUPE2 release scan found no visible matches: user={} key={} releaseName=[{}]",
+                    request.getUser(), key, releaseName);
             response.addComment("No releases found for this key.");
             return response;
         }
@@ -80,13 +102,20 @@ public class AutoFreeSpaceCommands extends CommandInterface {
     }
 
     private CommandResponse doSectionDupe2(SectionInterface section, int limit, boolean observePrivPath, User user) {
+        logger.info("DUPE2 section scan start: user={} section={} groupLimit={} observePrivPath={}",
+                user == null ? null : user.getName(), section.getName(), limit, observePrivPath);
         Map<String, List<Dupe2Utils.DupeCandidate>> sectionCandidates =
                 Dupe2Utils.getSectionCandidates(section, true);
         Map<String, List<Dupe2Utils.DupeCandidate>> allCandidates = Dupe2Utils.getAllSectionCandidates(true);
+        logger.info("DUPE2 section scan loaded candidates: user={} section={} sectionKeys={} sectionCandidates={} allKeys={} allCandidates={}",
+                user == null ? null : user.getName(), section.getName(), sectionCandidates.size(),
+                getCandidateCount(sectionCandidates), allCandidates.size(), getCandidateCount(allCandidates));
 
         CommandResponse response = new CommandResponse(200, "Dupe2 section scan complete");
         response.addComment("Dupe2 section: " + section.getName());
         if (sectionCandidates.isEmpty()) {
+            logger.info("DUPE2 section scan found no section candidates: user={} section={}",
+                    user == null ? null : user.getName(), section.getName());
             response.addComment("No releases found in this section.");
             return response;
         }
@@ -99,39 +128,55 @@ public class AutoFreeSpaceCommands extends CommandInterface {
                 response.addComment("Section result limit reached (" + limit + " group(s)).");
                 break;
             }
-            List<Dupe2Utils.DupeCandidate> candidates = getVisibleCandidates(allCandidates.get(key),
-                    observePrivPath, user);
+            VisibleCandidates visibleCandidates = getVisibleCandidates(allCandidates.get(key), observePrivPath, user);
+            List<Dupe2Utils.DupeCandidate> candidates = visibleCandidates.getCandidates();
             if (candidates.size() < 2) {
+                logger.debug("DUPE2 section scan skipped non-duplicate key: section={} key={} visibleMatches={} hiddenMatches={} missingMatches={}",
+                        section.getName(), key, candidates.size(), visibleCandidates.getHiddenCount(),
+                        visibleCandidates.getMissingCount());
                 continue;
             }
+            logger.info("DUPE2 section scan duplicate group: user={} section={} key={} visibleMatches={} hiddenMatches={} missingMatches={}",
+                    user == null ? null : user.getName(), section.getName(), key, candidates.size(),
+                    visibleCandidates.getHiddenCount(), visibleCandidates.getMissingCount());
             response.addComment("Dupe2 key: " + key);
             addCandidateGroup(response, candidates, 0);
             groups++;
         }
 
         if (groups == 0) {
+            logger.info("DUPE2 section scan found no duplicate groups: user={} section={} checkedKeys={}",
+                    user == null ? null : user.getName(), section.getName(), sectionCandidates.size());
             response.addComment("No duplicate groups found from this section.");
+        } else {
+            logger.info("DUPE2 section scan complete: user={} section={} groups={}",
+                    user == null ? null : user.getName(), section.getName(), groups);
         }
         return response;
     }
 
-    private List<Dupe2Utils.DupeCandidate> getVisibleCandidates(List<Dupe2Utils.DupeCandidate> candidates,
-                                                                boolean observePrivPath, User user) {
+    private VisibleCandidates getVisibleCandidates(List<Dupe2Utils.DupeCandidate> candidates,
+                                                   boolean observePrivPath, User user) {
         List<Dupe2Utils.DupeCandidate> visibleCandidates = new ArrayList<>();
+        int hiddenCount = 0;
+        int missingCount = 0;
         if (candidates == null) {
-            return visibleCandidates;
+            return new VisibleCandidates(visibleCandidates, hiddenCount, missingCount);
         }
         for (Dupe2Utils.DupeCandidate candidate : candidates) {
             try {
                 if (candidate.getDirectory().isHidden(observePrivPath ? user : null)) {
+                    hiddenCount++;
                     continue;
                 }
                 visibleCandidates.add(candidate);
             } catch (FileNotFoundException e) {
-                // Ignore entries that disappeared while the command was running.
+                missingCount++;
+                logger.debug("DUPE2 command candidate disappeared while filtering visibility: {}",
+                        candidate.getDirectory().getPath());
             }
         }
-        return visibleCandidates;
+        return new VisibleCandidates(visibleCandidates, hiddenCount, missingCount);
     }
 
     private void addCandidateGroup(CommandResponse response, List<Dupe2Utils.DupeCandidate> candidates, int limit) {
@@ -165,6 +210,18 @@ public class AutoFreeSpaceCommands extends CommandInterface {
                 + " path=" + candidate.getDirectory().getPath();
     }
 
+    private int getCandidateCount(Map<String, List<Dupe2Utils.DupeCandidate>> candidatesByKey) {
+        int count = 0;
+        for (List<Dupe2Utils.DupeCandidate> candidates : candidatesByKey.values()) {
+            count += candidates.size();
+        }
+        return count;
+    }
+
+    private int getCandidateCount(List<Dupe2Utils.DupeCandidate> candidates) {
+        return candidates == null ? 0 : candidates.size();
+    }
+
     private SectionInterface findSection(String name) {
         for (SectionInterface section : GlobalContext.getGlobalContext().getSectionManager().getSections()) {
             if (section.getName().equalsIgnoreCase(name)) {
@@ -196,6 +253,30 @@ public class AutoFreeSpaceCommands extends CommandInterface {
 
         int overrideLimit = Integer.parseInt(matcher.group(2));
         return new ParsedArgument(query, overrideLimit, overrideLimit);
+    }
+
+    private static class VisibleCandidates {
+        private final List<Dupe2Utils.DupeCandidate> candidates;
+        private final int hiddenCount;
+        private final int missingCount;
+
+        private VisibleCandidates(List<Dupe2Utils.DupeCandidate> candidates, int hiddenCount, int missingCount) {
+            this.candidates = candidates;
+            this.hiddenCount = hiddenCount;
+            this.missingCount = missingCount;
+        }
+
+        private List<Dupe2Utils.DupeCandidate> getCandidates() {
+            return candidates;
+        }
+
+        private int getHiddenCount() {
+            return hiddenCount;
+        }
+
+        private int getMissingCount() {
+            return missingCount;
+        }
     }
 
     private static class ParsedArgument {

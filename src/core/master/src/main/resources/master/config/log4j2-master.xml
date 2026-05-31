@@ -44,6 +44,16 @@
                 </Delete>
             </DefaultRolloverStrategy>
         </RollingFile>
+        <RollingFile name="autofreespace" fileName="${baseDir}/autofreespace.log" filePattern="${baseDir}/$${date:yyyy-MM}/autofreespace-%d{yyyy-MM-dd}.log.gz">
+            <PatternLayout pattern="%p %d{ISO8601} [%t] %c %x - %m%n" />
+            <CronTriggeringPolicy schedule="0 0 0 * * ?" />
+            <DefaultRolloverStrategy>
+                <Delete basePath="${baseDir}" maxDepth="2">
+                    <IfFileName glob="*/autofreespace-*.log.gz" />
+                    <IfLastModified age="90d" />
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
         <RollingFile name="jobmanager" fileName="${baseDir}/jobmanager.log" filePattern="${baseDir}/$${date:yyyy-MM}/jobmanager-%d{yyyy-MM-dd}.log.gz">
             <PatternLayout pattern="%p %d{ISO8601} [%t] %c %x - %m%n" />
             <CronTriggeringPolicy schedule="0 0 0 * * ?" />
@@ -137,6 +147,9 @@
         </Logger>
         <Logger name="org.drftpd.archive.master" level="warn" additivity="false">
             <AppenderRef ref="archive" />
+        </Logger>
+        <Logger name="org.drftpd.autofreespace.master" level="info" additivity="false">
+            <AppenderRef ref="autofreespace" />
         </Logger>
         <Logger name="org.drftpd.jobs.master" level="warn" additivity="false">
             <AppenderRef ref="jobmanager" />
