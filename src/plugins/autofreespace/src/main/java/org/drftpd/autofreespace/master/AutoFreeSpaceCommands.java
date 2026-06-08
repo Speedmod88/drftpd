@@ -165,39 +165,14 @@ public class AutoFreeSpaceCommands extends CommandInterface {
             return response;
         }
 
-        List<String> keys = new ArrayList<>(sectionKeys.getKeys());
-        Collections.sort(keys);
-        int groups = 0;
-        for (String key : keys) {
-            if (limit > 0 && groups >= limit) {
-                response.addComment("Section result limit reached (" + limit + " group(s)).");
-                break;
-            }
-            IndexedCandidates indexedCandidates;
-            try {
-                indexedCandidates = getIndexedCandidatesForKey(key);
-            } catch (IndexException | IllegalArgumentException e) {
-                logger.warn("DUPE2 indexed duplicate lookup failed during section scan: user={} section={} key={} error={}",
-                        user == null ? null : user.getName(), section.getName(), key, e.getMessage(), e);
-                response.addComment("Dupe2 key " + key + " skipped: " + e.getMessage());
-                continue;
-            }
-            VisibleCandidates visibleCandidates = getVisibleCandidates(indexedCandidates.getCandidates(), observePrivPath, user);
-            List<Dupe2Utils.DupeCandidate> candidates = visibleCandidates.getCandidates();
-            if (candidates.size() < 2) {
-                logger.debug("DUPE2 indexed section scan skipped non-duplicate key: section={} key={} indexedDirs={} rawMatches={} visibleMatches={} hiddenMatches={} missingMatches={}",
-                        section.getName(), key, indexedCandidates.getIndexedDirectories(),
-                        indexedCandidates.getCandidates().size(), candidates.size(), visibleCandidates.getHiddenCount(),
-                        visibleCandidates.getMissingCount() + indexedCandidates.getMissingCount());
-                continue;
-            }
-            logger.info("DUPE2 indexed section scan duplicate group: user={} section={} key={} indexedDirs={} rawMatches={} visibleMatches={} hiddenMatches={} missingMatches={}",
-                    user == null ? null : user.getName(), section.getName(), key,
-                    indexedCandidates.getIndexedDirectories(), indexedCandidates.getCandidates().size(), candidates.size(),
-                    visibleCandidates.getHiddenCount(), visibleCandidates.getMissingCount() + indexedCandidates.getMissingCount());
-            response.addComment("Dupe2 key: " + key);
-            addCandidateGroup(response, candidates, 0);
-            groups++;
+        int groups;
+        try {
+            groups = addDuplicateGroupsFromKeys(response, "section", section.getName(), sectionKeys.getKeys(),
+                    limit, observePrivPath, user);
+        } catch (IndexException | IllegalArgumentException e) {
+            logger.warn("DUPE2 indexed duplicate batch lookup failed during section scan: user={} section={} error={}",
+                    user == null ? null : user.getName(), section.getName(), e.getMessage(), e);
+            return new CommandResponse(550, e.getMessage());
         }
 
         if (groups == 0) {
@@ -234,39 +209,14 @@ public class AutoFreeSpaceCommands extends CommandInterface {
             return response;
         }
 
-        List<String> keys = new ArrayList<>(pathKeys.getKeys());
-        Collections.sort(keys);
-        int groups = 0;
-        for (String key : keys) {
-            if (limit > 0 && groups >= limit) {
-                response.addComment("Path result limit reached (" + limit + " group(s)).");
-                break;
-            }
-            IndexedCandidates indexedCandidates;
-            try {
-                indexedCandidates = getIndexedCandidatesForKey(key);
-            } catch (IndexException | IllegalArgumentException e) {
-                logger.warn("DUPE2 indexed duplicate lookup failed during path scan: user={} path={} key={} error={}",
-                        user == null ? null : user.getName(), directory.getPath(), key, e.getMessage(), e);
-                response.addComment("Dupe2 key " + key + " skipped: " + e.getMessage());
-                continue;
-            }
-            VisibleCandidates visibleCandidates = getVisibleCandidates(indexedCandidates.getCandidates(), observePrivPath, user);
-            List<Dupe2Utils.DupeCandidate> candidates = visibleCandidates.getCandidates();
-            if (candidates.size() < 2) {
-                logger.debug("DUPE2 indexed path scan skipped non-duplicate key: path={} key={} indexedDirs={} rawMatches={} visibleMatches={} hiddenMatches={} missingMatches={}",
-                        directory.getPath(), key, indexedCandidates.getIndexedDirectories(),
-                        indexedCandidates.getCandidates().size(), candidates.size(), visibleCandidates.getHiddenCount(),
-                        visibleCandidates.getMissingCount() + indexedCandidates.getMissingCount());
-                continue;
-            }
-            logger.info("DUPE2 indexed path scan duplicate group: user={} path={} key={} indexedDirs={} rawMatches={} visibleMatches={} hiddenMatches={} missingMatches={}",
-                    user == null ? null : user.getName(), directory.getPath(), key,
-                    indexedCandidates.getIndexedDirectories(), indexedCandidates.getCandidates().size(), candidates.size(),
-                    visibleCandidates.getHiddenCount(), visibleCandidates.getMissingCount() + indexedCandidates.getMissingCount());
-            response.addComment("Dupe2 key: " + key);
-            addCandidateGroup(response, candidates, 0);
-            groups++;
+        int groups;
+        try {
+            groups = addDuplicateGroupsFromKeys(response, "path", directory.getPath(), pathKeys.getKeys(),
+                    limit, observePrivPath, user);
+        } catch (IndexException | IllegalArgumentException e) {
+            logger.warn("DUPE2 indexed duplicate batch lookup failed during path scan: user={} path={} error={}",
+                    user == null ? null : user.getName(), directory.getPath(), e.getMessage(), e);
+            return new CommandResponse(550, e.getMessage());
         }
 
         if (groups == 0) {
@@ -278,6 +228,48 @@ public class AutoFreeSpaceCommands extends CommandInterface {
                     user == null ? null : user.getName(), directory.getPath(), groups);
         }
         return response;
+    }
+
+    private int addDuplicateGroupsFromKeys(CommandResponse response, String scanType, String scanName, Set<String> keys,
+                                           int limit, boolean observePrivPath, User user)
+            throws IndexException, IllegalArgumentException {
+        logger.info("DUPE2 indexed {} duplicate batch start: user={} {}={} keys={} groupLimit={}",
+                scanType, user == null ? null : user.getName(), scanType, scanName, keys.size(), limit);
+        IndexedDuplicateGroups duplicateGroups = getIndexedDuplicateGroups(keys);
+        logger.info("DUPE2 indexed {} duplicate batch loaded candidates: user={} {}={} keys={} indexedDirs={} matchedCandidates={} nonReleaseSkipped={} keyMismatches={} missingDirs={}",
+                scanType, user == null ? null : user.getName(), scanType, scanName, keys.size(),
+                duplicateGroups.getIndexedDirectories(), duplicateGroups.getCandidateCount(),
+                duplicateGroups.getNonReleaseSkipped(), duplicateGroups.getKeyMismatches(),
+                duplicateGroups.getMissingCount());
+
+        List<String> sortedKeys = new ArrayList<>(keys);
+        Collections.sort(sortedKeys);
+        int groups = 0;
+        for (String key : sortedKeys) {
+            if (limit > 0 && groups >= limit) {
+                response.addComment(capitalize(scanType) + " result limit reached (" + limit + " group(s)).");
+                break;
+            }
+
+            List<Dupe2Utils.DupeCandidate> rawCandidates =
+                    duplicateGroups.getCandidatesByKey().getOrDefault(key, Collections.emptyList());
+            VisibleCandidates visibleCandidates = getVisibleCandidates(rawCandidates, observePrivPath, user);
+            List<Dupe2Utils.DupeCandidate> candidates = visibleCandidates.getCandidates();
+            if (candidates.size() < 2) {
+                logger.debug("DUPE2 indexed {} scan skipped non-duplicate key: {}={} key={} rawMatches={} visibleMatches={} hiddenMatches={} missingMatches={}",
+                        scanType, scanType, scanName, key, rawCandidates.size(), candidates.size(),
+                        visibleCandidates.getHiddenCount(), visibleCandidates.getMissingCount());
+                continue;
+            }
+            logger.info("DUPE2 indexed {} scan duplicate group: user={} {}={} key={} rawMatches={} visibleMatches={} hiddenMatches={} missingMatches={}",
+                    scanType, user == null ? null : user.getName(), scanType, scanName, key,
+                    rawCandidates.size(), candidates.size(), visibleCandidates.getHiddenCount(),
+                    visibleCandidates.getMissingCount());
+            response.addComment("Dupe2 key: " + key);
+            addCandidateGroup(response, candidates, 0);
+            groups++;
+        }
+        return groups;
     }
 
     private VisibleCandidates getVisibleCandidates(List<Dupe2Utils.DupeCandidate> candidates,
@@ -349,6 +341,67 @@ public class AutoFreeSpaceCommands extends CommandInterface {
 
         return new IndexedCandidates(candidates, indexedDirectories.size(), nonReleaseSkipped, keyMismatches,
                 missingCount);
+    }
+
+    private IndexedDuplicateGroups getIndexedDuplicateGroups(Set<String> keys)
+            throws IndexException, IllegalArgumentException {
+        Map<String, String> indexedDirectories = getIndexedDirectories(
+                GlobalContext.getGlobalContext().getRoot(), null, "DUPE2-batch");
+        Map<String, List<Dupe2Utils.DupeCandidate>> candidatesByKey = new HashMap<>();
+        Set<String> seenPaths = new HashSet<>();
+        Map<String, Set<String>> releaseParentPathCache = new HashMap<>();
+        int nonReleaseSkipped = 0;
+        int keyMismatches = 0;
+        int missingCount = 0;
+
+        for (Map.Entry<String, String> item : indexedDirectories.entrySet()) {
+            if (!"d".equals(item.getValue())) {
+                continue;
+            }
+            String path = stripIndexedDirectoryPath(item.getKey());
+            if (!seenPaths.add(path)) {
+                continue;
+            }
+            DirectoryHandle directory = new DirectoryHandle(path);
+
+            String key;
+            try {
+                if (Dupe2Utils.isExcludedReleaseName(directory.getName())) {
+                    nonReleaseSkipped++;
+                    continue;
+                }
+                key = Dupe2Utils.makeDupeKey(directory.getName());
+            } catch (RuntimeException e) {
+                missingCount++;
+                logger.debug("DUPE2 indexed batch candidate disappeared or failed while loading key: {}", path, e);
+                continue;
+            }
+            if (key == null || !keys.contains(key)) {
+                keyMismatches++;
+                continue;
+            }
+
+            SectionInterface section = getReleaseSection(directory, releaseParentPathCache);
+            if (section == null) {
+                nonReleaseSkipped++;
+                continue;
+            }
+            try {
+                Dupe2Utils.DupeCandidate candidate =
+                        Dupe2Utils.makeDupeCandidate(directory, section.getName(), true);
+                if (candidate == null) {
+                    nonReleaseSkipped++;
+                    continue;
+                }
+                candidatesByKey.computeIfAbsent(candidate.getKey(), k -> new ArrayList<>()).add(candidate);
+            } catch (RuntimeException e) {
+                missingCount++;
+                logger.debug("DUPE2 indexed batch candidate disappeared or failed while loading: {}", path, e);
+            }
+        }
+
+        return new IndexedDuplicateGroups(candidatesByKey, indexedDirectories.size(), nonReleaseSkipped,
+                keyMismatches, missingCount);
     }
 
     private IndexedSectionKeys getIndexedSectionKeys(SectionInterface section)
@@ -502,6 +555,13 @@ public class AutoFreeSpaceCommands extends CommandInterface {
         return path;
     }
 
+    private String capitalize(String value) {
+        if (value == null || value.equals("")) {
+            return "";
+        }
+        return value.substring(0, 1).toUpperCase(Locale.ROOT) + value.substring(1);
+    }
+
     private void addCandidateGroup(CommandResponse response, List<Dupe2Utils.DupeCandidate> candidates, int limit) {
         Collections.sort(candidates, Collections.reverseOrder());
         List<Dupe2Utils.DupeCandidate> completedCandidates = Dupe2Utils.getCompletedCandidates(candidates);
@@ -646,6 +706,52 @@ public class AutoFreeSpaceCommands extends CommandInterface {
 
         private int getIndexedDirectories() {
             return indexedDirectories;
+        }
+
+        private int getNonReleaseSkipped() {
+            return nonReleaseSkipped;
+        }
+
+        private int getKeyMismatches() {
+            return keyMismatches;
+        }
+
+        private int getMissingCount() {
+            return missingCount;
+        }
+    }
+
+    private static class IndexedDuplicateGroups {
+        private final Map<String, List<Dupe2Utils.DupeCandidate>> candidatesByKey;
+        private final int indexedDirectories;
+        private final int nonReleaseSkipped;
+        private final int keyMismatches;
+        private final int missingCount;
+
+        private IndexedDuplicateGroups(Map<String, List<Dupe2Utils.DupeCandidate>> candidatesByKey,
+                                       int indexedDirectories, int nonReleaseSkipped, int keyMismatches,
+                                       int missingCount) {
+            this.candidatesByKey = candidatesByKey;
+            this.indexedDirectories = indexedDirectories;
+            this.nonReleaseSkipped = nonReleaseSkipped;
+            this.keyMismatches = keyMismatches;
+            this.missingCount = missingCount;
+        }
+
+        private Map<String, List<Dupe2Utils.DupeCandidate>> getCandidatesByKey() {
+            return candidatesByKey;
+        }
+
+        private int getIndexedDirectories() {
+            return indexedDirectories;
+        }
+
+        private int getCandidateCount() {
+            int candidateCount = 0;
+            for (List<Dupe2Utils.DupeCandidate> candidates : candidatesByKey.values()) {
+                candidateCount += candidates.size();
+            }
+            return candidateCount;
         }
 
         private int getNonReleaseSkipped() {
