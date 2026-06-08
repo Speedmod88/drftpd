@@ -56,6 +56,7 @@ keepFree=100GB
 # SITE DUPE2 / !dupe2 <release> uses the index to scan all sections and reports duplicates for the same key.
 # SITE DUPE2 / !dupe2 <section> uses the index under that section, deduplicates by Dupe2 key,
 # then reports matching duplicate groups found across all sections.
+# SITE DUPE2 / !dupe2 <path> resolves section paths, or scans configured child sections below that path.
 # Add -l N or -limit N to override the configured command limit for one lookup.
 # AutoFreeSpace Dupe2 cleanup also scans all sections, but only wipes from sections with x.dupeonly=true.
 # Commands show status=completed or status=incomplete. Cleanup ignores incomplete releases.

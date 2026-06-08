@@ -31,6 +31,7 @@ import org.drftpd.master.indexation.IndexException;
 import org.drftpd.master.sections.SectionInterface;
 import org.drftpd.master.usermanager.User;
 import org.drftpd.master.vfs.DirectoryHandle;
+import org.drftpd.master.vfs.VirtualFileSystem;
 
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
@@ -38,6 +39,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -76,6 +78,25 @@ public class AutoFreeSpaceCommands extends CommandInterface {
             return doSectionDupe2(section, parsedArgument.getSectionLimit(), observePrivPath, user);
         }
 
+        if (looksLikePath(argument)) {
+            DirectoryHandle directory = getDirectoryArgument(request, argument);
+            if (directory == null) {
+                logger.warn("DUPE2 command path not found: user={} argument=[{}]",
+                        request.getUser(), argument);
+                return new CommandResponse(550, "Path not found: " + argument);
+            }
+            SectionInterface pathSection = findSectionByPath(directory.getPath());
+            if (pathSection != null) {
+                logger.info("DUPE2 command detected section path query: user={} path={} section={} sectionLimit={}",
+                        request.getUser(), directory.getPath(), pathSection.getName(),
+                        parsedArgument.getSectionLimit());
+                return doSectionDupe2(pathSection, parsedArgument.getSectionLimit(), observePrivPath, user);
+            }
+            logger.info("DUPE2 command detected path query: user={} path={} sectionLimit={}",
+                    request.getUser(), directory.getPath(), parsedArgument.getSectionLimit());
+            return doPathDupe2(directory, parsedArgument.getSectionLimit(), observePrivPath, user);
+        }
+
         String releaseName = getReleaseName(argument);
         String key = Dupe2Utils.makeDupeKey(releaseName);
         if (key == null) {
@@ -83,35 +104,39 @@ public class AutoFreeSpaceCommands extends CommandInterface {
                     request.getUser(), releaseName, argument);
             return new CommandResponse(550, "Unable to build Dupe2 key from: " + releaseName);
         }
-        logger.info("DUPE2 command detected release query: user={} releaseName=[{}] key={}",
-                request.getUser(), releaseName, key);
+        return doReleaseDupe2(request.getUser(), releaseName, key, parsedArgument.getLimit(), observePrivPath, user);
+    }
 
+    private CommandResponse doReleaseDupe2(String userName, String releaseName, String key, int limit,
+                                           boolean observePrivPath, User user) {
+        logger.info("DUPE2 command detected release query: user={} releaseName=[{}] key={}",
+                userName, releaseName, key);
         IndexedCandidates indexedCandidates;
         try {
             indexedCandidates = getIndexedCandidatesForKey(key);
         } catch (IndexException | IllegalArgumentException e) {
             logger.warn("DUPE2 indexed release scan failed: user={} key={} error={}",
-                    request.getUser(), key, e.getMessage(), e);
+                    userName, key, e.getMessage(), e);
             return new CommandResponse(550, e.getMessage());
         }
         VisibleCandidates visibleCandidates = getVisibleCandidates(indexedCandidates.getCandidates(), observePrivPath, user);
         List<Dupe2Utils.DupeCandidate> candidates = visibleCandidates.getCandidates();
         logger.info("DUPE2 indexed release scan complete: user={} key={} indexedDirs={} rawMatches={} nonReleaseSkipped={} keyMismatches={} missingMatches={} visibleMatches={} hiddenMatches={} resultLimit={}",
-                request.getUser(), key, indexedCandidates.getIndexedDirectories(), indexedCandidates.getCandidates().size(),
+                userName, key, indexedCandidates.getIndexedDirectories(), indexedCandidates.getCandidates().size(),
                 indexedCandidates.getNonReleaseSkipped(), indexedCandidates.getKeyMismatches(),
                 indexedCandidates.getMissingCount(), candidates.size(), visibleCandidates.getHiddenCount(),
-                parsedArgument.getLimit());
+                limit);
 
         CommandResponse response = new CommandResponse(200, "Dupe2 complete");
         response.addComment("Dupe2 key: " + key);
         if (candidates.isEmpty()) {
             logger.info("DUPE2 release scan found no visible matches: user={} key={} releaseName=[{}]",
-                    request.getUser(), key, releaseName);
+                    userName, key, releaseName);
             response.addComment("No releases found for this key.");
             return response;
         }
 
-        addCandidateGroup(response, candidates, parsedArgument.getLimit());
+        addCandidateGroup(response, candidates, limit);
         return response;
     }
 
@@ -182,6 +207,75 @@ public class AutoFreeSpaceCommands extends CommandInterface {
         } else {
             logger.info("DUPE2 section scan complete: user={} section={} groups={}",
                     user == null ? null : user.getName(), section.getName(), groups);
+        }
+        return response;
+    }
+
+    private CommandResponse doPathDupe2(DirectoryHandle directory, int limit, boolean observePrivPath, User user) {
+        logger.info("DUPE2 path scan start: user={} path={} groupLimit={} observePrivPath={}",
+                user == null ? null : user.getName(), directory.getPath(), limit, observePrivPath);
+        IndexedSectionKeys pathKeys;
+        try {
+            pathKeys = getIndexedPathKeys(directory);
+        } catch (IndexException | IllegalArgumentException e) {
+            logger.warn("DUPE2 indexed path scan failed: user={} path={} error={}",
+                    user == null ? null : user.getName(), directory.getPath(), e.getMessage(), e);
+            return new CommandResponse(550, e.getMessage());
+        }
+        logger.info("DUPE2 indexed path scan loaded keys: user={} path={} indexedDirs={} releaseDirs={} keys={} nonReleaseSkipped={} missingDirs={}",
+                user == null ? null : user.getName(), directory.getPath(), pathKeys.getIndexedDirectories(),
+                pathKeys.getReleaseDirectories(), pathKeys.getKeys().size(), pathKeys.getNonReleaseSkipped(),
+                pathKeys.getMissingCount());
+
+        CommandResponse response = new CommandResponse(200, "Dupe2 path scan complete");
+        response.addComment("Dupe2 path: " + directory.getPath());
+        if (pathKeys.getKeys().isEmpty()) {
+            response.addComment("No releases found below this path.");
+            return response;
+        }
+
+        List<String> keys = new ArrayList<>(pathKeys.getKeys());
+        Collections.sort(keys);
+        int groups = 0;
+        for (String key : keys) {
+            if (limit > 0 && groups >= limit) {
+                response.addComment("Path result limit reached (" + limit + " group(s)).");
+                break;
+            }
+            IndexedCandidates indexedCandidates;
+            try {
+                indexedCandidates = getIndexedCandidatesForKey(key);
+            } catch (IndexException | IllegalArgumentException e) {
+                logger.warn("DUPE2 indexed duplicate lookup failed during path scan: user={} path={} key={} error={}",
+                        user == null ? null : user.getName(), directory.getPath(), key, e.getMessage(), e);
+                response.addComment("Dupe2 key " + key + " skipped: " + e.getMessage());
+                continue;
+            }
+            VisibleCandidates visibleCandidates = getVisibleCandidates(indexedCandidates.getCandidates(), observePrivPath, user);
+            List<Dupe2Utils.DupeCandidate> candidates = visibleCandidates.getCandidates();
+            if (candidates.size() < 2) {
+                logger.debug("DUPE2 indexed path scan skipped non-duplicate key: path={} key={} indexedDirs={} rawMatches={} visibleMatches={} hiddenMatches={} missingMatches={}",
+                        directory.getPath(), key, indexedCandidates.getIndexedDirectories(),
+                        indexedCandidates.getCandidates().size(), candidates.size(), visibleCandidates.getHiddenCount(),
+                        visibleCandidates.getMissingCount() + indexedCandidates.getMissingCount());
+                continue;
+            }
+            logger.info("DUPE2 indexed path scan duplicate group: user={} path={} key={} indexedDirs={} rawMatches={} visibleMatches={} hiddenMatches={} missingMatches={}",
+                    user == null ? null : user.getName(), directory.getPath(), key,
+                    indexedCandidates.getIndexedDirectories(), indexedCandidates.getCandidates().size(), candidates.size(),
+                    visibleCandidates.getHiddenCount(), visibleCandidates.getMissingCount() + indexedCandidates.getMissingCount());
+            response.addComment("Dupe2 key: " + key);
+            addCandidateGroup(response, candidates, 0);
+            groups++;
+        }
+
+        if (groups == 0) {
+            logger.info("DUPE2 path scan found no duplicate groups: user={} path={} checkedKeys={}",
+                    user == null ? null : user.getName(), directory.getPath(), pathKeys.getKeys().size());
+            response.addComment("No duplicate groups found from this path.");
+        } else {
+            logger.info("DUPE2 path scan complete: user={} path={} groups={}",
+                    user == null ? null : user.getName(), directory.getPath(), groups);
         }
         return response;
     }
@@ -297,6 +391,63 @@ public class AutoFreeSpaceCommands extends CommandInterface {
                 missingCount);
     }
 
+    private IndexedSectionKeys getIndexedPathKeys(DirectoryHandle directory)
+            throws IndexException, IllegalArgumentException {
+        List<SectionInterface> sections = findSectionsBelowPath(directory.getPath());
+        if (!sections.isEmpty()) {
+            Set<String> keys = new HashSet<>();
+            int indexedDirectories = 0;
+            int releaseDirectories = 0;
+            int nonReleaseSkipped = 0;
+            int missingCount = 0;
+            for (SectionInterface section : sections) {
+                IndexedSectionKeys sectionKeys = getIndexedSectionKeys(section);
+                keys.addAll(sectionKeys.getKeys());
+                indexedDirectories += sectionKeys.getIndexedDirectories();
+                releaseDirectories += sectionKeys.getReleaseDirectories();
+                nonReleaseSkipped += sectionKeys.getNonReleaseSkipped();
+                missingCount += sectionKeys.getMissingCount();
+            }
+            return new IndexedSectionKeys(keys, indexedDirectories, releaseDirectories, nonReleaseSkipped,
+                    missingCount);
+        }
+
+        Map<String, String> indexedDirectories = getIndexedDirectories(directory, null, "DUPE2-path");
+        Set<String> keys = new HashSet<>();
+        int releaseDirectories = 0;
+        int nonReleaseSkipped = 0;
+        int missingCount = 0;
+
+        for (Map.Entry<String, String> item : indexedDirectories.entrySet()) {
+            if (!"d".equals(item.getValue())) {
+                continue;
+            }
+            String path = stripIndexedDirectoryPath(item.getKey());
+            DirectoryHandle child = new DirectoryHandle(path);
+            if (!directory.getPath().equals(child.getParent().getPath())) {
+                nonReleaseSkipped++;
+                continue;
+            }
+            try {
+                if (Dupe2Utils.isExcludedReleaseName(child.getName())) {
+                    nonReleaseSkipped++;
+                    continue;
+                }
+                String key = Dupe2Utils.makeDupeKey(child.getName());
+                if (key != null) {
+                    keys.add(key);
+                    releaseDirectories++;
+                }
+            } catch (RuntimeException e) {
+                missingCount++;
+                logger.debug("DUPE2 indexed path candidate disappeared or failed while loading: {}", path, e);
+            }
+        }
+
+        return new IndexedSectionKeys(keys, indexedDirectories.size(), releaseDirectories, nonReleaseSkipped,
+                missingCount);
+    }
+
     private Map<String, String> getIndexedDirectories(DirectoryHandle startNode, String searchText, String caller)
             throws IndexException, IllegalArgumentException {
         AdvancedSearchParams params = new AdvancedSearchParams();
@@ -389,6 +540,64 @@ public class AutoFreeSpaceCommands extends CommandInterface {
             }
         }
         return null;
+    }
+
+    private SectionInterface findSectionByPath(String path) {
+        String normalizedPath = normalizePath(path);
+        for (SectionInterface section : GlobalContext.getGlobalContext().getSectionManager().getSections()) {
+            if (section.getBaseDirectory().getPath().equalsIgnoreCase(normalizedPath)) {
+                return section;
+            }
+        }
+        return null;
+    }
+
+    private List<SectionInterface> findSectionsBelowPath(String path) {
+        String normalizedPath = normalizePath(path);
+        List<SectionInterface> exactSections = new ArrayList<>();
+        List<SectionInterface> childSections = new ArrayList<>();
+        for (SectionInterface section : GlobalContext.getGlobalContext().getSectionManager().getSections()) {
+            String sectionPath = section.getBaseDirectory().getPath();
+            if (sectionPath.equalsIgnoreCase(normalizedPath)) {
+                exactSections.add(section);
+            } else if (isBelowPath(sectionPath, normalizedPath)) {
+                childSections.add(section);
+            }
+        }
+        if (!childSections.isEmpty()) {
+            return childSections;
+        }
+        return exactSections;
+    }
+
+    private boolean isBelowPath(String path, String parentPath) {
+        String normalizedPath = normalizePath(path);
+        String normalizedParent = normalizePath(parentPath);
+        if (normalizedParent.equals(VirtualFileSystem.separator)) {
+            return !normalizedPath.equals(VirtualFileSystem.separator);
+        }
+        return normalizedPath.toLowerCase(Locale.ROOT).startsWith(
+                (normalizedParent + VirtualFileSystem.separator).toLowerCase(Locale.ROOT));
+    }
+
+    private boolean looksLikePath(String argument) {
+        return argument.contains("/") || argument.contains("\\");
+    }
+
+    private DirectoryHandle getDirectoryArgument(CommandRequest request, String argument) {
+        String path = normalizePath(argument);
+        DirectoryHandle directory = path.startsWith(VirtualFileSystem.separator)
+                ? new DirectoryHandle(path)
+                : request.getCurrentDirectory().getNonExistentDirectoryHandle(path);
+        return directory.exists() ? directory : null;
+    }
+
+    private String normalizePath(String path) {
+        path = path.replace('\\', '/').trim();
+        while (path.length() > 1 && path.endsWith(VirtualFileSystem.separator)) {
+            path = VirtualFileSystem.fixPath(path);
+        }
+        return path;
     }
 
     private String getReleaseName(String argument) {
