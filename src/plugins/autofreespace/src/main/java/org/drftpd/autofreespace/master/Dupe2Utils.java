@@ -20,6 +20,9 @@ package org.drftpd.autofreespace.master;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.drftpd.master.GlobalContext;
+import org.drftpd.master.indexation.AdvancedSearchParams;
+import org.drftpd.master.indexation.IndexEngineInterface;
+import org.drftpd.master.indexation.IndexException;
 import org.drftpd.master.sections.SectionInterface;
 import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.zipscript.master.sfv.vfs.ZipscriptVFSDataSFV;
@@ -27,6 +30,7 @@ import org.drftpd.zipscript.master.zip.vfs.ZipscriptVFSDataZip;
 
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,10 +42,44 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
-final class Dupe2Utils {
+public final class Dupe2Utils {
     private static final Logger logger = LogManager.getLogger(Dupe2Utils.class);
 
     private Dupe2Utils() {
+    }
+
+    public static Set<String> getDupeLoserPaths(Collection<String> candidateIndexedPaths, String requiredText)
+            throws IndexException {
+        Map<String, List<DupeCandidate>> selectedCandidatesByKey = getSelectedCandidatesByKey(
+                candidateIndexedPaths, requiredText);
+        if (selectedCandidatesByKey.isEmpty()) {
+            return Collections.emptySet();
+        }
+
+        Map<String, List<DupeCandidate>> allCandidatesByKey =
+                getIndexedCandidatesForKeys(selectedCandidatesByKey.keySet());
+        Set<String> selectedPaths = getCandidatePaths(selectedCandidatesByKey);
+        Set<String> loserPaths = new HashSet<>();
+
+        for (String key : selectedCandidatesByKey.keySet()) {
+            List<DupeCandidate> candidates = allCandidatesByKey.getOrDefault(key, Collections.emptyList());
+            List<DupeCandidate> completedCandidates = getCompletedCandidates(candidates);
+            if (completedCandidates.size() < 2) {
+                continue;
+            }
+            if (requiredText != null && !hasCompletedNonMatchingCandidate(completedCandidates, requiredText)) {
+                continue;
+            }
+            Set<String> keeperPaths = getCandidatePaths(getDupeKeepers(completedCandidates));
+            for (DupeCandidate candidate : completedCandidates) {
+                String path = candidate.getDirectory().getPath();
+                if (selectedPaths.contains(path) && !keeperPaths.contains(path)) {
+                    loserPaths.add(path);
+                }
+            }
+        }
+
+        return loserPaths;
     }
 
     static Map<String, List<DupeCandidate>> getAllSectionCandidates() {
@@ -91,6 +129,143 @@ final class Dupe2Utils {
             }
         }
         return completed;
+    }
+
+    private static Map<String, List<DupeCandidate>> getSelectedCandidatesByKey(Collection<String> candidateIndexedPaths,
+                                                                               String requiredText) {
+        Map<String, List<DupeCandidate>> selectedCandidatesByKey = new HashMap<>();
+        Map<String, Set<String>> releaseParentPathCache = new HashMap<>();
+        Set<String> seenPaths = new HashSet<>();
+
+        for (String candidateIndexedPath : candidateIndexedPaths) {
+            String path = stripIndexedDirectoryPath(candidateIndexedPath);
+            if (!seenPaths.add(path)) {
+                continue;
+            }
+            DirectoryHandle directory = new DirectoryHandle(path);
+            SectionInterface section = getReleaseSection(directory, releaseParentPathCache);
+            if (section == null) {
+                continue;
+            }
+            DupeCandidate candidate = makeDupeCandidate(directory, section.getName(), true);
+            if (candidate == null || !candidate.isComplete()) {
+                continue;
+            }
+            if (requiredText != null && !matchesRequiredText(directory.getName(), requiredText)) {
+                continue;
+            }
+            selectedCandidatesByKey.computeIfAbsent(candidate.getKey(), k -> new ArrayList<>()).add(candidate);
+        }
+
+        return selectedCandidatesByKey;
+    }
+
+    private static Map<String, List<DupeCandidate>> getIndexedCandidatesForKeys(Set<String> keys)
+            throws IndexException {
+        AdvancedSearchParams params = new AdvancedSearchParams();
+        params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
+        params.setLimit(0);
+        IndexEngineInterface indexEngine = GlobalContext.getGlobalContext().getIndexEngine();
+        Map<String, String> indexedDirectories = indexEngine.advancedFind(
+                GlobalContext.getGlobalContext().getRoot(), params, "FIND-DUPE2");
+        Map<String, List<DupeCandidate>> candidatesByKey = new HashMap<>();
+        Map<String, Set<String>> releaseParentPathCache = new HashMap<>();
+        Set<String> seenPaths = new HashSet<>();
+
+        for (Map.Entry<String, String> item : indexedDirectories.entrySet()) {
+            if (!"d".equals(item.getValue())) {
+                continue;
+            }
+            String path = stripIndexedDirectoryPath(item.getKey());
+            if (!seenPaths.add(path)) {
+                continue;
+            }
+            DirectoryHandle directory = new DirectoryHandle(path);
+            if (isExcludedReleaseName(directory.getName())) {
+                continue;
+            }
+            String key = makeDupeKey(directory.getName());
+            if (key == null || !keys.contains(key)) {
+                continue;
+            }
+            SectionInterface section = getReleaseSection(directory, releaseParentPathCache);
+            if (section == null) {
+                continue;
+            }
+            DupeCandidate candidate = makeDupeCandidate(directory, section.getName(), true);
+            if (candidate != null) {
+                candidatesByKey.computeIfAbsent(candidate.getKey(), k -> new ArrayList<>()).add(candidate);
+            }
+        }
+
+        return candidatesByKey;
+    }
+
+    private static SectionInterface getReleaseSection(DirectoryHandle directory,
+                                                      Map<String, Set<String>> releaseParentPathCache) {
+        SectionInterface section = GlobalContext.getGlobalContext().getSectionManager().lookup(directory);
+        if (section == null || section.getName().equals("")) {
+            return null;
+        }
+        if (!isReleaseDirectoryInSection(directory, section, releaseParentPathCache)) {
+            return null;
+        }
+        return section;
+    }
+
+    private static boolean isReleaseDirectoryInSection(DirectoryHandle directory, SectionInterface section,
+                                                       Map<String, Set<String>> releaseParentPathCache) {
+        Set<String> releaseParentPaths = releaseParentPathCache.computeIfAbsent(section.getName(),
+                key -> getReleaseParentPaths(section));
+        return releaseParentPaths.contains(directory.getParent().getPath());
+    }
+
+    private static Set<String> getReleaseParentPaths(SectionInterface section) {
+        Set<String> releaseParentPaths = new HashSet<>();
+        if (section.getCurrentDirectory().getPath().equals(section.getBaseDirectory().getPath())) {
+            releaseParentPaths.add(section.getBaseDirectory().getPath());
+        } else {
+            for (DirectoryHandle directory : section.getDirectories()) {
+                releaseParentPaths.add(directory.getPath());
+            }
+        }
+        return releaseParentPaths;
+    }
+
+    private static boolean hasCompletedNonMatchingCandidate(List<DupeCandidate> candidates, String requiredText) {
+        for (DupeCandidate candidate : candidates) {
+            if (!matchesRequiredText(candidate.getDirectory().getName(), requiredText)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean matchesRequiredText(String releaseName, String requiredText) {
+        return releaseName.toLowerCase(Locale.ROOT).contains(requiredText.toLowerCase(Locale.ROOT));
+    }
+
+    private static Set<String> getCandidatePaths(Map<String, List<DupeCandidate>> candidatesByKey) {
+        Set<String> paths = new HashSet<>();
+        for (List<DupeCandidate> candidates : candidatesByKey.values()) {
+            paths.addAll(getCandidatePaths(candidates));
+        }
+        return paths;
+    }
+
+    private static Set<String> getCandidatePaths(Collection<DupeCandidate> candidates) {
+        Set<String> paths = new HashSet<>();
+        for (DupeCandidate candidate : candidates) {
+            paths.add(candidate.getDirectory().getPath());
+        }
+        return paths;
+    }
+
+    private static String stripIndexedDirectoryPath(String path) {
+        if (path.endsWith("/") && path.length() > 1) {
+            return path.substring(0, path.length() - 1);
+        }
+        return path;
     }
 
     static String makeDupeKey(String releaseName) {

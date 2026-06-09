@@ -20,6 +20,7 @@ package org.drftpd.find.master;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bushe.swing.event.annotation.AnnotationProcessor;
+import org.drftpd.autofreespace.master.Dupe2Utils;
 import org.drftpd.common.misc.CaseInsensitiveHashMap;
 import org.drftpd.common.util.Bytes;
 import org.drftpd.find.master.action.ActionInterface;
@@ -213,6 +214,9 @@ public class Find extends CommandInterface {
 
         // Get all results, we filter out hidden inodes later
         params.setLimit(0);
+        if (settings.getDupe2Enabled()) {
+            params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
+        }
 
         IndexEngineInterface ie = GlobalContext.getGlobalContext().getIndexEngine();
         Map<String, String> inodes;
@@ -230,6 +234,18 @@ public class Find extends CommandInterface {
         Map<String, Object> env = new HashMap<>();
 
         CommandResponse response = new CommandResponse(200, "Find complete!");
+        Set<String> dupe2LoserPaths = Collections.emptySet();
+        if (settings.getDupe2Enabled() && !inodes.isEmpty()) {
+            try {
+                dupe2LoserPaths = Dupe2Utils.getDupeLoserPaths(inodes.keySet(), settings.getDupe2RequiredText());
+                logger.info("FIND Dupe2 filter complete: user={} requiredText=[{}] indexedResults={} dupeLosers={}",
+                        user.getName(), settings.getDupe2RequiredText(), inodes.size(), dupe2LoserPaths.size());
+            } catch (IndexException | IllegalArgumentException e) {
+                logger.warn("FIND Dupe2 filter failed: user={} requiredText=[{}] error={}",
+                        user.getName(), settings.getDupe2RequiredText(), e.getMessage(), e);
+                return new CommandResponse(550, e.getMessage());
+            }
+        }
 
         if (inodes.isEmpty()) {
             response.addComment(session.jprintf(_bundle, "find.empty", env, user.getName()));
@@ -246,6 +262,9 @@ public class Find extends CommandInterface {
                 try {
                     inode = item.getValue().equals("d") ? new DirectoryHandle(item.getKey().substring(0, item.getKey().length() - 1)) : new FileHandle(item.getKey());
                     if (observePrivPath ? inode.isHidden(user) : inode.isHidden(null)) {
+                        continue;
+                    }
+                    if (settings.getDupe2Enabled() && !dupe2LoserPaths.contains(inode.getPath())) {
                         continue;
                     }
                     env.put("name", inode.getName());

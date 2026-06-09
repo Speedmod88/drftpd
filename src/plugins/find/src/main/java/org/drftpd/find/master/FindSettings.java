@@ -13,12 +13,18 @@ public class FindSettings {
 
     private DirectoryHandle _dirHandle;
 
+    private boolean _dupe2Enabled;
+
+    private String _dupe2RequiredText;
+
     public FindSettings(CommandRequest request) {
 
         _limit = Integer.parseInt(request.getProperties().getProperty("limit.default", "5"));
         _maxLimit = Integer.parseInt(request.getProperties().getProperty("limit.max", "20"));
 
         _quiet = false;
+        _dupe2Enabled = false;
+        _dupe2RequiredText = null;
 
         // We by default initialize to root!
         _dirHandle = GlobalContext.getGlobalContext().getRoot();
@@ -54,5 +60,21 @@ public class FindSettings {
 
     public void setDirectoryHandle(DirectoryHandle dirHandle) {
         _dirHandle = dirHandle;
+    }
+
+    public boolean getDupe2Enabled() {
+        return _dupe2Enabled;
+    }
+
+    public void setDupe2Enabled(boolean dupe2Enabled) {
+        _dupe2Enabled = dupe2Enabled;
+    }
+
+    public String getDupe2RequiredText() {
+        return _dupe2RequiredText;
+    }
+
+    public void setDupe2RequiredText(String dupe2RequiredText) {
+        _dupe2RequiredText = dupe2RequiredText;
     }
 }
