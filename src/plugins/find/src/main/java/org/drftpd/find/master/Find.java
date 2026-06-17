@@ -211,6 +211,9 @@ public class Find extends CommandInterface {
         if (actions.isEmpty()) {
             throw new ImproperUsageException();
         }
+        if (!settings.getDupe2Enabled() && settings.getDupe2RequiredText() != null) {
+            return new CommandResponse(500, "-tag requires -dupe2");
+        }
 
         // Get all results, we filter out hidden inodes later
         params.setLimit(0);
@@ -234,14 +237,16 @@ public class Find extends CommandInterface {
         Map<String, Object> env = new HashMap<>();
 
         CommandResponse response = new CommandResponse(200, "Find complete!");
-        Set<String> dupe2LoserPaths = Collections.emptySet();
+        Set<String> dupe2MatchedPaths = Collections.emptySet();
         if (settings.getDupe2Enabled() && !inodes.isEmpty()) {
             try {
-                dupe2LoserPaths = Dupe2Utils.getDupeLoserPaths(inodes.keySet(),
-                        settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts());
-                logger.info("FIND Dupe2 filter complete: user={} requiredText=[{}] replacementTexts={} indexedResults={} dupeLosers={}",
+                dupe2MatchedPaths = settings.getDupe2RequiredText() == null
+                        ? Dupe2Utils.getDupeLoserPaths(inodes.keySet())
+                        : Dupe2Utils.getTaggedDupePaths(inodes.keySet(),
+                                settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts());
+                logger.info("FIND Dupe2 filter complete: user={} requiredText=[{}] replacementTexts={} indexedResults={} dupeMatches={}",
                         user.getName(), settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts(),
-                        inodes.size(), dupe2LoserPaths.size());
+                        inodes.size(), dupe2MatchedPaths.size());
             } catch (IndexException | IllegalArgumentException e) {
                 logger.warn("FIND Dupe2 filter failed: user={} requiredText=[{}] replacementTexts={} error={}",
                         user.getName(), settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts(),
@@ -267,7 +272,7 @@ public class Find extends CommandInterface {
                     if (observePrivPath ? inode.isHidden(user) : inode.isHidden(null)) {
                         continue;
                     }
-                    if (settings.getDupe2Enabled() && !dupe2LoserPaths.contains(inode.getPath())) {
+                    if (settings.getDupe2Enabled() && !dupe2MatchedPaths.contains(inode.getPath())) {
                         continue;
                     }
                     env.put("name", inode.getName());

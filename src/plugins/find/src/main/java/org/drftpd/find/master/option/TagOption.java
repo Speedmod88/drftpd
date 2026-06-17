@@ -21,12 +21,14 @@ import org.drftpd.find.master.FindSettings;
 import org.drftpd.master.commands.ImproperUsageException;
 import org.drftpd.master.indexation.AdvancedSearchParams;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
-public class Dupe2Option implements OptionInterface {
+public class TagOption implements OptionInterface {
 
     private final Map<String, String> _options = Map.of(
-            "dupe2", "# Filter to completed duplicate losers using AutoFreeSpace Dupe2 scoring"
+            "tag", "<tag> [replacement-tag ...] # With -dupe2, select duplicate releases with tag replaced by another tag"
     );
 
     @Override
@@ -37,10 +39,22 @@ public class Dupe2Option implements OptionInterface {
     @Override
     public void executeOption(String option, String[] args, AdvancedSearchParams params, FindSettings settings)
             throws ImproperUsageException {
-        if (args != null && args.length > 0) {
-            throw new ImproperUsageException("Use -tag <tag> [replacement-tag ...] with -dupe2 for tag replacement filtering.");
+        if (args == null || args.length == 0 || args[0].trim().equals("")) {
+            throw new ImproperUsageException("Missing argument for " + option + " option");
         }
-        settings.setDupe2Enabled(true);
+        settings.setDupe2RequiredText(args[0].trim());
+        settings.setDupe2ReplacementTexts(getReplacementTexts(args));
         params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
+    }
+
+    private List<String> getReplacementTexts(String[] args) {
+        List<String> replacementTexts = new ArrayList<>();
+        for (int i = 1; i < args.length; i++) {
+            String replacementText = args[i].trim();
+            if (!replacementText.equals("")) {
+                replacementTexts.add(replacementText);
+            }
+        }
+        return replacementTexts;
     }
 }
