@@ -15,26 +15,36 @@ public class AutoFreeSpaceSettings {
     public static String MODE_DISABLED = "Disabled";
     public static String MODE_DATE = "Date";
     public static String MODE_SPACE = "Space";
+    private static final String DEFAULT_DUPE_MARKER_REGEX =
+            "(?i)(^|[._ -])(MULTI|SUBFRENCH|FRENCH|TRUEFRENCH|VOSTFR|2160P|1080P|720P|480P|WEB[-.]?DL|WEBDL|WEB|BLURAY|BDRIP|HDRIP|DVDRIP|HDTV|UHD|HDR|DV|HEVC|H265|H264|X265|X264)([._ -]|$)";
     private static AutoFreeSpaceSettings ref;
     private Map<String, Section> _sections;
     private List<String> _excludeFiles;
     private List<String> _excludeSlaves;
+    private List<ScoreRule> _dupeScoreRules;
+    private List<KeepRule> _dupeKeepRules;
     private boolean _onlyAnnounce;
+    private boolean _dupeKeepUnmatched;
     private String _mode;
     private long _minFreeSpace;
     private long _cycleTime;
     private int _maxIterations;
+    private String _dupeMarkerRegex;
 
     private AutoFreeSpaceSettings() {
         // Set defaults (just in case)
         _sections = new HashMap<>();
         _excludeFiles = new ArrayList<>();
         _excludeSlaves = new ArrayList<>();
+        _dupeScoreRules = new ArrayList<>();
+        _dupeKeepRules = new ArrayList<>();
         _onlyAnnounce = true;
+        _dupeKeepUnmatched = true;
         _mode = MODE_DISABLED;
         _minFreeSpace = 0L;
         _cycleTime = 10080L * 60000L;
         _maxIterations = 5;
+        _dupeMarkerRegex = DEFAULT_DUPE_MARKER_REGEX;
         reload();
     }
 
@@ -92,12 +102,19 @@ public class AutoFreeSpaceSettings {
 
         // Handle sections
         while ((name = PropertyHelper.getProperty(p, id + ".section", null)) != null) {
-            if (!GlobalContext.getGlobalContext().getSectionManager().getSection(name).getName().equalsIgnoreCase(name)) {
-                logger.error("Section [{}] Does not exist, not creating configuration items", name);
-            } else {
-                long wipeAfter = Long.parseLong(p.getProperty(id + ".wipeAfter")) * 60000L;
-                sections.put(name, new Section(id, name, wipeAfter));
-                logger.debug("Loaded section {}, wipeAfter: {}", name, wipeAfter);
+            long wipeAfter = Long.parseLong(p.getProperty(id + ".wipeAfter", "0")) * 60000L;
+            boolean dupeOnly = p.getProperty(id + ".dupeonly", "false").equalsIgnoreCase("true");
+            for (String sectionName : name.split(",")) {
+                sectionName = sectionName.trim();
+                if (sectionName.equals("")) {
+                    continue;
+                }
+                if (!GlobalContext.getGlobalContext().getSectionManager().getSection(sectionName).getName().equalsIgnoreCase(sectionName)) {
+                    logger.error("Section [{}] Does not exist, not creating configuration items", sectionName);
+                } else {
+                    sections.put(sectionName, new Section(id, sectionName, wipeAfter, dupeOnly));
+                    logger.debug("Loaded section {}, wipeAfter: {}, dupeonly: {}", sectionName, wipeAfter, dupeOnly);
+                }
             }
             id++;
         }
@@ -114,6 +131,47 @@ public class AutoFreeSpaceSettings {
         excludeFiles.trimToSize();
         _excludeFiles = excludeFiles;
         logger.debug("excluded Files set to {}", _excludeFiles.toString());
+
+        _dupeMarkerRegex = p.getProperty("dupe.marker.regex", DEFAULT_DUPE_MARKER_REGEX);
+        _dupeKeepUnmatched = p.getProperty("dupe.keep.unmatched", "true").equalsIgnoreCase("true");
+        _dupeScoreRules = loadDupeScoreRules(p);
+        _dupeKeepRules = loadDupeKeepRules(p);
+    }
+
+    private List<ScoreRule> loadDupeScoreRules(Properties p) {
+        ArrayList<ScoreRule> scoreRules = new ArrayList<>();
+        for (int i = 1; ; i++) {
+            String regex = p.getProperty("dupe.score." + i + ".regex");
+            if (regex == null) {
+                break;
+            }
+            int score = Integer.parseInt(p.getProperty("dupe.score." + i + ".points", "0"));
+            scoreRules.add(new ScoreRule(regex, score));
+        }
+        if (scoreRules.isEmpty()) {
+            scoreRules.add(new ScoreRule("(?i)(^|[._ -])MULTI([._ -]|$)", 200));
+            scoreRules.add(new ScoreRule("(?i)(^|[._ -])FRENCH([._ -]|$)", 120));
+            scoreRules.add(new ScoreRule("(?i)(^|[._ -])SUBFRENCH([._ -]|$)", 50));
+            scoreRules.add(new ScoreRule("(?i)(^|[._ -])2160P([._ -]|$)", 300));
+            scoreRules.add(new ScoreRule("(?i)(^|[._ -])1080P([._ -]|$)", 200));
+            scoreRules.add(new ScoreRule("(?i)(^|[._ -])720P([._ -]|$)", 100));
+        }
+        scoreRules.trimToSize();
+        return scoreRules;
+    }
+
+    private List<KeepRule> loadDupeKeepRules(Properties p) {
+        ArrayList<KeepRule> keepRules = new ArrayList<>();
+        for (int i = 1; ; i++) {
+            String regex = p.getProperty("dupe.keep." + i + ".regex");
+            if (regex == null) {
+                break;
+            }
+            String name = p.getProperty("dupe.keep." + i + ".name", "keep" + i);
+            keepRules.add(new KeepRule(name, regex));
+        }
+        keepRules.trimToSize();
+        return keepRules;
     }
 
     public Map<String, Section> getSections() {
@@ -146,15 +204,47 @@ public class AutoFreeSpaceSettings {
 
     public int getMaxIterations() { return _maxIterations; }
 
+    public List<ScoreRule> getDupeScoreRules() {
+        return _dupeScoreRules;
+    }
+
+    public List<KeepRule> getDupeKeepRules() {
+        return _dupeKeepRules;
+    }
+
+    public boolean getDupeKeepUnmatched() {
+        return _dupeKeepUnmatched;
+    }
+
+    public boolean hasDupeOnlySections() {
+        for (Section section : _sections.values()) {
+            if (section.isDupeOnly()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean isDupeOnlySection(String sectionName) {
+        Section section = _sections.get(sectionName);
+        return section != null && section.isDupeOnly();
+    }
+
+    public String getDupeMarkerRegex() {
+        return _dupeMarkerRegex;
+    }
+
     static class Section {
         private final int id;
         private final String name;
         private final long wipeAfter;
+        private final boolean dupeOnly;
 
-        public Section(int id, String name, long wipeAfter) {
+        public Section(int id, String name, long wipeAfter, boolean dupeOnly) {
             this.id = id;
             this.name = name;
             this.wipeAfter = wipeAfter;
+            this.dupeOnly = dupeOnly;
         }
 
         public int getId() {
@@ -167,6 +257,46 @@ public class AutoFreeSpaceSettings {
 
         public long getWipeAfter() {
             return this.wipeAfter;
+        }
+
+        public boolean isDupeOnly() {
+            return dupeOnly;
+        }
+    }
+
+    static class ScoreRule {
+        private final String regex;
+        private final int points;
+
+        public ScoreRule(String regex, int points) {
+            this.regex = regex;
+            this.points = points;
+        }
+
+        public String getRegex() {
+            return regex;
+        }
+
+        public int getPoints() {
+            return points;
+        }
+    }
+
+    static class KeepRule {
+        private final String name;
+        private final String regex;
+
+        public KeepRule(String name, String regex) {
+            this.name = name;
+            this.regex = regex;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public String getRegex() {
+            return regex;
         }
     }
 }

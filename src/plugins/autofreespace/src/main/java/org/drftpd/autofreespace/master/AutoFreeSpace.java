@@ -92,7 +92,8 @@ public class AutoFreeSpace implements PluginInterface {
         }
 
         AutoFreeSpaceSettings.getSettings().reload();
-        if (AutoFreeSpaceSettings.getSettings().getMode().equals(AutoFreeSpaceSettings.MODE_DISABLED)) {
+        if (AutoFreeSpaceSettings.getSettings().getMode().equals(AutoFreeSpaceSettings.MODE_DISABLED)
+                && !AutoFreeSpaceSettings.getSettings().hasDupeOnlySections()) {
             logger.info("AutoFreeSpace plugin is disabled");
             return;
         }
@@ -140,8 +141,20 @@ public class AutoFreeSpace implements PluginInterface {
             checkedReleases = new ArrayList<>();
             logger.info("MrCleanIt task started");
             try {
+                if (AutoFreeSpaceSettings.getSettings().hasDupeOnlySections()) {
+                    cleanByDupe();
+                }
+
+                Collection<RemoteSlave> availableSlaves;
+                try {
+                    availableSlaves = GlobalContext.getGlobalContext().getSlaveManager().getAvailableSlaves();
+                } catch (NoAvailableSlaveException nase) {
+                    logger.warn("AUTODELETE: No slaves online, no point in running date/space cleaning procedures");
+                    return;
+                }
+
                 int slavesCount = 0;
-                for (RemoteSlave remoteSlave : GlobalContext.getGlobalContext().getSlaveManager().getAvailableSlaves()) {
+                for (RemoteSlave remoteSlave : availableSlaves) {
                     if (!isRunning) {
                         logger.info("Stopping loop as we should not be running");
                         break;
@@ -164,11 +177,73 @@ public class AutoFreeSpace implements PluginInterface {
                     slavesCount++;
                 }
                 logger.debug("AUTODELETE: Checked [{}] Slaves for free space", slavesCount);
-            } catch (NoAvailableSlaveException nase) {
-                logger.warn("AUTODELETE: No slaves online, no point in running the cleaning procedure");
+            } finally {
+                logger.info("MrCleanIt task finished");
+                isActive = false;
             }
-            logger.info("MrCleanIt task finished");
-            isActive = false;
+        }
+
+        /**
+         * Function to delete duplicate release variants.
+         * All sections are scanned to pick keepers, but only configured dupeonly sections are wiped.
+         */
+        private void cleanByDupe() {
+            int deletedCount = 0;
+            int maxIterations = AutoFreeSpaceSettings.getSettings().getMaxIterations();
+            for (List<Dupe2Utils.DupeCandidate> candidates : Dupe2Utils.getAllSectionCandidates().values()) {
+                if (!isRunning || deletedCount >= maxIterations) {
+                    break;
+                }
+                if (candidates.size() < 2) {
+                    continue;
+                }
+
+                candidates.sort(Collections.reverseOrder());
+                Set<Dupe2Utils.DupeCandidate> keepers = Dupe2Utils.getDupeKeepers(candidates);
+                logger.info("AUTODELETE: Keeping duplicate winners {}", Dupe2Utils.getKeeperNames(keepers));
+
+                for (Dupe2Utils.DupeCandidate remove : candidates) {
+                    if (!isRunning || deletedCount >= maxIterations) {
+                        break;
+                    }
+
+                    AutoFreeSpaceSettings.Section section = AutoFreeSpaceSettings.getSettings().getSections().get(remove.getSectionName());
+                    if (keepers.contains(remove) || section == null || !section.isDupeOnly()) {
+                        continue;
+                    }
+                    if (!isOldEnoughForDupe(remove, section)) {
+                        logger.debug("AUTODELETE: Duplicate candidate {} is younger than wipeAfter for section {}, skipping",
+                                remove.getDirectory().getPath(), section.getName());
+                        continue;
+                    }
+
+                    GlobalContext.getEventService().publishAsync(new AFSEvent(remove.getDirectory(), null));
+                    if (AutoFreeSpaceSettings.getSettings().getOnlyAnnounce()) {
+                        logger.warn("AUTODELETE: (OnlyAnnounce) Would have deleted duplicate {} with score {} in bucket {}",
+                                remove.getDirectory().getName(), remove.getScore(), remove.getDisplayBucket());
+                    } else {
+                        try {
+                            logger.info("AUTODELETE: Removing duplicate {} with score {} in bucket {}",
+                                    remove.getDirectory().getName(), remove.getScore(), remove.getDisplayBucket());
+                            remove.getDirectory().deleteUnchecked();
+                        } catch (FileNotFoundException e) {
+                            logger.warn("AUTODELETE: Duplicate candidate disappeared before deletion: {}", remove.getDirectory().getPath());
+                        }
+                    }
+                    deletedCount++;
+                }
+            }
+            if (deletedCount >= maxIterations) {
+                logger.warn("AUTODELETE: duplicate delete count [{}] matched maximum iterations [{}], cycleTime or max iterations might need a tweak", deletedCount, maxIterations);
+            }
+        }
+
+        private boolean isOldEnoughForDupe(Dupe2Utils.DupeCandidate candidate, AutoFreeSpaceSettings.Section section) {
+            long wipeAfter = section.getWipeAfter();
+            if (wipeAfter <= 0) {
+                return true;
+            }
+            return System.currentTimeMillis() - candidate.getCreationTime() > wipeAfter;
         }
 
         /**

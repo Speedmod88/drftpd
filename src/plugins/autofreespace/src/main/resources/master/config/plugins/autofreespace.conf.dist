@@ -28,7 +28,7 @@ max.iterations=5
 
 # On which mode should autofreespace work.
 # Possible options: disabled, date, space
-# disabled: Do nothing (plugin disabled)
+# disabled: Do not run date/space cleanup. Sections with dupeonly=true can still run Dupe2 cleanup.
 # date: Delete files based on wipeAfter per section
 # space: Delete files based on keepFree
 # Default: [disabled]
@@ -38,7 +38,68 @@ mode=disabled
 # Default: [100GB]
 keepFree=100GB
 
-# Do not delete releases younger than X minutes (wipeAfter only used if mode = date).
-#1.section=SECTION1
+# Section cleanup rules.
+# section accepts one section or comma-separated sections.
+# wipeAfter is used by mode=date and by Dupe2 cleanup when dupeonly=true.
+# For Dupe2, only duplicate variants older than wipeAfter are wiped. Use wipeAfter=0 for no age delay.
+# dupeonly allows AutoFreeSpace to wipe duplicate variants from this section.
+# Dupe2 still scans all sections to decide duplicates and keepers; only dupeonly sections are wiped.
+# Dupe2 uses the normal VFS delete path, so deletes on offline slaves are queued until the slave reconnects.
+#1.section=SECTION1,SECTION2,SECTION3
 #1.wipeAfter=43200
+#1.dupeonly=true
 
+####################################################################################################
+## Dupe2 duplicate release settings                                                               #
+####################################################################################################
+
+# SITE DUPE2 / !dupe2 <release> uses the index to scan all sections and reports duplicates for the same key.
+# SITE DUPE2 / !dupe2 <section> uses the index under that section, deduplicates by Dupe2 key,
+# then reports matching duplicate groups found across all sections.
+# SITE DUPE2 / !dupe2 <path> resolves section paths, or scans configured child sections below that path.
+# Add -l N or -limit N to override the configured command limit for one lookup.
+# AutoFreeSpace Dupe2 cleanup also scans all sections, but only wipes from sections with x.dupeonly=true.
+# Commands show status=completed or status=incomplete. Cleanup ignores incomplete releases.
+# Completion is checked from zipscript SFV/DIZ metadata.
+
+# First token that marks the start of variant details. The duplicate key is everything before this marker.
+# Edit this regex to add/remove markers whenever you need new release tags to split the title/key.
+# S01E01, E01, and E001 are not markers by default, so they stay in the key and different episodes do not collide.
+# Examples:
+#   My.Show.S01E01.MULTi.1080p.WEB.x264-GRP -> my.show.s01e01
+#   The.Bold.Type.2017.S01E01.FRENCH.DVDRIP.X264-GRP -> the.bold.type.2017.s01e01
+#   The.Secret.Agent.2025.FRENCH.720p.WEB.H264-GRP -> the.secret.agent.2025
+dupe.marker.regex=(?i)(^|[._ -])(MULTI|SUBFRENCH|FRENCH|TRUEFRENCH|VOSTFR|2160P|1080P|720P|480P|WEB[-.]?DL|WEBDL|WEB|BLURAY|BDRIP|HDRIP|DVDRIP|HDTV|UHD|HDR|DV|HEVC|H265|H264|X265|X264)([._ -]|$)
+
+# Keep buckets. Dupe2 keeps the highest scored completed duplicate in each matching bucket.
+# Use this to keep separate winners such as one 2160p and one 1080p, or one MULTi and one FRENCH.
+# If no keep rules are defined, only the single highest scored duplicate is kept.
+# If keep rules are defined:
+#   dupe.keep.unmatched=true  -> also keep one highest scored duplicate that matches no keep bucket.
+#   dupe.keep.unmatched=false -> releases that match no keep bucket are not protected when a bucketed keeper exists.
+# A release is assigned to the first keep bucket it matches, so put more specific rules first.
+dupe.keep.unmatched=true
+#dupe.keep.1.name=2160p
+#dupe.keep.1.regex=(?i)(^|[._ -])2160P([._ -]|$)
+#dupe.keep.2.name=1080p
+#dupe.keep.2.regex=(?i)(^|[._ -])1080P([._ -]|$)
+#dupe.keep.3.name=multi
+#dupe.keep.3.regex=(?i)(^|[._ -])MULTI([._ -]|$)
+#dupe.keep.4.name=french
+#dupe.keep.4.regex=(?i)(^|[._ -])FRENCH([._ -]|$)
+
+# Scoring rules. Add as many as needed. Highest score wins inside each keep bucket.
+# Scoring runs against the full release name, so group scoring works too.
+# Example: dupe.score.7.regex=(?i)-GRPNAME$
+dupe.score.1.regex=(?i)(^|[._ -])MULTI([._ -]|$)
+dupe.score.1.points=200
+dupe.score.2.regex=(?i)(^|[._ -])FRENCH([._ -]|$)
+dupe.score.2.points=120
+dupe.score.3.regex=(?i)(^|[._ -])SUBFRENCH([._ -]|$)
+dupe.score.3.points=50
+dupe.score.4.regex=(?i)(^|[._ -])2160P([._ -]|$)
+dupe.score.4.points=300
+dupe.score.5.regex=(?i)(^|[._ -])1080P([._ -]|$)
+dupe.score.5.points=200
+dupe.score.6.regex=(?i)(^|[._ -])720P([._ -]|$)
+dupe.score.6.points=100
