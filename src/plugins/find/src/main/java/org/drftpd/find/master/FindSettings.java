@@ -4,6 +4,10 @@ import org.drftpd.master.GlobalContext;
 import org.drftpd.master.commands.CommandRequest;
 import org.drftpd.master.vfs.DirectoryHandle;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 public class FindSettings {
 
     private boolean _quiet;
@@ -17,6 +21,8 @@ public class FindSettings {
 
     private String _dupe2RequiredText;
 
+    private List<String> _dupe2ReplacementTexts;
+
     public FindSettings(CommandRequest request) {
 
         _limit = Integer.parseInt(request.getProperties().getProperty("limit.default", "5"));
@@ -25,6 +31,7 @@ public class FindSettings {
         _quiet = false;
         _dupe2Enabled = false;
         _dupe2RequiredText = null;
+        _dupe2ReplacementTexts = Collections.emptyList();
 
         // We by default initialize to root!
         _dirHandle = GlobalContext.getGlobalContext().getRoot();
@@ -76,5 +83,13 @@ public class FindSettings {
 
     public void setDupe2RequiredText(String dupe2RequiredText) {
         _dupe2RequiredText = dupe2RequiredText;
+    }
+
+    public List<String> getDupe2ReplacementTexts() {
+        return Collections.unmodifiableList(_dupe2ReplacementTexts);
+    }
+
+    public void setDupe2ReplacementTexts(List<String> dupe2ReplacementTexts) {
+        _dupe2ReplacementTexts = new ArrayList<>(dupe2ReplacementTexts);
     }
 }

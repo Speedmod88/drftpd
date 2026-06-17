@@ -50,6 +50,12 @@ public final class Dupe2Utils {
 
     public static Set<String> getDupeLoserPaths(Collection<String> candidateIndexedPaths, String requiredText)
             throws IndexException {
+        return getDupeLoserPaths(candidateIndexedPaths, requiredText, Collections.emptyList());
+    }
+
+    public static Set<String> getDupeLoserPaths(Collection<String> candidateIndexedPaths, String requiredText,
+                                                Collection<String> replacementTexts)
+            throws IndexException {
         Map<String, List<DupeCandidate>> selectedCandidatesByKey = getSelectedCandidatesByKey(
                 candidateIndexedPaths, requiredText);
         if (selectedCandidatesByKey.isEmpty()) {
@@ -67,14 +73,17 @@ public final class Dupe2Utils {
             if (completedCandidates.size() < 2) {
                 continue;
             }
-            if (requiredText != null && !hasCompletedNonMatchingCandidate(completedCandidates, requiredText)) {
-                continue;
-            }
-            Set<String> keeperPaths = getCandidatePaths(getDupeKeepers(completedCandidates));
-            for (DupeCandidate candidate : completedCandidates) {
-                String path = candidate.getDirectory().getPath();
-                if (selectedPaths.contains(path) && !keeperPaths.contains(path)) {
-                    loserPaths.add(path);
+            if (requiredText == null) {
+                Set<String> keeperPaths = getCandidatePaths(getDupeKeepers(completedCandidates));
+                for (DupeCandidate candidate : completedCandidates) {
+                    String path = candidate.getDirectory().getPath();
+                    if (selectedPaths.contains(path) && !keeperPaths.contains(path)) {
+                        loserPaths.add(path);
+                    }
+                }
+            } else if (hasCompletedReplacementCandidate(completedCandidates, requiredText, replacementTexts)) {
+                for (DupeCandidate candidate : selectedCandidatesByKey.getOrDefault(key, Collections.emptyList())) {
+                    loserPaths.add(candidate.getDirectory().getPath());
                 }
             }
         }
@@ -232,9 +241,23 @@ public final class Dupe2Utils {
         return releaseParentPaths;
     }
 
-    private static boolean hasCompletedNonMatchingCandidate(List<DupeCandidate> candidates, String requiredText) {
+    private static boolean hasCompletedReplacementCandidate(List<DupeCandidate> candidates, String requiredText,
+                                                            Collection<String> replacementTexts) {
         for (DupeCandidate candidate : candidates) {
-            if (!matchesRequiredText(candidate.getDirectory().getName(), requiredText)) {
+            String releaseName = candidate.getDirectory().getName();
+            if (matchesRequiredText(releaseName, requiredText)) {
+                continue;
+            }
+            if (replacementTexts == null || replacementTexts.isEmpty() || matchesAnyRequiredText(releaseName, replacementTexts)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean matchesAnyRequiredText(String releaseName, Collection<String> requiredTexts) {
+        for (String requiredText : requiredTexts) {
+            if (matchesRequiredText(releaseName, requiredText)) {
                 return true;
             }
         }
@@ -242,7 +265,9 @@ public final class Dupe2Utils {
     }
 
     private static boolean matchesRequiredText(String releaseName, String requiredText) {
-        return releaseName.toLowerCase(Locale.ROOT).contains(requiredText.toLowerCase(Locale.ROOT));
+        return Pattern.compile("(^|[._ -])" + Pattern.quote(requiredText) + "([._ -]|$)", Pattern.CASE_INSENSITIVE)
+                .matcher(releaseName)
+                .find();
     }
 
     private static Set<String> getCandidatePaths(Map<String, List<DupeCandidate>> candidatesByKey) {

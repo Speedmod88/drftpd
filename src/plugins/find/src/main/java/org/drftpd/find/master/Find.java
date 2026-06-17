@@ -237,12 +237,15 @@ public class Find extends CommandInterface {
         Set<String> dupe2LoserPaths = Collections.emptySet();
         if (settings.getDupe2Enabled() && !inodes.isEmpty()) {
             try {
-                dupe2LoserPaths = Dupe2Utils.getDupeLoserPaths(inodes.keySet(), settings.getDupe2RequiredText());
-                logger.info("FIND Dupe2 filter complete: user={} requiredText=[{}] indexedResults={} dupeLosers={}",
-                        user.getName(), settings.getDupe2RequiredText(), inodes.size(), dupe2LoserPaths.size());
+                dupe2LoserPaths = Dupe2Utils.getDupeLoserPaths(inodes.keySet(),
+                        settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts());
+                logger.info("FIND Dupe2 filter complete: user={} requiredText=[{}] replacementTexts={} indexedResults={} dupeLosers={}",
+                        user.getName(), settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts(),
+                        inodes.size(), dupe2LoserPaths.size());
             } catch (IndexException | IllegalArgumentException e) {
-                logger.warn("FIND Dupe2 filter failed: user={} requiredText=[{}] error={}",
-                        user.getName(), settings.getDupe2RequiredText(), e.getMessage(), e);
+                logger.warn("FIND Dupe2 filter failed: user={} requiredText=[{}] replacementTexts={} error={}",
+                        user.getName(), settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts(),
+                        e.getMessage(), e);
                 return new CommandResponse(550, e.getMessage());
             }
         }

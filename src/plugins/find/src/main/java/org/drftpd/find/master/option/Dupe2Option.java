@@ -21,12 +21,15 @@ import org.drftpd.find.master.FindSettings;
 import org.drftpd.master.commands.ImproperUsageException;
 import org.drftpd.master.indexation.AdvancedSearchParams;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 public class Dupe2Option implements OptionInterface {
 
     private final Map<String, String> _options = Map.of(
-            "dupe2", "[text] # Filter to completed duplicate release losers using AutoFreeSpace Dupe2 scoring"
+            "dupe2", "[tag] [replacement-tag ...] # Filter to completed duplicate releases using AutoFreeSpace Dupe2 keys"
     );
 
     @Override
@@ -40,6 +43,21 @@ public class Dupe2Option implements OptionInterface {
         settings.setDupe2Enabled(true);
         String requiredText = args == null || args.length == 0 ? null : args[0].trim();
         settings.setDupe2RequiredText(requiredText == null || requiredText.equals("") ? null : requiredText);
+        settings.setDupe2ReplacementTexts(getReplacementTexts(args));
         params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
+    }
+
+    private List<String> getReplacementTexts(String[] args) {
+        if (args == null || args.length <= 1) {
+            return Collections.emptyList();
+        }
+        List<String> replacementTexts = new ArrayList<>();
+        for (int i = 1; i < args.length; i++) {
+            String replacementText = args[i].trim();
+            if (!replacementText.equals("")) {
+                replacementTexts.add(replacementText);
+            }
+        }
+        return replacementTexts;
     }
 }
