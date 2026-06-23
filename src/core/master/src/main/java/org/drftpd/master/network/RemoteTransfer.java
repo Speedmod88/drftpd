@@ -63,7 +63,9 @@ public class RemoteTransfer {
     public RemoteTransfer(ConnectInfo ci, RemoteSlave rslave)
             throws SlaveUnavailableException {
         _transferIndex = ci.getTransferIndex();
-        _address = new InetSocketAddress(rslave.getPASVIP(), ci.getPort());
+
+        //If slave include a lan IP, use it rather then the PASVIP
+        _address = new InetSocketAddress(ci.getLanIP() != null ? ci.getLanIP() : rslave.getPASVIP(), ci.getPort());
         _rslave = rslave;
         _status = ci.getTransferStatus();
     }

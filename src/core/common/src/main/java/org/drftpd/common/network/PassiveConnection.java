@@ -129,4 +129,9 @@ public class PassiveConnection extends Connection {
         }
         _serverSocket = null;
     }
+
+	@Override
+	public String toString() {
+		return "PassiveConnection: Address=" + _serverSocket.getInetAddress() + ". Port=" + _serverSocket.getLocalPort();
+	}
 }

@@ -271,6 +271,26 @@ public class VirtualFileSystem {
                 logger.debug("Error loading {}, deleting file", fullPath, e);
                 parentInode.removeMissingChild(getLast(path));
             }
+
+			try {
+            logger.warn("!!! trying to resolve if its tmp file {}", parentInode.getPath());
+            File parentDirectory = new File(parentInode.getPath());
+            for (String str : parentDirectory.list()) {
+		boolean filestart = str.startsWith(getLast(path));
+		if (filestart) {
+			boolean fileend = str.endsWith(".tmp");
+			if (fileend) {
+				logger.warn("!!! Error find tmp file {},  removing file {} from parent file in memory", str, getLast(path));
+				parentInode.removeMissingChild(getLast(path));
+				throw new FileNotFoundException(str);
+			}
+		}
+            }
+            } catch (Exception eee) {
+		//ignore
+            }
+
+
             throw new FileNotFoundException();
         }
     }
@@ -363,25 +383,25 @@ public class VirtualFileSystem {
     protected void notifyInodeCreated(VirtualFileSystemInode inode) {
         logger.debug("Notifying that {} has been created", inode.getPath());
 
-        publishAsyncEvent(new VirtualFileSystemInodeCreatedEvent(inode, inode.getPath()));
+        GlobalContext.getEventServiceSlowest().publishAsync(new VirtualFileSystemInodeCreatedEvent(inode, inode.getPath()));
     }
 
     protected void notifyInodeDeleted(VirtualFileSystemInode inode, String path) {
         logger.debug("Notifying that {} has been deleted", path);
 
-        publishAsyncEvent(new VirtualFileSystemInodeDeletedEvent(inode, path));
+        GlobalContext.getEventServiceSlowest().publishAsync(new VirtualFileSystemInodeDeletedEvent(inode, path));
     }
 
     protected void notifySizeChanged(VirtualFileSystemInode inode, long size) {
         logger.debug("Notifying that the size of {} has changed to: {}", inode.getPath(), size);
 
-        publishAsyncEvent(new VirtualFileSystemSizeEvent(inode, inode.getPath(), size));
+        GlobalContext.getEventServiceSlowest().publishAsync(new VirtualFileSystemSizeEvent(inode, inode.getPath(), size));
     }
 
     protected void notifyLastModifiedChanged(VirtualFileSystemInode inode, long lastmodified) {
         logger.debug("Notifying that the last modified timestamp of {} has changed to: {}", inode.getPath(), lastmodified);
 
-        publishAsyncEvent(new VirtualFileSystemLastModifiedEvent(inode, inode.getPath(), lastmodified));
+        GlobalContext.getEventServiceSlowest().publishAsync(new VirtualFileSystemLastModifiedEvent(inode, inode.getPath(), lastmodified));
     }
 
     protected void notifyInodeRefresh(VirtualFileSystemInode inode, boolean sync) {

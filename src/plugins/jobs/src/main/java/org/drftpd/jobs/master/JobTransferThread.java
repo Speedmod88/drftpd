@@ -42,7 +42,7 @@ public class JobTransferThread extends Thread {
         try {
             _jm.processJob();
         } catch (Exception e) {
-            logger.debug("", e);
+            logger.warn("!! Exception in JobTransferThread", e);
         }
     }
 }

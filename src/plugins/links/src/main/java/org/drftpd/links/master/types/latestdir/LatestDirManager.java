@@ -27,6 +27,7 @@ import org.drftpd.common.util.ConfigLoader;
 import org.drftpd.common.util.PropertyHelper;
 import org.drftpd.links.master.LinkManager;
 import org.drftpd.links.master.LinkType;
+import org.drftpd.master.GlobalContext;
 import org.drftpd.master.event.DirectoryFtpEvent;
 import org.drftpd.master.event.ReloadEvent;
 import org.drftpd.master.vfs.DirectoryHandle;
@@ -97,7 +98,7 @@ public class LatestDirManager implements PluginInterface {
     /*
      * Handle the MKD command to make links
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
     public void onDirectoryFtpEvent(DirectoryFtpEvent event) {
         if (!event.getCommand().equalsIgnoreCase("MKD"))
             return;

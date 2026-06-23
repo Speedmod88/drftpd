@@ -31,10 +31,13 @@ public class ConnectInfo implements Serializable {
 
     private final TransferStatus _transferStatus;
 
-    public ConnectInfo(int port, TransferIndex transferIndex, TransferStatus ts) {
+    private final String _lanIP;
+
+    public ConnectInfo(int port, TransferIndex transferIndex, TransferStatus ts, String lanIP) {
         _port = port;
         _transferIndex = transferIndex;
         _transferStatus = ts;
+        _lanIP = lanIP;
     }
 
     public int getPort() {
@@ -47,5 +50,9 @@ public class ConnectInfo implements Serializable {
 
     public TransferStatus getTransferStatus() {
         return _transferStatus;
+    }
+
+    public String getLanIP() {
+	return _lanIP;
     }
 }

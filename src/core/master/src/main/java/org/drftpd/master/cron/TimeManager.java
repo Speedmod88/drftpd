@@ -58,8 +58,22 @@ public class TimeManager {
         cal.set(Calendar.MINUTE, 0);
         cal.set(Calendar.SECOND, 0);
         cal.set(Calendar.MILLISECOND, 0);
-        timer.scheduleAtFixedRate(_processHour, cal.getTime(), HOUR);
-        logger.info("TimeManager scheduled the next reset to be at {}", cal.getTime());
+        try {
+		timer.scheduleAtFixedRate(_processHour, cal.getTime(), HOUR);
+		logger.info("TimeManager scheduled the next reset to be at {}", cal.getTime());
+        }
+        catch (IllegalStateException e) {
+		logger.error("TimeManager schedule error", e);
+		GlobalContext.getGlobalContext().reloadTimer();
+            try {
+		timer.scheduleAtFixedRate(_processHour, cal.getTime(), HOUR);
+		logger.info("TimeManager scheduled the next reset to be at {}", cal.getTime());
+            }
+            catch (IllegalStateException e2) {
+		logger.error("TimeManager schedule error 2", e2);
+            }
+        }
+
     }
 
     public void doReset(Calendar cal) {

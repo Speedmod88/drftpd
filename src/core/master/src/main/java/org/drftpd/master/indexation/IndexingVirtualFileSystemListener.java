@@ -93,7 +93,7 @@ public class IndexingVirtualFileSystemListener {
      *
      * @param event
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
     public void sizeChanged(VirtualFileSystemSizeEvent event) {
         if (bypassEvent(event))
             return;
@@ -106,7 +106,7 @@ public class IndexingVirtualFileSystemListener {
      *
      * @param event
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
     public void lastModifiedChanged(VirtualFileSystemLastModifiedEvent event) {
         if (bypassEvent(event))
             return;
@@ -150,7 +150,7 @@ public class IndexingVirtualFileSystemListener {
      *
      * @param event
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
     public void inodeCreated(VirtualFileSystemInodeCreatedEvent event) {
         if (bypassEvent(event))
             return;
@@ -167,7 +167,7 @@ public class IndexingVirtualFileSystemListener {
      *
      * @param event
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
     public void inodeDeleted(VirtualFileSystemInodeDeletedEvent event) {
         if (bypassEvent(event))
             return;

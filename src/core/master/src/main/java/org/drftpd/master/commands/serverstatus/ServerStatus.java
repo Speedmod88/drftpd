@@ -197,6 +197,26 @@ public class ServerStatus extends CommandInterface {
             }
 
             if (isAll) {
+                env.put("fifo.size", GlobalContext.getEventService().getQueueSize());
+                response.addComment(session.jprintf(_bundle, env, "status.fifo"));
+
+                env.put("fifo.details", GlobalContext.getEventService().getQueueSummary());
+                response.addComment(session.jprintf(_bundle, env, "status.fifodetails"));
+
+                env.put("fifo2.size", GlobalContext.getEventServiceSiteBotPriority().getQueueSize());
+                response.addComment(session.jprintf(_bundle, env, "status.fifo2"));
+
+                env.put("fifo2.details", GlobalContext.getEventServiceSiteBotPriority().getQueueSummary());
+                response.addComment(session.jprintf(_bundle, env, "status.fifo2details"));
+
+                env.put("fifo3.size", GlobalContext.getEventServiceSlowest().getQueueSize());
+                response.addComment(session.jprintf(_bundle, env, "status.fifo3"));
+
+                env.put("fifo3.details", GlobalContext.getEventServiceSlowest().getQueueSummary());
+                response.addComment(session.jprintf(_bundle, env, "status.fifo3details"));
+            }
+
+            if (isAll) {
                 // no need to output repeated
                 break;
             }

@@ -17,6 +17,8 @@
  */
 package org.drftpd.autonuke.master;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.drftpd.common.util.PropertyHelper;
 import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.zipscript.common.sfv.SFVStatus;
@@ -30,6 +32,8 @@ import java.util.Properties;
  * @author scitz0
  */
 public class IncompleteConfig extends Config {
+	private static final Logger logger = LogManager.getLogger(IncompleteConfig.class);
+
     int _min_percent;
 
     public IncompleteConfig(int i, Properties p) {
@@ -58,6 +62,11 @@ public class IncompleteConfig extends Config {
             configData.addReturnData(Integer.toString((dizStatus.getPresent() * 100) / total));
             if (total > 0) {
                 if (_min_percent == 0) {
+
+			if (!dizStatus.isFinished()) {
+				logger.info("IncompleteScan (DIZ) Missing:{} Path: {}", dizStatus.getMissing(), dir.getPath());
+			}
+
                     return dizStatus.isFinished();
                 }
                 int totalPercent = (dizStatus.getPresent() * 100) / total;
@@ -78,6 +87,11 @@ public class IncompleteConfig extends Config {
             configData.addReturnData(Integer.toString((sfvStatus.getPresent() * 100) / total));
             if (total > 0) {
                 if (_min_percent == 0) {
+
+			if (!sfvStatus.isFinished()) {
+				logger.info("IncompleteScan (SFV) Missing:{} Path: {}", sfvStatus.getMissing(), dir.getPath());
+			}
+
                     return sfvStatus.isFinished();
                 }
                 int totalPercent = (sfvStatus.getPresent() * 100) / total;

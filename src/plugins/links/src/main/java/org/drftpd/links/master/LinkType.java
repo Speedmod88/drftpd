@@ -76,6 +76,10 @@ public abstract class LinkType {
         }
     }
 
+    String getDirName() {
+	return _dirname;
+    }
+
     /*
      * Returns the directory of where the links are
      * Suppose to be created, % denotes current directory's parent

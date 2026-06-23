@@ -44,6 +44,7 @@ public class NFOMissing extends LinkType {
      */
     @Override
     public void doCreateLink(DirectoryHandle targetDir) {
+	logger.debug("doCreateLink() for {}", targetDir);
         boolean foundMatch = false;
         try {
             Set<DirectoryHandle> dirs = targetDir.getDirectoriesUnchecked();
@@ -71,6 +72,7 @@ public class NFOMissing extends LinkType {
      */
     @Override
     public void doDeleteLink(DirectoryHandle targetDir) {
+	logger.debug("doDeleteLink() for {}", targetDir);
         deleteLink(targetDir, targetDir.getPath(), targetDir.getName());
     }
 
@@ -80,6 +82,7 @@ public class NFOMissing extends LinkType {
      */
     @Override
     public void doFixLink(DirectoryHandle targetDir) {
+	logger.debug("doFixLink() for {}", targetDir);
         try {
             for (FileHandle file : targetDir.getFilesUnchecked()) {
                 if (file.getName().toLowerCase().endsWith(".nfo")) {

@@ -17,6 +17,8 @@
  */
 package org.drftpd.autonuke.master;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.drftpd.common.dynamicdata.KeyNotFoundException;
 import org.drftpd.master.commands.approve.metadata.Approve;
 import org.drftpd.master.vfs.DirectoryHandle;
@@ -33,10 +35,15 @@ import java.util.TimerTask;
  */
 public class ScanTask extends TimerTask {
 
+	private static final Logger logger = LogManager.getLogger(ScanTask.class);
+
     public ScanTask() {
     }
 
     public void run() {
+
+	logger.info("ScanTask running, size:{} ...", DirsToCheck.getDirsToCheck().size());
+
         for (Iterator<DirectoryHandle> iter = DirsToCheck.getDirsToCheck().get().iterator(); iter.hasNext(); ) {
             DirectoryHandle dir = iter.next();
 
@@ -48,11 +55,13 @@ public class ScanTask extends TimerTask {
             } catch (FileNotFoundException e) {
                 // Dir no longer exist, remove it from queue and continue.
                 iter.remove();
+		logger.debug("ScanTask skipping due to file not found {}", dir.getPath(), e);
                 continue;
             }
 
             if (isApproved) {
                 iter.remove();
+                logger.debug("ScanTask skipping due to approved not found {}", dir.getPath());
                 continue;
             }
 

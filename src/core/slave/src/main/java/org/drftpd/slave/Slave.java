@@ -127,6 +127,8 @@ public class Slave extends SslConfigurationLoader {
 
     private InetAddress _bindIP;
 
+    private InetAddress _slaveLanIP;
+
     private boolean _online;
 
     private Properties _cfg;
@@ -170,6 +172,21 @@ public class Slave extends SslConfigurationLoader {
         } catch(Exception e) {
             logger.error("Unknown error occurred trying to get 'bind.ip' config", e);
         }
+
+        // Initialize to null
+        _slaveLanIP = null;
+        try {
+            String slaveLanIP = PropertyHelper.getProperty(p, "slave.lan.ip", "");
+            logger.debug("'slave.lan.ip' has been resolved to {}", slaveLanIP);
+            if (slaveLanIP.length() > 0) {
+		_slaveLanIP = InetAddress.getByName(slaveLanIP);
+            }
+        } catch(UnknownHostException e) {
+            logger.warn("'slave.lan.ip' is not a valid ip address");
+        } catch(Exception e) {
+            logger.error("Unknown error occurred trying to get 'slave.lan.ip' config", e);
+        }
+
         _timeout = Integer.parseInt(PropertyHelper.getProperty(p, "slave.timeout", String.valueOf(actualTimeout)));
 
         _uploadChecksums = p.getProperty("enableuploadchecksums", "true").equals("true");
@@ -678,6 +695,10 @@ public class Slave extends SslConfigurationLoader {
 
     public InetAddress getBindIP() {
         return _bindIP;
+    }
+
+    public InetAddress getSlaveLanIP() {
+        return _slaveLanIP;
     }
 
     public ObjectInputStream getInputStream() {

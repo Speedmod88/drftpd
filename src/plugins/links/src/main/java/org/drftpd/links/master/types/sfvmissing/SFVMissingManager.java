@@ -28,6 +28,7 @@ import org.drftpd.common.extensibility.PluginInterface;
 import org.drftpd.links.master.LinkManager;
 import org.drftpd.links.master.LinkType;
 import org.drftpd.links.master.types.zipincomplete.ZipIncompleteManager;
+import org.drftpd.master.GlobalContext;
 import org.drftpd.master.event.DirectoryFtpEvent;
 import org.drftpd.master.event.ReloadEvent;
 import org.drftpd.master.event.TransferEvent;
@@ -95,7 +96,7 @@ public class SFVMissingManager implements PluginInterface {
      * could cause a problem if the .nfo file was uploaded first, and the asyncevent
      * for the .sfv was before vfs event.
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
     public void onDirectoryFtpEvent(DirectoryFtpEvent direvent) {
         if ("MKD".equals(direvent.getCommand())) {
             for (LinkType link : _linkmanager.getLinks()) {
@@ -112,7 +113,7 @@ public class SFVMissingManager implements PluginInterface {
      * promptly exists.  If there isn't after the delete event, it re-adds a link
      * for this directory.
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
     public void onVirtualFileSystemInodeDeletedEvent(VirtualFileSystemInodeDeletedEvent vfsevent) {
         if (vfsevent.getInode().isFile()) {
             // logger.debug("Caught VirtualFileSystemInodeDeletedEvent - isFile() - {}", vfsevent.getInode());

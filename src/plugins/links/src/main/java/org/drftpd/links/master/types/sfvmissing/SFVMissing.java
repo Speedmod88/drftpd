@@ -71,6 +71,7 @@ public class SFVMissing extends LinkType {
      */
     @Override
     public void doDeleteLink(DirectoryHandle targetDir) {
+	logger.debug("doDeleteLink() for {}", targetDir);
         deleteLink(targetDir, targetDir.getPath(), targetDir.getName());
     }
 
@@ -80,6 +81,7 @@ public class SFVMissing extends LinkType {
      */
     @Override
     public void doFixLink(DirectoryHandle targetDir) {
+	logger.debug("doFixLink() for {}", targetDir);
         try {
             for (FileHandle file : targetDir.getFilesUnchecked()) {
                 if (file.getName().toLowerCase().endsWith(".sfv")) {
