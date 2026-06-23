@@ -168,7 +168,7 @@ public class ZipscriptPostHook extends SFVTools {
                             InetAddress transferSlaveInetAddr =
                                     response.getObject(DataConnectionHandler.TRANSFER_SLAVE_INET_ADDRESS);
                             char transferType = response.getObject(DataConnectionHandler.TRANSFER_TYPE);
-                            GlobalContext.getEventService().publishAsync(
+                            GlobalContext.getEventServiceSiteBotPriority().publishAsync(
                                     new SFVMemberTransferEvent(conn, "STOR", transferFile,
                                             conn.getClientAddress(), transferSlave, transferSlaveInetAddr,
                                             transferType, sfvData, sfv, sfvData.getSFVStatus()));

@@ -25,6 +25,7 @@ import org.drftpd.common.extensibility.PluginDependencies;
 import org.drftpd.common.extensibility.PluginInterface;
 import org.drftpd.links.master.LinkManager;
 import org.drftpd.links.master.LinkType;
+import org.drftpd.master.GlobalContext;
 import org.drftpd.master.event.DirectoryFtpEvent;
 import org.drftpd.master.event.ReloadEvent;
 import org.drftpd.master.event.TransferEvent;
@@ -109,7 +110,7 @@ public class NFOMissingManager implements PluginInterface {
      * promptly exists.  If there isn't after the delete event, it re-adds a link
      * for this directory.
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
     public void onVirtualFileSystemInodeDeletedEvent(VirtualFileSystemInodeDeletedEvent vfsevent) {
         if (vfsevent.getInode().isFile()) {
             if (vfsevent.getInode().getParent().exists()) {

@@ -100,9 +100,13 @@ public class SlaveTransfer {
 
         AbstractBasicIssuer basicIssuer = SlaveManager.getBasicIssuer();
 
+        String destSlaveSub = _destSlave.getName().substring(0, 1);
+        String srcSlaveSub = _srcSlave.getName().substring(0, 1);
+        boolean sameLan = destSlaveSub.equalsIgnoreCase(srcSlaveSub);
+
         // Setup destination Slave
         try {
-            String destIndex = basicIssuer.issueListenToSlave(_destSlave, _secureTransfer, false);
+            String destIndex = basicIssuer.issueListenToSlave(_destSlave, _secureTransfer, false, sameLan);
             ConnectInfo ci = _destSlave.fetchTransferResponseFromIndex(destIndex);
             _destTransfer = _destSlave.getTransfer(ci.getTransferIndex());
         } catch (SlaveUnavailableException e) {
@@ -115,6 +119,9 @@ public class SlaveTransfer {
             logger.debug("SSLUnavailableException received, throwing DestinationSlaveException");
             throw new DestinationSlaveException(e);
         }
+
+        logger.info("!!SLAVE TRANSFER. DEST HOST: " + _destTransfer.getAddress().getAddress().getHostAddress() + ", DEST PORT: " + _destTransfer.getLocalPort());
+
 
         // Setup source Slave
         try {

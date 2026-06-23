@@ -153,6 +153,9 @@ public class JobManager implements PluginInterface {
         try {
             availableSlaves = getGlobalContext().getSlaveManager().getAvailableSlaves();
         } catch (NoAvailableSlaveException e1) {
+
+		logger.warn("!! processJob return - NoAvailableSlaveException");
+
             return; // can't transfer with no slaves
         }
 
@@ -169,6 +172,7 @@ public class JobManager implements PluginInterface {
             while (!busySlavesDown.containsAll(availableSlaves)) {
                 job = getNextJob(busySlavesDown, skipJobs);
                 if (job == null) {
+			logger.info("!! processJob return - no job");
                     return;
                 }
                 Collection<RemoteSlave> destinationSlaveObjects = null;
@@ -190,6 +194,8 @@ public class JobManager implements PluginInterface {
                 if (job.checkIfArchived()) {
                     job.cleanup();
                     removeJobFromQueue(job);
+
+                    logger.info("!! processJob return - job archive done already");
                     return;
                 }
 
@@ -200,17 +206,23 @@ public class JobManager implements PluginInterface {
                         busySlavesDown.addAll(job.getFile().getSlaves());
                     } catch (FileNotFoundException e1) {
                         // can't transfer
+
+			logger.warn("!! processJob return - FileNotFoundException");
+
                         return;
                     }
                     continue;
                 } catch (FileNotFoundException | ObjectNotFoundException e) {
                     job.abort();
                     // can't transfer
+
+                    logger.warn("!! processJob return - FileNotFoundException2");
                     return;
                 }
 
                 if (sourceSlave == null) {
                     logger.debug("Unable to find a suitable job for transfer");
+                    logger.warn("!! processJob return - sourceSlave null");
                     return;
                 }
                 try {
@@ -228,12 +240,15 @@ public class JobManager implements PluginInterface {
 
                 } catch (FileNotFoundException e) {
                     // can't transfer
+
+			logger.warn("!! processJob return - FileNotFoundException3");
                     return;
                 }
             }
             // sourceSlave will always be null if destSlave is null
             if (destSlave == null /* || sourceSlave == null */) {
                 // all slaves are offline or busy
+		logger.warn("!! processJob return - destSlave null");
                 return;
             }
         }
@@ -245,6 +260,7 @@ public class JobManager implements PluginInterface {
         } catch (FileNotFoundException e) {
             job.abort();
             // file is deleted, hah! stupid race conditions
+            logger.warn("!! processJob return - FileNotFoundException4");
             return;
         }
         if (job.isDone()) {
@@ -273,6 +289,7 @@ public class JobManager implements PluginInterface {
         _runJob = new TimerTask() {
             public void run() {
                 if (_isStopped) {
+			logger.warn("!! JobManager TimerTask exit!");
                     return;
                 }
                 new JobTransferThread(getJobManager()).start();
@@ -282,6 +299,16 @@ public class JobManager implements PluginInterface {
             getGlobalContext().getTimer().schedule(_runJob, 0, _sleepSeconds);
         } catch (IllegalStateException e) {
             // Timer Already Canceled
+		logger.warn("!! JobManager Timer already canceled?", e);
+
+		GlobalContext.getGlobalContext().reloadTimer();
+
+            try {
+                getGlobalContext().getTimer().schedule(_runJob, 0, _sleepSeconds);
+            } catch (IllegalStateException e2) {
+                // Timer Already Canceled
+		logger.warn("!! JobManager Timer already canceled? 2", e2);
+            }
         }
     }
 

@@ -74,7 +74,7 @@ public class BasicAnnouncer extends AbstractAnnouncer {
         _bundle = bundle;
     }
 
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
     public void onDirectoryFtpEvent(DirectoryFtpEvent direvent) {
         if ("MKD".equals(direvent.getCommand())) {
             outputDirectoryEvent(direvent, "mkdir");

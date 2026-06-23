@@ -169,6 +169,7 @@ public class AutoNukeCommands extends CommandInterface {
         if (sectionsToCheck.isEmpty()) {
             return new CommandResponse(500, "Section excluded from autonuke scan, aborting");
         }
+        int count = 0;
         Map<String, Object> env = new HashMap<>();
         for (SectionInterface section : sectionsToCheck) {
             DirectoryHandle sectionRoot = section.getBaseDirectory();
@@ -206,6 +207,7 @@ public class AutoNukeCommands extends CommandInterface {
                         if (foundExcludedSubDir) continue;
                         // Dir valid so far, add it to scan queue
                         DirsToCheck.getDirsToCheck().add(releaseDir);
+                        count++;
                     }
                 }
             } catch (FileNotFoundException e) {
@@ -218,8 +220,10 @@ public class AutoNukeCommands extends CommandInterface {
             return new CommandResponse(200, request.getSession().jprintf(
                     _bundle, "autonukescan.aborted", request.getUser()));
         } else {
+		Map<String, Object> env2 = new HashMap<>();
+		env.put("count", count);
             return new CommandResponse(200, request.getSession().jprintf(
-                    _bundle, "autonukescan.complete", request.getUser()));
+                    _bundle, "autonukescan.complete", env, request.getUser()));
         }
     }
 

@@ -85,7 +85,8 @@ public class IndexManager extends CommandInterface {
             for (Entry<String, String> entry : ie.getStatus().entrySet()) {
                 env.put("key", entry.getKey());
                 env.put("value", entry.getValue());
-                response.addComment(request.getSession().jprintf(_bundle, "indexstatus", env, request.getUser()));
+                //response.addComment(request.getSession().jprintf(_bundle, "indexstatus", env, request.getUser()));
+                response.addComment("Entry: " + entry.getKey() + " _ " + entry.getValue());
             }
         } else {
             response.addComment("Entries in the index: " + ie.getStatus().get("inodes"));

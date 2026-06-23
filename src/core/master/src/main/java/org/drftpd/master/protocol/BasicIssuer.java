@@ -18,6 +18,8 @@
 package org.drftpd.master.protocol;
 
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.drftpd.common.exceptions.SSLUnavailableException;
 import org.drftpd.common.network.AsyncCommand;
 import org.drftpd.common.network.AsyncCommandArgument;
@@ -33,6 +35,8 @@ import org.drftpd.master.slavemanagement.RemoteSlave;
  */
 public class BasicIssuer extends AbstractBasicIssuer {
 
+	private static final Logger logger = LogManager.getLogger(BasicIssuer.class);
+
     @Override
     public String getProtocolName() {
         return "BasicProtocol";
@@ -41,6 +45,8 @@ public class BasicIssuer extends AbstractBasicIssuer {
     public String issueChecksumToSlave(RemoteSlave rslave, String path) throws SlaveUnavailableException {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommandArgument(index, "checksum", path));
+
+        logger.info("!! issueChecksumToSlave done with cmd index '{}'", index);
 
         return index;
     }
@@ -58,6 +64,8 @@ public class BasicIssuer extends AbstractBasicIssuer {
         rslave.sendCommand(new AsyncCommandArgument(index, "connect",
                 new String[]{ip + ":" + port, String.valueOf(encryptedDataChannel), String.valueOf(useSSLClientHandshake)}));
 
+        logger.info("!! issueConnectToSlave done with cmd index '{}'", index);
+
         return index;
     }
 
@@ -68,11 +76,13 @@ public class BasicIssuer extends AbstractBasicIssuer {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommandArgument(index, "delete", sourceFile));
 
+        logger.info("!! issueDeleteToSlave done with cmd index '{}'", index);
+
         return index;
     }
 
     public String issueListenToSlave(RemoteSlave rslave, boolean isSecureTransfer,
-                                     boolean useSSLClientMode) throws SlaveUnavailableException, SSLUnavailableException {
+                                     boolean useSSLClientMode, boolean useLanIP) throws SlaveUnavailableException, SSLUnavailableException {
 
         boolean sslReady = rslave.getTransientKeyedMap().getObjectBoolean(RemoteSlave.SSL);
         if (!sslReady && isSecureTransfer) {
@@ -82,7 +92,9 @@ public class BasicIssuer extends AbstractBasicIssuer {
 
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommandArgument(index, "listen", ""
-                + isSecureTransfer + ":" + useSSLClientMode));
+                + isSecureTransfer + ":" + useSSLClientMode + ":" + useLanIP));
+
+        logger.info("!! issueListenToSlave done with cmd index '{}'", index);
 
         return index;
     }
@@ -91,12 +103,16 @@ public class BasicIssuer extends AbstractBasicIssuer {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommand(index, "maxpath"));
 
+        logger.info("!! issueMaxPathToSlave done with cmd index '{}'", index);
+
         return index;
     }
 
     public String issuePingToSlave(RemoteSlave rslave) throws SlaveUnavailableException {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommand(index, "ping"));
+
+        logger.info("!! issuePingToSlave done with cmd index '{}'", index);
 
         return index;
     }
@@ -107,6 +123,8 @@ public class BasicIssuer extends AbstractBasicIssuer {
         rslave.sendCommand(new AsyncCommandArgument(index, "receive",
                 new String[]{String.valueOf(c), String.valueOf(position),
                         tindex.toString(), inetAddress, name, String.valueOf(minSpeed), String.valueOf(maxSpeed)}));
+
+        logger.info("!! issueReceiveToSlave done with cmd index '{}'", index);
 
         return index;
     }
@@ -120,12 +138,16 @@ public class BasicIssuer extends AbstractBasicIssuer {
         rslave.sendCommand(new AsyncCommandArgument(index, "rename",
                 new String[]{from, toDirPath, toName}));
 
+        logger.info("!! issueRenameToSlave done with cmd index '{}'", index);
+
         return index;
     }
 
     public String issueStatusToSlave(RemoteSlave rslave) throws SlaveUnavailableException {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommand(index, "status"));
+
+        logger.info("!! issueStatusToSlave done with cmd index '{}'", index);
 
         return index;
     }
@@ -138,6 +160,8 @@ public class BasicIssuer extends AbstractBasicIssuer {
         }
         rslave.sendCommand(new AsyncCommandArgument("abort", "abort",
                 new String[]{transferIndex.toString(), reason}));
+
+        logger.info("!! issueAbortToSlave done");
     }
 
 
@@ -148,6 +172,8 @@ public class BasicIssuer extends AbstractBasicIssuer {
                 new String[]{String.valueOf(c), String.valueOf(position), tindex.toString(),
                         inetAddress, name, String.valueOf(minSpeed), String.valueOf(maxSpeed)}));
 
+        logger.info("!! issueSendToSlave done with cmd index '{}'", index);
+
         return index;
     }
 
@@ -156,16 +182,23 @@ public class BasicIssuer extends AbstractBasicIssuer {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommandArgument(index, "remerge", new String[]{path,
                 Boolean.toString(partialRemerge), Long.toString(skipAgeCutoff), Long.toString(masterTime), Boolean.toString(instantOnline)}));
+
+        logger.info("!! issueRemergeToSlave done with cmd index '{}'", index);
+
         return index;
     }
 
     public void issueRemergePauseToSlave(RemoteSlave rslave) throws SlaveUnavailableException {
         rslave.sendCommand(new AsyncCommand("remergePause", "remergePause"));
 
+        logger.info("!! issueRemergePauseToSlave done");
+
     }
 
     public void issueRemergeResumeToSlave(RemoteSlave rslave) throws SlaveUnavailableException {
         rslave.sendCommand(new AsyncCommand("remergeResume", "remergeResume"));
+
+        logger.info("!! issueRemergeResumeToSlave done");
 
     }
 
@@ -173,6 +206,8 @@ public class BasicIssuer extends AbstractBasicIssuer {
     public String issueCheckSSL(RemoteSlave rslave) throws SlaveUnavailableException {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommand(index, "checkSSL"));
+
+        logger.info("!! issueCheckSSL done with cmd index '{}'", index);
 
         return index;
     }

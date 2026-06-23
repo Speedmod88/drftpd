@@ -84,11 +84,11 @@ public class ZipscriptDataExtension implements IndexDataExtensionInterface {
         } else if (sfvStatus != null) {
             FIELD_PRESENT.setIntValue(sfvStatus.getPresent());
             FIELD_MISSING.setIntValue(sfvStatus.getMissing());
-            FIELD_PERCENT.setIntValue((sfvStatus.getPresent() * 100) / sfvInfo.getSize());
+            FIELD_PERCENT.setIntValue(sfvInfo.getSize() > 0 ? ((sfvStatus.getPresent() * 100) / sfvInfo.getSize()) : 0);
         } else {
             FIELD_PRESENT.setIntValue(dizStatus.getPresent());
             FIELD_MISSING.setIntValue(dizStatus.getMissing());
-            FIELD_PERCENT.setIntValue((dizStatus.getPresent() * 100) / dizInfo.getTotal());
+            FIELD_PERCENT.setIntValue(dizInfo.getTotal() > 0 ? ((dizStatus.getPresent() * 100) / dizInfo.getTotal()) : 0);
         }
     }
 

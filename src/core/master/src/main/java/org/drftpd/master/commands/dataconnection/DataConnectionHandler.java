@@ -203,7 +203,7 @@ public class DataConnectionHandler extends CommandInterface {
                                 Transfer.TRANSFER_SENDING_DOWNLOAD, ts.getTransferFile());
                         logger.debug("PASV Download slave selected {}", slave.getName());
                         String index = SlaveManager.getBasicIssuer().issueListenToSlave(slave,
-                                ts.getSendFilesEncrypted(), ts.getSSLHandshakeClientMode());
+                                ts.getSendFilesEncrypted(), ts.getSSLHandshakeClientMode(), false);
                         logger.debug("PASV Download index calculated {}", index);
                         ci = slave.fetchTransferResponseFromIndex(index);
                         logger.debug("PASV Download fetch connection info {}", ci.toString());
@@ -237,7 +237,7 @@ public class DataConnectionHandler extends CommandInterface {
                                 conn, Transfer.TRANSFER_RECEIVING_UPLOAD, ts.getTransferFile());
                         logger.debug("PASV Upload slave selected {}", slave.getName());
                         String index = SlaveManager.getBasicIssuer().issueListenToSlave(slave,
-                                ts.getSendFilesEncrypted(), ts.getSSLHandshakeClientMode());
+                                ts.getSendFilesEncrypted(), ts.getSSLHandshakeClientMode(), false);
                         logger.debug("PASV Upload index calculated {}", index);
                         ci = slave.fetchTransferResponseFromIndex(index);
                         logger.debug("PASV Upload fetch connection info {}", ci.toString());

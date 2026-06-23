@@ -25,6 +25,7 @@ import java.util.LinkedList;
 public class ConfigData {
     private final LinkedList<String> _returnData;
     private NukeItem _ni;
+    private boolean _oldincomplete;
 
     public ConfigData() {
         _returnData = new LinkedList<>();
@@ -45,5 +46,4 @@ public class ConfigData {
     public void setNukeItem(NukeItem ni) {
         _ni = ni;
     }
-
 }

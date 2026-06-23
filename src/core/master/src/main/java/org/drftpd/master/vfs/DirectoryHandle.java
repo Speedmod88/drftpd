@@ -611,8 +611,8 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
             // compare is > 0, source comes after destination
             // compare is == 0, they have the same name
 
-            logger.debug("[{}][{}] hit case 3 (source and destination are not null). Compare: {}", getPath(),
-                    remoteSlave.getName(), compare);
+            logger.debug("[{}][{}] hit case 3 (source and destination are not null {}). Compare: {}", getPath(),
+                    remoteSlave.getName(), source.getName(), compare);
 
             if (compare < 0) {
                 if (source.isFile()) {
@@ -633,6 +633,18 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                             } else {
                                 createRemergedFile(source, remoteSlave, true);
                             }
+                        } catch (FileNotFoundException e2) {
+				boolean tmpfile = e2.getMessage().endsWith(".tmp");
+				if (tmpfile) {
+				// Try one last time in case it was a tmp and _files of parent inode is now cleaned up
+
+					logger.debug("!!! New beta code with .tmp file...");
+
+					createRemergedFile(source, remoteSlave, false);
+				}
+				else {
+					throw e2;
+				}
                         }
                     }
                 } else {

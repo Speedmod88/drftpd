@@ -176,6 +176,12 @@ public class Archive implements PluginInterface {
             getGlobalContext().getTimer().schedule(_runHandler, _cycleTime, _cycleTime);
         } catch (IllegalStateException e) {
             logger.warn("Unable to schedule our TimerTask as the GlobalContext Timer is in an illegal state", e);
+            try {
+		getGlobalContext().reloadTimer();
+		getGlobalContext().getTimer().schedule(_runHandler, _cycleTime, _cycleTime);
+            } catch (IllegalStateException e2) {
+		logger.warn("Unable to schedule our TimerTask as the GlobalContext Timer is in an illegal state 2", e2);
+            }
         }
     }
 

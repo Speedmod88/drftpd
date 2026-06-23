@@ -107,8 +107,8 @@ public class LinkManager implements PluginInterface {
 
         Set<Class<? extends LinkType>> LinkTypes = new Reflections("org.drftpd").getSubTypesOf(LinkType.class);
         for (Class<? extends LinkType> linkType : LinkTypes) {
-            logger.debug("Loading link type - {}", linkType.getSimpleName());
-            typesMap.put(linkType.getSimpleName(), linkType);
+		logger.debug("Loading link type - {}", linkType.getSimpleName());
+		typesMap.put(linkType.getSimpleName(), linkType);
         }
         _typesMap = typesMap;
     }
@@ -130,6 +130,13 @@ public class LinkManager implements PluginInterface {
         }
         logger.info("Loaded {} link configuration items", links.size());
         _links = links;
+
+        for (LinkType linkType : links) {
+		if (!_typesMap.containsValue(linkType.getClass())) {
+			logger.debug("NOT USED link type.. removing - {}", linkType.getClass().getSimpleName());
+			_typesMap.remove(linkType.getClass().getSimpleName());
+		}
+        }
     }
 
     public void loadConf() {
@@ -147,7 +154,7 @@ public class LinkManager implements PluginInterface {
     /*
      * Used for deleting links on wipe/rmd
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
     public void onVirtualFileSystemDeleteEvent(VirtualFileSystemInodeDeletedEvent vfsevent) {
         if (vfsevent.getInode().isDirectory()) {
             logger.debug("Caught VirtualFileSystemInodeDeletedEvent for directory {}, Checking links", vfsevent.getInode());
