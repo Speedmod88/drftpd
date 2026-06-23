@@ -46,7 +46,7 @@ public class DirsToCheck {
     }
 
     public void add(DirectoryHandle dir) {
-        _dirsToCheck.add(dir);
+	_dirsToCheck.add(dir);
     }
 
     public void del(String path) {

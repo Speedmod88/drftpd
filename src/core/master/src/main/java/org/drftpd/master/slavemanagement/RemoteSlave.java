@@ -381,6 +381,11 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                             " resolve itself automatically on next slave connection");
                 }
             } else if (remergeMode.equalsIgnoreCase("instant")) {
+		skipAgeCutoff = Long.parseLong(getProperty("lastConnect"));
+		if (skipAgeCutoff < 1731206543000L) {
+			skipAgeCutoff = 1731206543000L;
+		}
+
                 instantOnline = true;
                 setAvailable(true);
                 logger.info("Slave added: '{}' status: {}", getName(), _status);
@@ -391,7 +396,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         if (partialRemerge) {
             remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", true, skipAgeCutoff, System.currentTimeMillis(), false);
         } else if (instantOnline) {
-            remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", false, 0L, 0L, true);
+            remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", true, skipAgeCutoff, System.currentTimeMillis(), true);
         } else {
             remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", false, 0L, 0L, false);
         }
@@ -657,7 +662,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             try {
                 index = _indexPool.poll(1000, TimeUnit.MILLISECONDS);
                 if (index == null) {
-                    logger.error("Too many commands sent, need to wait for the slave to process commands");
+                    logger.error("Too many commands sent, need to wait for the slave to process commands, slave:{}, lastResponse:{}", _name, _lastResponseReceived);
                 } else {
                     return index;
                 }
@@ -703,20 +708,35 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         long total = System.currentTimeMillis();
         long lastUpdate = 0L;
         long reportIdle = 60000L;
+        int count = 0;
 
         while (isOnline() && !_indexWithCommands.containsKey(index)) {
+
+		//Whatever the wait provided (bad coding), this must not loop for too long otherwise this blocks the whole FIFO queue
+		if (Thread.currentThread().getName().equals("AsyncEventHandler") && count > 100) {
+
+			logger.error("!!! FETCH RESPONSE EXCESS LOOPING count:{}, total:{}, now:{}, wait:{}, slave:{}", count, total, System.currentTimeMillis(), wait, _name);
+			throw new RuntimeException("!!! FETCH RESPONSE EXCESS LOOPINP FAILSAFE !!!");
+		}
+
             // will wait a maximum of 50 milliseconds before waking up
             // Any longer and we risk slow exchange of commands between master and slave
             try {
                 synchronized (_commandMonitor) {
+			count++;
                     _commandMonitor.wait(50);
                 }
             } catch (InterruptedException e) {
                 // Ignore interupt
             }
 
+            //wtf shutdown slave?
             if ((wait != 0) && ((System.currentTimeMillis() - total) >= wait)) {
-                setOffline("Slave has taken too long while waiting for reply " + index);
+
+		long duration = (System.currentTimeMillis() - total);
+
+		logger.error("!!! FETCH RESPONSE OFFLINE THREAD!? count:{}, total:{}, now:{}, wait:{}, slave:{}", count, total, System.currentTimeMillis(), wait, _name);
+                setOffline("Slave has taken too long while waiting for reply " + index + " | wait time: " + duration);
             }
 
             // Handle remerge status reporting if we are remerging
@@ -779,7 +799,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public boolean isOnline() {
-        return ((_socket != null) && _socket.isConnected());
+        return ((_socket != null) && _socket.isConnected() && !_socket.isClosed());
     }
 
     public long getCheckSumForPath(String path) throws IOException,
@@ -973,6 +993,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             try {
                 _socket.close();
             } catch (IOException e) {
+            } catch (NullPointerException e) {
             }
             _socket = null;
         }
@@ -1279,6 +1300,14 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                     logger.error("IOException during remerge", e);
                     msg.getRslave().setOffline("IOException during remerge");
                     break;
+                } catch (Exception e) {
+			logger.error("IOException during remerge2", e);
+			msg.getRslave().setOffline("IOException during remerge");
+			break;
+                } catch (Error e) {
+			logger.error("IOException during remerge3", e);
+			msg.getRslave().setOffline("IOException during remerge");
+			break;
                 }
             }
         }

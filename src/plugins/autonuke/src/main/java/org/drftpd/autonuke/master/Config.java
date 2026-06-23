@@ -108,6 +108,7 @@ public abstract class Config {
     public boolean handleDirectory(ConfigData configData, DirectoryHandle dir) {
         SectionInterface section = GlobalContext.getGlobalContext().getSectionManager().lookup(dir);
         if (!_sections.contains(section)) {
+		logger.debug("Skipping Section {}", section.getName());
             return true;
         }
         if (section instanceof DatedSection) {
@@ -126,6 +127,7 @@ public abstract class Config {
                     }
                     if (!datedDirValid) {
                         // Dated day not valid, skip check
+			logger.debug("Skipping DatedSection {}", section.getName());
                         return true;
                     }
                 }
@@ -133,6 +135,15 @@ public abstract class Config {
         }
         try {
             if (System.currentTimeMillis() > dir.lastModified() + _max_age) {
+		logger.debug("Skipping due to max age {}", dir.getPath());
+
+		//Check directory still but do not create nuke item
+		handleDirectory(configData, dir, false);
+		if (configData.getNukeItem() != null) {
+			logger.debug("Publishing AutoNukeEvent, Old Incomplete {} {}", configData.getNukeItem().getTime(), configData.getNukeItem().getDir().getPath());
+			GlobalContext.getEventService().publishAsync(new AutoNukeEvent(configData.getNukeItem(), "${color}04${bold}OLD!${bold}${coloroff} " + _irc, configData.getReturnData()));
+		}
+
                 return true;
             }
             if (System.currentTimeMillis() > dir.lastModified() + _min_age) {
@@ -143,13 +154,16 @@ public abstract class Config {
                     // Add nuke if not in queue already
                     // Dont announce if dir has passed nuke delay, will get nuked directly anyway
                     if (DirsToNuke.getDirsToNuke().add(configData.getNukeItem()) && (System.currentTimeMillis() < configData.getNukeItem().getTime())) {
+			logger.debug("Publishing AutoNukeEvent, Time of nuke {} {}", configData.getNukeItem().getTime(), configData.getNukeItem().getDir().getPath());
                         GlobalContext.getEventService().publishAsync(new AutoNukeEvent(configData.getNukeItem(), _irc, configData.getReturnData()));
                     }
                 }
+
+                logger.debug("Skipping due to min age {}", dir.getPath());
                 return true;
             }
         } catch (FileNotFoundException e) {
-            logger.warn("", e);
+            logger.warn("FileNotFound during handleDirectory", e);
             return true;
         }
         return false;
@@ -170,7 +184,7 @@ public abstract class Config {
                     }
                 }
             } catch (FileNotFoundException e) {
-                logger.warn("", e);
+                logger.warn("FileNotFound in checkDirectory", e);
             }
         }
     }
@@ -184,14 +198,16 @@ public abstract class Config {
      */
     public void handleDirectory(ConfigData configData, DirectoryHandle dir, boolean isSubdir) {
         if (!process(configData, dir)) {
-            NukeItem ni;
+
+		NukeItem ni;
             try {
                 ni = new NukeItem(dir.lastModified() + _nuke_delay, dir, _nuke_reason, _nuke_mult, isSubdir, _debug);
             } catch (FileNotFoundException e) {
-                logger.warn("", e);
+                logger.warn("FileNotFound during handleDirectory", e);
                 return;
             }
             configData.setNukeItem(ni);
+            logger.debug("Release incomplete, nukeItem added {}", dir.getPath());
         }
     }
 

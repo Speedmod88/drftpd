@@ -47,6 +47,9 @@ public class NukeTask extends TimerTask {
     }
 
     public void run() {
+
+	logger.info("NukeTask running, size {} ...", DirsToNuke.getDirsToNuke().size());
+
         for (Iterator<NukeItem> iter = DirsToNuke.getDirsToNuke().get().iterator(); iter.hasNext(); ) {
             NukeItem ni = iter.next();
             if (System.currentTimeMillis() >= ni.getTime()) {

@@ -163,7 +163,7 @@ public class IMDBConfig {
      *
      * @param event
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
     public void inodeCreated(VirtualFileSystemInodeCreatedEvent event) {
         if (!event.getInode().isFile()) return;
 

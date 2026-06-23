@@ -75,9 +75,13 @@ public class GlobalContext {
 
     public static final String VERSION = "DrFTPD 4.0.12-git";
     private static final Logger logger = LogManager.getLogger(GlobalContext.class);
+    public static final String SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT = "EventBusSiteBot";
+    public static final String SERVICE_NAME_EVENT_BUS_SLOWEST = "EventBusSlowest";
     protected static GlobalContext _gctx;
     private static final DirectoryHandle root = new DirectoryHandle(VirtualFileSystem.separator);
     private static final AsyncThreadSafeEventService eventService = new AsyncThreadSafeEventService();
+    private static final AsyncThreadSafeEventService eventService2 = new AsyncThreadSafeEventService();
+    private static final AsyncThreadSafeEventService eventService3 = new AsyncThreadSafeEventService();
     private static Set<Method> hooksMethods;
     protected SectionManagerInterface _sectionManager;
     protected SlaveManager _slaveManager;
@@ -86,7 +90,7 @@ public class GlobalContext {
     private ConfigInterface _config;
     private final List<PluginInterface> _plugins = new ArrayList<>();
     private String _shutdownMessage = null;
-    private final Timer _timer = new Timer("GlobalContextTimer");
+    private Timer _timer = new Timer("GlobalContextTimer");
     private SSLContext _sslContext;
     private TimeManager _timeManager;
     private IndexEngineInterface _indexEngine;
@@ -120,7 +124,10 @@ public class GlobalContext {
         if (_gctx == null) {
             _gctx = new GlobalContext();
             try {
+
                 EventServiceLocator.setEventService(EventServiceLocator.SERVICE_NAME_EVENT_BUS, eventService);
+                EventServiceLocator.setEventService(SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT, eventService2);
+                EventServiceLocator.setEventService(SERVICE_NAME_EVENT_BUS_SLOWEST, eventService3);
             } catch (EventServiceExistsException e) {
                 logger.error("Error setting event service, likely something using the event bus before GlobalContext is instantiated", e);
             }
@@ -218,6 +225,14 @@ public class GlobalContext {
 
     public static AsyncThreadSafeEventService getEventService() {
         return eventService;
+    }
+
+    public static AsyncThreadSafeEventService getEventServiceSiteBotPriority() {
+        return eventService2;
+    }
+
+    public static AsyncThreadSafeEventService getEventServiceSlowest() {
+        return eventService3;
     }
 
     public void reloadFtpConfig() {
@@ -370,12 +385,20 @@ public class GlobalContext {
         _shutdownMessage = message;
         CommitManager.getCommitManager().enableQueueDrain();
         getEventService().publish(new MessageEvent("SHUTDOWN", message));
+        getEventServiceSiteBotPriority().publish(new MessageEvent("SHUTDOWN", message));
+        getEventServiceSlowest().publish(new MessageEvent("SHUTDOWN", message));
         getConnectionManager().shutdownPrivate(message);
         new Thread(new Shutdown()).start();
     }
 
     public Timer getTimer() {
         return _timer;
+    }
+
+    public void reloadTimer() {
+	_timer.purge();
+	_timer.cancel();
+	_timer = new Timer("GlobalContextTimer");
     }
 
     public SlaveSelectionManagerInterface getSlaveSelectionManager() {
@@ -446,7 +469,21 @@ public class GlobalContext {
                 }
             }
             while (GlobalContext.getEventService().getQueueSize() > 0) {
-                logger.info("Waiting for queued events to be processed - {} remaining", GlobalContext.getEventService().getQueueSize());
+                logger.info("Waiting for queued events to be processed 1 - {} remaining", GlobalContext.getEventService().getQueueSize());
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {
+                }
+            }
+            while (GlobalContext.getEventServiceSiteBotPriority().getQueueSize() > 0) {
+                logger.info("Waiting for queued events to be processed 2 - {} remaining", GlobalContext.getEventServiceSiteBotPriority().getQueueSize());
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {
+                }
+            }
+            while (GlobalContext.getEventServiceSlowest().getQueueSize() > 0) {
+                logger.info("Waiting for queued events to be processed 3 - {} remaining", GlobalContext.getEventServiceSlowest().getQueueSize());
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException ignored) {

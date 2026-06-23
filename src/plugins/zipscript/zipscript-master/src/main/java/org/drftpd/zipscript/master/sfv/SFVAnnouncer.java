@@ -90,7 +90,7 @@ public class SFVAnnouncer extends AbstractAnnouncer {
         _bundle = bundle;
     }
 
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
     public void onSFVMemberTransferEvent(SFVMemberTransferEvent sfvEvent) {
         outputSFVMemberSTOR(sfvEvent);
     }
@@ -327,11 +327,22 @@ public class SFVAnnouncer extends AbstractAnnouncer {
             }
         } catch (NoAvailableSlaveException | SlaveUnavailableException e) {
             // Slave with sfv is offline
+
+		logger.error("FATAL ERROR SFVAnnouncer 1. ({}, {})", dir.getName(), sfvEvent.getSFVInfo().getSFVFileName(), e);
+
         } catch (FileNotFoundException e) {
             // SFV deleted?
+
+		logger.error("FATAL ERROR SFVAnnouncer 2. ({}, {})", dir.getName(), sfvEvent.getSFVInfo().getSFVFileName(), e);
         } catch (IOException e) {
             // SFV not readable
+
+		logger.error("FATAL ERROR SFVAnnouncer 3. ({}, {})", dir.getName(), sfvEvent.getSFVInfo().getSFVFileName(), e);
+        } catch (Throwable t) {
+
+		logger.error("FATAL ERROR SFVAnnouncer 4. ({}, {})", dir.getName(), sfvEvent.getSFVInfo().getSFVFileName(), t);
         }
+
     }
 
     private void fillEnvSection(Map<String, Object> env,

@@ -104,7 +104,10 @@ public class ConfigChain {
                 Class<Config> clazz = _configsMap.get(configName);
                 Config config = clazz.getConstructor(SIG).newInstance(i, p);
                 configs.add(config);
+
+                logger.info("Loaded Config for ConfigChain {}", configName);
             } catch (Exception e) {
+		logger.error("Cannot load Config for ConfigChain {}", configName, e);
                 throw new FatalException(i + ".type = " + configName, e);
             }
         }

@@ -115,7 +115,15 @@ public class AutoNukeManager implements PluginInterface {
             GlobalContext.getGlobalContext().getTimer().schedule(_scanTask, 60000L, 60000L);
             GlobalContext.getGlobalContext().getTimer().schedule(_nukeTask, 90000L, 60000L);
         } catch (IllegalStateException e) {
-            logger.error("Unable to start autonuke timer task, reload and try again");
+            logger.error("Unable to start autonuke timer task, reload and try again", e);
+
+            GlobalContext.getGlobalContext().reloadTimer();
+            try {
+                GlobalContext.getGlobalContext().getTimer().schedule(_scanTask, 60000L, 60000L);
+                GlobalContext.getGlobalContext().getTimer().schedule(_nukeTask, 90000L, 60000L);
+            } catch (IllegalStateException e2) {
+                logger.error("Unable to start autonuke timer task, reload and try again 2", e2);
+            }
         }
     }
 

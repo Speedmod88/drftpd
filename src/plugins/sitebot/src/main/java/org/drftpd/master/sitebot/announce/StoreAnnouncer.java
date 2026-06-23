@@ -88,7 +88,7 @@ public class StoreAnnouncer extends AbstractAnnouncer {
         _bundle = bundle;
     }
 
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
     public void onDirectoryFtpEvent(DirectoryFtpEvent dirEvent) {
         if ("STOR".equals(dirEvent.getCommand())) {
             outputDirectorySTOR((TransferEvent) dirEvent);

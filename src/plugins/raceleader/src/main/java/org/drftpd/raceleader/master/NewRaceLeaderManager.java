@@ -81,6 +81,14 @@ public class NewRaceLeaderManager implements PluginInterface {
             logger.error("Failed to start newraceleader timer: ", e);
         } catch (IllegalStateException e) {
             logger.error("Failed to restart newraceleader timer: ", e);
+
+            GlobalContext.getGlobalContext().reloadTimer();
+
+            try {
+                GlobalContext.getGlobalContext().getTimer().schedule(_newraceleaderTimer, _delay, _delay);
+            } catch (IllegalStateException e2) {
+                logger.error("Failed to restart newraceleader timer 2: ", e2);
+            }
         }
     }
 

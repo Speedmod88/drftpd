@@ -198,6 +198,7 @@ public class VirtualFileSystemDirectory extends VirtualFileSystemInode {
     protected synchronized void createFile(String name, String user, String group,
                                            String initialSlave, long lastModified, boolean setLastModified, long size) throws FileExistsException {
         if (_files.containsKey(name)) {
+		logger.debug("createFile aborted... file exists {}", name);
             throw new FileExistsException(name + " already exists");
         }
         VirtualFileSystemInode inode = new VirtualFileSystemFile(user, group,
