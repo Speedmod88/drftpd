@@ -129,7 +129,18 @@ public class Pre extends CommandInterface {
             return StandardCommandManager.genericResponse("RESPONSE_530_ACCESS_DENIED");
         }
 
-        DirectoryHandle toInode = new DirectoryHandle(section.getCurrentDirectory().getPath() + VirtualFileSystem.separator + preDir.getName());
+        DirectoryHandle targetDir = section.getCurrentDirectory();
+        try {
+            targetDir.getInode();
+        } catch (FileNotFoundException e) {
+            logger.warn("[doSITE_PRE] Target directory for section [{}] does not exist: {}", sectionName, targetDir.getPath(), e);
+            return new CommandResponse(500, "Target directory does not exist: " + targetDir.getPath());
+        } catch (ClassCastException e) {
+            logger.warn("[doSITE_PRE] Target path for section [{}] is not a directory: {}", sectionName, targetDir.getPath(), e);
+            return new CommandResponse(500, "Target path is not a directory: " + targetDir.getPath());
+        }
+
+        DirectoryHandle toInode = targetDir.getNonExistentDirectoryHandle(preDir.getName());
 
         if (toInode.exists()) {
             return new CommandResponse(500, "Directory already exist in target section");
