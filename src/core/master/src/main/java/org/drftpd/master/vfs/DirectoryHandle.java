@@ -590,9 +590,8 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                             }
                         }
                     } else {
-                        throw new IOException("[" + getPath() + "][" + remoteSlave.getName() + "] case 2 - " +
-                                "source " + source.getName() + " is not a file -- this shouldn't happen. " +
-                                "This source should already be created through a previous remerge process");
+                        throw new PartialRemergeDirectoryException(getPath(), source.getName(),
+                                remoteSlave.getName(), 2);
                     }
                     if (sourceItr.hasNext()) {
                         source = sourceItr.next();
@@ -648,9 +647,8 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                         }
                     }
                 } else {
-                    throw new IOException("[" + getPath() + "][" + remoteSlave.getName() + "] case 3 - " +
-                            "source " + source.getName() + " is not a file -- this shouldn't happen. " +
-                            "This source should already be created through a previous remerge process");
+                    throw new PartialRemergeDirectoryException(getPath(), source.getName(),
+                            remoteSlave.getName(), 3);
                 }
                 // advance one runner
                 if (sourceItr.hasNext()) {
