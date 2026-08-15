@@ -46,6 +46,7 @@ import java.util.TimerTask;
  */
 public class NewRaceLeaderManager implements PluginInterface {
     private static final Logger logger = LogManager.getLogger(NewRaceLeaderManager.class);
+    private static final String TIMER_NAME = "raceleader.cleanup";
 
     private static final long _delay = 1800000; // = 30 minutes
 
@@ -76,19 +77,10 @@ public class NewRaceLeaderManager implements PluginInterface {
         };
 
         try {
-            GlobalContext.getGlobalContext().getTimer().schedule(_newraceleaderTimer, _delay, _delay);
-        } catch (IllegalArgumentException e) {
+            GlobalContext.getGlobalContext().scheduleTimer(TIMER_NAME, NewRaceLeaderManager.class.getName(),
+                    _newraceleaderTimer, _delay, _delay);
+        } catch (RuntimeException e) {
             logger.error("Failed to start newraceleader timer: ", e);
-        } catch (IllegalStateException e) {
-            logger.error("Failed to restart newraceleader timer: ", e);
-
-            GlobalContext.getGlobalContext().reloadTimer();
-
-            try {
-                GlobalContext.getGlobalContext().getTimer().schedule(_newraceleaderTimer, _delay, _delay);
-            } catch (IllegalStateException e2) {
-                logger.error("Failed to restart newraceleader timer 2: ", e2);
-            }
         }
     }
 
@@ -113,7 +105,7 @@ public class NewRaceLeaderManager implements PluginInterface {
         if (_newraceleaderTimer != null) {
             _newraceleaderTimer.cancel();
         }
-        GlobalContext.getGlobalContext().getTimer().purge();
+        GlobalContext.getGlobalContext().cancelTimer(TIMER_NAME);
     }
 
     public void delete(DirectoryHandle dir) {

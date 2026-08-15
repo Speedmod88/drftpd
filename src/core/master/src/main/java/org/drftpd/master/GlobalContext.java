@@ -60,6 +60,11 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -90,6 +95,14 @@ public class GlobalContext {
     private ConfigInterface _config;
     private final List<PluginInterface> _plugins = new ArrayList<>();
     private String _shutdownMessage = null;
+    private final AtomicInteger _timerThreadCounter = new AtomicInteger();
+    private final ScheduledThreadPoolExecutor _scheduledTimerExecutor = new ScheduledThreadPoolExecutor(8, runnable -> {
+        Thread thread = new Thread(runnable, "RegisteredTimer-" + _timerThreadCounter.incrementAndGet());
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final Map<String, RegisteredTimer> _registeredTimers = new ConcurrentHashMap<>();
+    // Retained for compatibility with external plugins. Internal tasks use the registered scheduler below.
     private Timer _timer = new Timer("GlobalContextTimer");
     private SSLContext _sslContext;
     private TimeManager _timeManager;
@@ -100,6 +113,7 @@ public class GlobalContext {
      * you're not doing it correctly, GlobalContext is a Singleton
      */
     protected GlobalContext() {
+        _scheduledTimerExecutor.setRemoveOnCancelPolicy(true);
         Reflections reflections = new Reflections(new ConfigurationBuilder()
                 .setUrls(ClasspathHelper.forPackage("org.drftpd"))
                 .setScanners(new MethodAnnotationsScanner()));
@@ -387,6 +401,7 @@ public class GlobalContext {
         getEventService().publish(new MessageEvent("SHUTDOWN", message));
         getEventServiceSiteBotPriority().publish(new MessageEvent("SHUTDOWN", message));
         getEventServiceSlowest().publish(new MessageEvent("SHUTDOWN", message));
+        shutdownTimers();
         getConnectionManager().shutdownPrivate(message);
         new Thread(new Shutdown()).start();
     }
@@ -396,9 +411,179 @@ public class GlobalContext {
     }
 
     public void reloadTimer() {
-	_timer.purge();
-	_timer.cancel();
-	_timer = new Timer("GlobalContextTimer");
+        _timer.purge();
+        _timer.cancel();
+        _timer = new Timer("GlobalContextTimer");
+    }
+
+    public void scheduleTimer(String name, String owner, Runnable task, long delay, long period) {
+        scheduleTimer(name, owner, task, delay, period, false);
+    }
+
+    public void scheduleTimerAtFixedRate(String name, String owner, Runnable task, long delay, long period) {
+        scheduleTimer(name, owner, task, delay, period, true);
+    }
+
+    private synchronized void scheduleTimer(String name, String owner, Runnable task, long delay, long period,
+                                            boolean fixedRate) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(task, "task");
+        if (name.isBlank()) {
+            throw new IllegalArgumentException("Timer name cannot be blank");
+        }
+        if (delay < 0 || period < 0) {
+            throw new IllegalArgumentException("Timer delay and period cannot be negative");
+        }
+
+        cancelTimer(name);
+        RegisteredTimer registration = new RegisteredTimer(name, owner, delay, period, fixedRate);
+        _registeredTimers.put(name, registration);
+        Runnable guardedTask = () -> runRegisteredTimer(registration, task);
+        try {
+            ScheduledFuture<?> future;
+            if (period == 0) {
+                future = _scheduledTimerExecutor.schedule(guardedTask, delay, TimeUnit.MILLISECONDS);
+            } else if (fixedRate) {
+                future = _scheduledTimerExecutor.scheduleAtFixedRate(
+                        guardedTask, delay, period, TimeUnit.MILLISECONDS);
+            } else {
+                future = _scheduledTimerExecutor.scheduleWithFixedDelay(
+                        guardedTask, delay, period, TimeUnit.MILLISECONDS);
+            }
+            registration.setFuture(future);
+            logger.info("Registered timer [{}] owner=[{}] delay={}ms period={}ms fixedRate={}",
+                    name, owner, delay, period, fixedRate);
+        } catch (RuntimeException e) {
+            _registeredTimers.remove(name, registration);
+            logger.error("Unable to register timer [{}] for owner [{}]", name, owner, e);
+            throw e;
+        }
+    }
+
+    private void runRegisteredTimer(RegisteredTimer registration, Runnable task) {
+        registration.setRunning(true);
+        registration.setLastRun(System.currentTimeMillis());
+        try {
+            task.run();
+            registration.setLastError(null);
+        } catch (Throwable t) {
+            registration.setLastError(t.toString());
+            logger.error("Registered timer [{}] owned by [{}] failed", registration.getName(),
+                    registration.getOwner(), t);
+        } finally {
+            registration.setRunning(false);
+            if (registration.getPeriod() == 0) {
+                registration.setEnabled(false);
+                _registeredTimers.remove(registration.getName(), registration);
+            }
+        }
+    }
+
+    public synchronized boolean cancelTimer(String name) {
+        RegisteredTimer registration = _registeredTimers.remove(name);
+        if (registration == null) {
+            return false;
+        }
+        registration.cancel();
+        logger.info("Cancelled timer [{}] owned by [{}]", name, registration.getOwner());
+        return true;
+    }
+
+    public List<TimerStatus> getTimerStatuses() {
+        List<TimerStatus> statuses = new ArrayList<>();
+        for (RegisteredTimer registration : _registeredTimers.values()) {
+            statuses.add(registration.snapshot());
+        }
+        statuses.sort(Comparator.comparing(TimerStatus::getName));
+        return statuses;
+    }
+
+    private synchronized void shutdownTimers() {
+        for (RegisteredTimer registration : _registeredTimers.values()) {
+            registration.cancel();
+        }
+        _registeredTimers.clear();
+        _scheduledTimerExecutor.shutdownNow();
+        _timer.cancel();
+    }
+
+    private static class RegisteredTimer {
+        private final String _name;
+        private final String _owner;
+        private final long _delay;
+        private final long _period;
+        private final boolean _fixedRate;
+        private volatile long _lastRun;
+        private volatile String _lastError;
+        private volatile boolean _enabled = true;
+        private volatile boolean _running;
+        private volatile ScheduledFuture<?> _future;
+
+        private RegisteredTimer(String name, String owner, long delay, long period, boolean fixedRate) {
+            _name = name;
+            _owner = owner;
+            _delay = delay;
+            _period = period;
+            _fixedRate = fixedRate;
+        }
+
+        private void cancel() {
+            _enabled = false;
+            ScheduledFuture<?> future = _future;
+            if (future != null) {
+                future.cancel(false);
+            }
+        }
+
+        private TimerStatus snapshot() {
+            return new TimerStatus(_name, _owner, _delay, _period, _fixedRate, _lastRun, _lastError,
+                    _enabled, _running);
+        }
+
+        private String getName() { return _name; }
+        private String getOwner() { return _owner; }
+        private long getPeriod() { return _period; }
+        private void setFuture(ScheduledFuture<?> future) { _future = future; }
+        private void setLastRun(long lastRun) { _lastRun = lastRun; }
+        private void setLastError(String lastError) { _lastError = lastError; }
+        private void setEnabled(boolean enabled) { _enabled = enabled; }
+        private void setRunning(boolean running) { _running = running; }
+    }
+
+    public static final class TimerStatus {
+        private final String _name;
+        private final String _owner;
+        private final long _delay;
+        private final long _period;
+        private final boolean _fixedRate;
+        private final long _lastRun;
+        private final String _lastError;
+        private final boolean _enabled;
+        private final boolean _running;
+
+        private TimerStatus(String name, String owner, long delay, long period, boolean fixedRate, long lastRun,
+                            String lastError, boolean enabled, boolean running) {
+            _name = name;
+            _owner = owner;
+            _delay = delay;
+            _period = period;
+            _fixedRate = fixedRate;
+            _lastRun = lastRun;
+            _lastError = lastError;
+            _enabled = enabled;
+            _running = running;
+        }
+
+        public String getName() { return _name; }
+        public String getOwner() { return _owner; }
+        public long getDelay() { return _delay; }
+        public long getPeriod() { return _period; }
+        public boolean isFixedRate() { return _fixedRate; }
+        public long getLastRun() { return _lastRun; }
+        public String getLastError() { return _lastError; }
+        public boolean isEnabled() { return _enabled; }
+        public boolean isRunning() { return _running; }
     }
 
     public SlaveSelectionManagerInterface getSlaveSelectionManager() {

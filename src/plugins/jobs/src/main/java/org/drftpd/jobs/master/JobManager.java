@@ -39,6 +39,7 @@ import java.util.*;
  */
 public class JobManager implements PluginInterface {
     private static final Logger logger = LogManager.getLogger(JobManager.class);
+    private static final String TIMER_NAME = "jobs.transfer";
 
     private boolean _isStopped = false;
 
@@ -281,8 +282,8 @@ public class JobManager implements PluginInterface {
                 "sleepSeconds", "30"));
         if (_runJob != null) {
             _runJob.cancel();
-            getGlobalContext().getTimer().purge();
         }
+        getGlobalContext().cancelTimer(TIMER_NAME);
         if (_sleepSeconds <= 0) {
             _sleepSeconds = 500;
         }
@@ -296,19 +297,10 @@ public class JobManager implements PluginInterface {
             }
         };
         try {
-            getGlobalContext().getTimer().schedule(_runJob, 0, _sleepSeconds);
-        } catch (IllegalStateException e) {
-            // Timer Already Canceled
-		logger.warn("!! JobManager Timer already canceled?", e);
-
-		GlobalContext.getGlobalContext().reloadTimer();
-
-            try {
-                getGlobalContext().getTimer().schedule(_runJob, 0, _sleepSeconds);
-            } catch (IllegalStateException e2) {
-                // Timer Already Canceled
-		logger.warn("!! JobManager Timer already canceled? 2", e2);
-            }
+            getGlobalContext().scheduleTimer(TIMER_NAME, JobManager.class.getName(),
+                    _runJob, 0, _sleepSeconds);
+        } catch (RuntimeException e) {
+            logger.warn("Unable to schedule the JobManager timer", e);
         }
     }
 
@@ -359,8 +351,8 @@ public class JobManager implements PluginInterface {
     public void stopPlugin(String reason) {
         if (_runJob != null) {
             _runJob.cancel();
-            getGlobalContext().getTimer().purge();
         }
+        getGlobalContext().cancelTimer(TIMER_NAME);
         if (_queuedJobSet != null) {
             synchronized (this) {
                 for (Job job : _queuedJobSet) {

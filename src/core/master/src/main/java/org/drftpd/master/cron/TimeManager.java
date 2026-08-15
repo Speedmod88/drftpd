@@ -41,12 +41,13 @@ public class TimeManager {
     private static final long HOUR = MINUTE * 60;
     private static final long WATCHDOG_PERIOD = MINUTE * 5;
     private static final long WATCHDOG_GRACE = MINUTE * 10;
+    private static final String HOURLY_TIMER_NAME = "core.time.hourly";
 
     private final ArrayList<TimeEventInterface> _timedEvents;
     private final Object _timerLock = new Object();
     private final ScheduledExecutorService _watchdog;
 
-    private TimerTask _processHour;
+    private Runnable _processHour;
     private volatile long _lastCompletedReset = System.currentTimeMillis();
     private volatile long _nextExpectedReset = -1;
 
@@ -71,17 +72,15 @@ public class TimeManager {
         startWatchdog();
     }
 
-    private TimerTask newProcessHourTask() {
-        return new TimerTask() {
-            public void run() {
-                try {
-                    doReset(Calendar.getInstance());
-                } catch (Throwable t) {
-                    logger.error("TimeManager hourly reset failed", t);
-                } finally {
-                    _lastCompletedReset = System.currentTimeMillis();
-                    _nextExpectedReset = nextTopOfHour(_lastCompletedReset);
-                }
+    private Runnable newProcessHourTask() {
+        return () -> {
+            try {
+                doReset(Calendar.getInstance());
+            } catch (Throwable t) {
+                logger.error("TimeManager hourly reset failed", t);
+            } finally {
+                _lastCompletedReset = System.currentTimeMillis();
+                _nextExpectedReset = nextTopOfHour(_lastCompletedReset);
             }
         };
     }
@@ -89,24 +88,12 @@ public class TimeManager {
     private void scheduleProcessHour(Calendar cal) {
         synchronized (_timerLock) {
             _processHour = newProcessHourTask();
-            Timer timer = GlobalContext.getGlobalContext().getTimer();
             Date nextReset = cal.getTime();
             _nextExpectedReset = nextReset.getTime();
-            try {
-                timer.scheduleAtFixedRate(_processHour, nextReset, HOUR);
-                logger.info("TimeManager scheduled the next reset to be at {}", nextReset);
-            } catch (IllegalStateException e) {
-                logger.error("TimeManager schedule error", e);
-                GlobalContext.getGlobalContext().reloadTimer();
-                timer = GlobalContext.getGlobalContext().getTimer();
-                _processHour = newProcessHourTask();
-                try {
-                    timer.scheduleAtFixedRate(_processHour, nextReset, HOUR);
-                    logger.info("TimeManager scheduled the next reset to be at {}", nextReset);
-                } catch (IllegalStateException e2) {
-                    logger.error("TimeManager schedule error 2", e2);
-                }
-            }
+            long delay = Math.max(0L, nextReset.getTime() - System.currentTimeMillis());
+            GlobalContext.getGlobalContext().scheduleTimerAtFixedRate(HOURLY_TIMER_NAME,
+                    TimeManager.class.getName(), _processHour, delay, HOUR);
+            logger.info("TimeManager scheduled the next reset to be at {}", nextReset);
         }
     }
 
@@ -124,9 +111,8 @@ public class TimeManager {
             long now = System.currentTimeMillis();
             long nextExpected = _nextExpectedReset;
             if (nextExpected > 0 && now > nextExpected + WATCHDOG_GRACE) {
-                logger.warn("TimeManager watchdog detected stale hourly reset; lastCompleted={}, expected={}, now={}. Reloading timer and rescheduling.",
+                logger.warn("TimeManager watchdog detected stale hourly reset; lastCompleted={}, expected={}, now={}. Rescheduling the hourly task.",
                         new Date(_lastCompletedReset), new Date(nextExpected), new Date(now));
-                GlobalContext.getGlobalContext().reloadTimer();
                 Calendar next = Calendar.getInstance();
                 next.setTimeInMillis(now);
                 next.add(Calendar.HOUR, 1);

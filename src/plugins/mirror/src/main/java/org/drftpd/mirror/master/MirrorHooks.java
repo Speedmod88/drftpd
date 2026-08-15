@@ -151,25 +151,21 @@ public class MirrorHooks {
         }
 
         PRETask preTask;
+        DirectoryHandle preDir;
         try {
-		preTask = new PRETask(response.getObject(Pre.PREDIR));
+            preDir = response.getObject(Pre.PREDIR);
+            preTask = new PRETask(preDir);
         } catch (KeyNotFoundException e) {
 		logger.warn("Unable to activate UnMirror timer as PREDIR variable has not been set (bug?/error?)");
 		return;
         }
 
         try {
-            GlobalContext.getGlobalContext().getTimer().schedule(preTask, MirrorSettings.getSettings().getUnmirrorTime());
-        } catch (IllegalStateException e) {
-            logger.error("Unable to start UnMirror timer task on GlobalContext Timer", e);
-
-            GlobalContext.getGlobalContext().reloadTimer();
-
-            try {
-                GlobalContext.getGlobalContext().getTimer().schedule(preTask, MirrorSettings.getSettings().getUnmirrorTime());
-            } catch (IllegalStateException e2) {
-                logger.error("Unable to start UnMirror timer task on GlobalContext Timer 2", e2);
-            }
+            String timerName = "mirror.unmirror:" + preDir.getPath().toLowerCase(Locale.ROOT);
+            GlobalContext.getGlobalContext().scheduleTimer(timerName, MirrorHooks.class.getName(),
+                    preTask, MirrorSettings.getSettings().getUnmirrorTime(), 0);
+        } catch (RuntimeException e) {
+            logger.error("Unable to start UnMirror timer task", e);
         }
     }
 

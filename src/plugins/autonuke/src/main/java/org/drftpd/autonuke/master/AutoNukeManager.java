@@ -39,6 +39,8 @@ import java.util.Set;
  */
 public class AutoNukeManager implements PluginInterface {
     private static final Logger logger = LogManager.getLogger(AutoNukeManager.class);
+    private static final String SCAN_TIMER = "autonuke.scan";
+    private static final String NUKE_TIMER = "autonuke.nuke";
 
     private ScanTask _scanTask;
     private NukeTask _nukeTask;
@@ -78,10 +80,10 @@ public class AutoNukeManager implements PluginInterface {
     }
 
     private void cancelTimers() {
-        // Cancel timers!
         if (_scanTask != null) _scanTask.cancel();
         if (_nukeTask != null) _nukeTask.cancel();
-        GlobalContext.getGlobalContext().getTimer().purge();
+        GlobalContext.getGlobalContext().cancelTimer(SCAN_TIMER);
+        GlobalContext.getGlobalContext().cancelTimer(NUKE_TIMER);
     }
 
     private void loadConf() {
@@ -112,18 +114,12 @@ public class AutoNukeManager implements PluginInterface {
         _scanTask = new ScanTask();
         _nukeTask = new NukeTask();
         try {
-            GlobalContext.getGlobalContext().getTimer().schedule(_scanTask, 60000L, 60000L);
-            GlobalContext.getGlobalContext().getTimer().schedule(_nukeTask, 90000L, 60000L);
-        } catch (IllegalStateException e) {
+            GlobalContext.getGlobalContext().scheduleTimer(SCAN_TIMER, AutoNukeManager.class.getName(),
+                    _scanTask, 60000L, 60000L);
+            GlobalContext.getGlobalContext().scheduleTimer(NUKE_TIMER, AutoNukeManager.class.getName(),
+                    _nukeTask, 90000L, 60000L);
+        } catch (RuntimeException e) {
             logger.error("Unable to start autonuke timer task, reload and try again", e);
-
-            GlobalContext.getGlobalContext().reloadTimer();
-            try {
-                GlobalContext.getGlobalContext().getTimer().schedule(_scanTask, 60000L, 60000L);
-                GlobalContext.getGlobalContext().getTimer().schedule(_nukeTask, 90000L, 60000L);
-            } catch (IllegalStateException e2) {
-                logger.error("Unable to start autonuke timer task, reload and try again 2", e2);
-            }
         }
     }
 

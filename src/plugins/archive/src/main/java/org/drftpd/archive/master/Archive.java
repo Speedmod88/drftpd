@@ -46,6 +46,7 @@ import java.util.concurrent.ThreadFactory;
 public class Archive implements PluginInterface {
 
     private static final Logger logger = LogManager.getLogger(Archive.class);
+    private static final String TIMER_NAME = "archive.scan";
 
     // Representation of the archive.conf
     private Properties _props;
@@ -142,13 +143,16 @@ public class Archive implements PluginInterface {
             logger.warn("Setting maxConcurrentActions to [{}] to allow for your configured archive statements", minActions);
             maxConcurrentActions = minActions;
         }
+        if (_archiveHandlerExecutor != null) {
+            _archiveHandlerExecutor.shutdown();
+        }
         _archiveHandlerExecutor = Executors.newFixedThreadPool(maxConcurrentActions, new ArchiveHandlerThreadFactory());
 
         // First cancel and remove our active TimerTask
         if (_runHandler != null) {
             _runHandler.cancel();
-            getGlobalContext().getTimer().purge();
         }
+        getGlobalContext().cancelTimer(TIMER_NAME);
 
         // Initialize a new TimerTask
         logger.debug("Initializing a new timer task for {} milliseconds", _cycleTime);
@@ -173,15 +177,10 @@ public class Archive implements PluginInterface {
             }
         };
         try {
-            getGlobalContext().getTimer().schedule(_runHandler, _cycleTime, _cycleTime);
-        } catch (IllegalStateException e) {
-            logger.warn("Unable to schedule our TimerTask as the GlobalContext Timer is in an illegal state", e);
-            try {
-		getGlobalContext().reloadTimer();
-		getGlobalContext().getTimer().schedule(_runHandler, _cycleTime, _cycleTime);
-            } catch (IllegalStateException e2) {
-		logger.warn("Unable to schedule our TimerTask as the GlobalContext Timer is in an illegal state 2", e2);
-            }
+            getGlobalContext().scheduleTimer(TIMER_NAME, Archive.class.getName(),
+                    _runHandler, _cycleTime, _cycleTime);
+        } catch (RuntimeException e) {
+            logger.warn("Unable to schedule the Archive timer task", e);
         }
     }
 
@@ -260,7 +259,10 @@ public class Archive implements PluginInterface {
     public void stopPlugin(String reason) {
         if (_runHandler != null) {
             _runHandler.cancel();
-            getGlobalContext().getTimer().purge();
+        }
+        getGlobalContext().cancelTimer(TIMER_NAME);
+        if (_archiveHandlerExecutor != null) {
+            _archiveHandlerExecutor.shutdown();
         }
         AnnotationProcessor.unprocess(this);
         logger.info("Archive plugin unloaded successfully");
