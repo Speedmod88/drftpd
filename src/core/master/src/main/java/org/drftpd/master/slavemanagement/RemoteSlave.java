@@ -175,7 +175,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     protected void addQueueRename(String fileName, String destName) {
-        synchronized (_renameQueue) {
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        synchronized (renameQueue) {
             if (isOnline() && !isRemerging()) {
                 throw new IllegalStateException(
                         "Slave is online and not remerging, you cannot queue an operation");
@@ -189,7 +190,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     private boolean queueRenameIfRemerging(String fileName, String destName) {
-        synchronized (_renameQueue) {
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        synchronized (renameQueue) {
             if (!isRemerging()) {
                 return false;
             }
@@ -202,7 +204,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     private void addQueuedOperation(String fileName, String destName) {
-        _renameQueue.add(new QueuedOperation(fileName, destName));
+        getOrCreateRenameQueue().add(new QueuedOperation(fileName, destName));
         commit();
     }
 
@@ -492,14 +494,23 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public void processQueue() throws IOException, SlaveUnavailableException {
-        synchronized (_renameQueue) {
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        synchronized (renameQueue) {
+            int queuedOperations = renameQueue.size();
+            if (queuedOperations > 0) {
+                logger.info("Processing {} queued delete/rename operation(s) for slave {}", queuedOperations, getName());
+            }
             processQueueLocked();
+            if (queuedOperations > 0) {
+                logger.info("Finished processing queued delete/rename operation(s) for slave {}", getName());
+            }
         }
     }
 
     private void processQueueLocked() throws IOException, SlaveUnavailableException {
         QueuedOperation item = null;
-        while ((item = _renameQueue.poll()) != null) {
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        while ((item = renameQueue.poll()) != null) {
             String sourceFile = item.getSource();
             String destFile = item.getDestination();
 
@@ -530,8 +541,9 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public boolean hasQueuedOperationForSourcePath(String path) {
-        synchronized (_renameQueue) {
-            for (QueuedOperation item : _renameQueue) {
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        synchronized (renameQueue) {
+            for (QueuedOperation item : renameQueue) {
                 if (pathMatchesOrIsChild(path, item.getSource())) {
                     return true;
                 }
@@ -592,8 +604,9 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     private boolean processQueueAfterRemerge() {
-        synchronized (_renameQueue) {
-            int queuedOperations = _renameQueue.size();
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        synchronized (renameQueue) {
+            int queuedOperations = renameQueue.size();
             if (queuedOperations == 0) {
                 _isRemerging = false;
                 return true;
@@ -1254,11 +1267,21 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public ConcurrentLinkedDeque<QueuedOperation> getRenameQueue() {
-        return _renameQueue;
+        return getOrCreateRenameQueue();
     }
 
     public void setRenameQueue(ConcurrentLinkedDeque<QueuedOperation> renameQueue) {
         _renameQueue = Objects.requireNonNullElseGet(renameQueue, ConcurrentLinkedDeque::new);
+        if (!_renameQueue.isEmpty()) {
+            logger.info("Loaded {} persisted queued delete/rename operation(s) for slave {}", _renameQueue.size(), getName());
+        }
+    }
+
+    private ConcurrentLinkedDeque<QueuedOperation> getOrCreateRenameQueue() {
+        if (_renameQueue == null) {
+            _renameQueue = new ConcurrentLinkedDeque<>();
+        }
+        return _renameQueue;
     }
 
     public LinkedBlockingQueue<RemergeMessage> getRemergeQueue() {
