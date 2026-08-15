@@ -48,6 +48,8 @@ import org.drftpd.master.vfs.CommitManager;
 import org.drftpd.master.vfs.Commitable;
 import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.master.vfs.FileHandle;
+import org.drftpd.master.vfs.PartialRemergeDirectoryException;
+import org.drftpd.master.vfs.VirtualFileSystem;
 import org.drftpd.slave.network.*;
 import org.drftpd.slave.protocol.QueuedOperation;
 
@@ -99,6 +101,10 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     private final transient LinkedBlockingQueue<FileHandle> _crcQueue;
     private transient RemergeThread _remergeThread;
     private transient CrcThread _crcThread;
+    private final transient AtomicBoolean _remergeCommandRunning;
+    private final transient AtomicBoolean _instantFullRemergeFallbackRequested;
+    private final transient AtomicBoolean _instantFullRemergeFallbackStarted;
+    private final transient AtomicBoolean _discardRemergeMessages;
 
     public RemoteSlave(String name) {
         _name = name;
@@ -110,6 +116,10 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         _remergeQueue = new LinkedBlockingQueue<>();
         _crcQueue = new LinkedBlockingQueue<>();
         _commandMonitor = new Object();
+        _remergeCommandRunning = new AtomicBoolean();
+        _instantFullRemergeFallbackRequested = new AtomicBoolean();
+        _instantFullRemergeFallbackStarted = new AtomicBoolean();
+        _discardRemergeMessages = new AtomicBoolean();
     }
 
     public static Hashtable<String, RemoteSlave> rslavesToHashtable(Collection<RemoteSlave> rslaves) {
@@ -349,6 +359,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             SlaveUnavailableException, ProtocolException {
         commit();
         processQueue();
+        resetInstantFullRemergeFallback();
 
         // checking ssl availability
         String checkSSLIndex = SlaveManager.getBasicIssuer().issueCheckSSL(this);
@@ -402,9 +413,17 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
 
         try {
+            _remergeCommandRunning.set(true);
             fetchResponse(remergeIndex, 0);
         } catch (RemoteIOException e) {
             throw new IOException(e.getMessage());
+        } finally {
+            _remergeCommandRunning.set(false);
+        }
+
+        if (_instantFullRemergeFallbackRequested.get()) {
+            logger.info("Initial partial remerge finished after full remerge fallback was requested for {}", getName());
+            return;
         }
 
         setCRCThreadFinished();
@@ -890,7 +909,13 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                 }
 
                 switch (ar.getIndex()) {
-                    case "Remerge" -> putRemergeQueue(new RemergeMessage((AsyncResponseRemerge) ar, this));
+                    case "Remerge" -> {
+                        if (_discardRemergeMessages.get()) {
+                            logger.debug("Discarding stale partial remerge message from {}", getName());
+                        } else {
+                            putRemergeQueue(new RemergeMessage((AsyncResponseRemerge) ar, this));
+                        }
+                    }
                     case "DiskStatus" -> _status = ((AsyncResponseDiskStatus) ar).getDiskStatus();
                     case "TransferStatus" -> {
                         TransferStatus ats = ((AsyncResponseTransferStatus) ar).getTransferStatus();
@@ -973,6 +998,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         _lastRemergeCommandReceived = 0L;
         _remergeQueue.clear();
         _crcQueue.clear();
+        _remergeCommandRunning.set(false);
+        resetInstantFullRemergeFallback();
         if (_sin != null) {
             try {
                 _sin.close();
@@ -1176,6 +1203,109 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
     }
 
+    private void resetInstantFullRemergeFallback() {
+        _instantFullRemergeFallbackRequested.set(false);
+        _instantFullRemergeFallbackStarted.set(false);
+        _discardRemergeMessages.set(false);
+    }
+
+    private boolean requestInstantFullRemergeFallback(PartialRemergeDirectoryException e) {
+        if (!GlobalContext.getConfig().getMainProperties().getProperty("partial.remerge.mode", "off")
+                .equalsIgnoreCase("instant")) {
+            return false;
+        }
+        if (_instantFullRemergeFallbackStarted.get()) {
+            return false;
+        }
+        if (!_instantFullRemergeFallbackRequested.compareAndSet(false, true)) {
+            return true;
+        }
+
+        _discardRemergeMessages.set(true);
+        _remergeQueue.clear();
+        _crcQueue.clear();
+        resumeRemergeIfPaused();
+
+        String path = e.getDirectory() + VirtualFileSystem.separator + e.getSource();
+        String message = "Partial remerge failed at " + path + " (case " + e.getMergeCase()
+                + "). Falling back to full instant remerge";
+        logger.warn("{} for slave {}", message, getName(), e);
+        GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+
+        new Thread(() -> runInstantFullRemergeFallback(e), "RemergeFallback - " + getName()).start();
+        return true;
+    }
+
+    private void runInstantFullRemergeFallback(PartialRemergeDirectoryException originalFailure) {
+        if (!_instantFullRemergeFallbackStarted.compareAndSet(false, true)) {
+            return;
+        }
+
+        try {
+            while (isOnline() && _remergeCommandRunning.get()) {
+                Thread.sleep(250);
+            }
+            if (!isOnline()) {
+                return;
+            }
+
+            _remergeQueue.clear();
+            _crcQueue.clear();
+            _lastRemergeCommandReceived = 0L;
+            _discardRemergeMessages.set(false);
+
+            String remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", false, 0L, 0L, true);
+            try {
+                _remergeCommandRunning.set(true);
+                fetchResponse(remergeIndex, 0);
+            } catch (RemoteIOException e) {
+                throw new IOException(e.getMessage(), e);
+            } finally {
+                _remergeCommandRunning.set(false);
+            }
+
+            setCRCThreadFinished();
+            putRemergeQueue(new RemergeMessage(this));
+
+            if (_remergePaused.get()) {
+                String message = "Remerge was paused on slave after fallback completion, issuing resume so not to break manual remerges";
+                GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+                logger.debug(message);
+                resumeRemergeIfPaused();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.error("Interrupted during full instant remerge fallback for {}", getName(), e);
+            setOffline("Interrupted during full instant remerge fallback");
+        } catch (IOException e) {
+            logger.error("IOException during full instant remerge fallback for {} after {}", getName(),
+                    originalFailure.getMessage(), e);
+            setOffline("IOException during full instant remerge fallback");
+        } catch (SlaveUnavailableException e) {
+            logger.error("Slave unavailable during full instant remerge fallback for {}", getName(), e);
+            if (isOnline()) {
+                setOffline(e);
+            }
+        }
+    }
+
+    private void resumeRemergeIfPaused() {
+        if (_remergePaused.getAndSet(false)) {
+            try {
+                SlaveManager.getBasicIssuer().issueRemergeResumeToSlave(this);
+            } catch (SlaveUnavailableException e) {
+                // Socket may already be closed to the slave.
+            }
+            if (_socket != null) {
+                try {
+                    _socket.setSoTimeout(_prevSocketTimeout);
+                } catch (SocketException e) {
+                    logger.debug("Unable to restore socket timeout while resuming remerge for {}", getName(), e);
+                }
+            }
+        }
+    }
+
     public void shutdown() {
         try {
             sendCommand(new AsyncCommand("shutdown", "shutdown"));
@@ -1277,6 +1407,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
                 if (msg.isCompleted()) {
                     logger.info("REMERGE: queue finished");
+                    resetInstantFullRemergeFallback();
                     // Wait for crc queue to finish
                     while (!_crcQueue.isEmpty()) {
                         try {
@@ -1296,6 +1427,14 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
                 try {
                     dir.remerge(msg.getFiles(), msg.getRslave(), msg.getLastModified());
+                } catch (PartialRemergeDirectoryException e) {
+                    logger.warn("Partial remerge directory mismatch while remerging {}", msg.getRslave().getName(), e);
+                    if (msg.getRslave().requestInstantFullRemergeFallback(e)) {
+                        break;
+                    }
+                    logger.error("IOException during remerge", e);
+                    msg.getRslave().setOffline("IOException during remerge");
+                    break;
                 } catch (IOException e) {
                     logger.error("IOException during remerge", e);
                     msg.getRslave().setOffline("IOException during remerge");
