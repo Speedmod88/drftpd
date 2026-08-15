@@ -494,6 +494,9 @@ public class SlaveManager extends SslConfigurationLoader implements Runnable, Ti
         Collection<RemoteSlave> slaves = new ArrayList<>(_rSlaves.values());
         for (RemoteSlave rSlave : slaves) {
             String index;
+            if (rSlave.queueDeleteIfRemerging(directory.getPath())) {
+                continue;
+            }
             try {
                 AbstractBasicIssuer basicIssuer = (AbstractBasicIssuer) getIssuerForClass(AbstractBasicIssuer.class);
                 index = basicIssuer.issueDeleteToSlave(rSlave, directory.getPath());
