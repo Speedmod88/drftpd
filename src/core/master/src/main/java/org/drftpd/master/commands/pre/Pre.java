@@ -152,13 +152,6 @@ public class Pre extends CommandInterface {
         HashMap<User, Long> awards = new HashMap<>();
         preAwardCredits(preDir, awards);
 
-        for (Map.Entry<User, Long> entry : awards.entrySet()) {
-            User owner = entry.getKey();
-            Long award = entry.getValue();
-            owner.updateCredits(award);
-            response.addComment("Awarded " + Bytes.formatBytes(award) + " to " + owner.getName());
-        }
-
         recursiveRemoveOwnership(preDir, System.currentTimeMillis());
 
         int files = getFiles(preDir);
@@ -180,6 +173,13 @@ public class Pre extends CommandInterface {
         }
 
         preDir = toInode;
+
+        for (Map.Entry<User, Long> entry : awards.entrySet()) {
+            User owner = entry.getKey();
+            Long award = entry.getValue();
+            owner.updateCredits(award);
+            response.addComment("Awarded " + Bytes.formatBytes(award) + " to " + owner.getName());
+        }
 
         GlobalContext.getEventService().publishAsync(new PreEvent(preDir, section, Integer.toString(files), Bytes.formatBytes(bytes)));
 

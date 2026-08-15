@@ -173,8 +173,8 @@ public class DatedSection extends PlainSection implements TimeEventInterface {
                 return;
             }
         } else {
-            logger.warn("DatedDirectory {} already exists in section {}", dateDirName, getName());
-            return;
+            logger.info("DatedDirectory {} already exists in section {}; ensuring the current symlink is correct",
+                    dateDirName, getName());
         }
         LinkHandle link = createLink(newDir);
         if (link != null) {
@@ -238,7 +238,7 @@ public class DatedSection extends PlainSection implements TimeEventInterface {
         } else if (rc._type == HALF_DAY) {
             Calendar cal = Calendar.getInstance();
             cal.setTime(d);
-            if (cal.get(Calendar.HOUR_OF_DAY) == 12) {
+            if (cal.get(Calendar.HOUR_OF_DAY) == 0 || cal.get(Calendar.HOUR_OF_DAY) == 12) {
                 processNewDate(d);
             }
         }
@@ -250,7 +250,6 @@ public class DatedSection extends PlainSection implements TimeEventInterface {
         }
         // must do this to conform to TimeEventInterface
         resetDay(d);
-        resetHour(d);
     }
 
     public void resetWeek(Date d) {
@@ -265,8 +264,6 @@ public class DatedSection extends PlainSection implements TimeEventInterface {
         }
         // must do this to conform to TimeEventInterface
         resetMonth(d);
-        resetDay(d);
-        resetHour(d);
     }
 
     public SimpleDateFormat getDateFormat() {

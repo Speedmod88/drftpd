@@ -186,6 +186,8 @@ public class AutoFreeSpace implements PluginInterface {
                     slavesCount++;
                 }
                 logger.debug("AUTODELETE: Checked [{}] Slaves for free space", slavesCount);
+            } catch (Throwable t) {
+                logger.error("AUTODELETE: MrCleanIt cycle failed; the next scheduled cycle will still run", t);
             } finally {
                 logger.info("MrCleanIt task finished");
                 isActive = false;
@@ -349,7 +351,8 @@ public class AutoFreeSpace implements PluginInterface {
                         logger.info("AUTODELETE: Removing {}", oldestRelease.getName());
                         oldestRelease.deleteUnchecked(); // Throws the FileNotFoundException
                         freespace = remoteSlave.getSlaveStatus().getDiskSpaceAvailable();
-                        logger.info("AUTODELETE: Removed {}, cleared {} on {}", oldestRelease.getName(), Bytes.formatBytes(remoteSlave.getSlaveStatus().getDiskSpaceAvailable() - freespace), remoteSlave.getName());
+                        logger.info("AUTODELETE: Removed {}, cleared {} on {}", oldestRelease.getName(),
+                                Bytes.formatBytes(freespace - freespaceSaved), remoteSlave.getName());
                     }
                     deletedCount++;
                 } catch (FileNotFoundException e) {
