@@ -527,34 +527,29 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     private void processQueueLocked() throws IOException, SlaveUnavailableException {
-        QueuedOperation item = null;
+        QueuedOperation item;
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
-        while ((item = renameQueue.poll()) != null) {
-            String sourceFile = item.getSource();
-            String destFile = item.getDestination();
+        while ((item = renameQueue.peek()) != null) {
+            executeQueuedOperation(item);
+            renameQueue.removeFirstOccurrence(item);
+            commit();
+        }
+    }
 
-            if (destFile == null) { // delete
-                try {
-                    fetchResponse(SlaveManager.getBasicIssuer().issueDeleteToSlave(this, sourceFile), 300000);
-                } catch (RemoteIOException e) {
-                    if (!(e.getCause() instanceof FileNotFoundException)) {
-                        throw e.getCause();
-                    }
-                } finally {
-                    commit();
-                }
-            } else { // rename
-                String fileName = destFile.substring(destFile.lastIndexOf("/") + 1);
-                String destDir = destFile.substring(0, destFile.lastIndexOf("/"));
-                try {
-                    fetchResponse(SlaveManager.getBasicIssuer().issueRenameToSlave(this, sourceFile, destDir, fileName));
-                } catch (RemoteIOException e) {
-                    if (!(e.getCause() instanceof FileNotFoundException)) {
-                        throw e.getCause();
-                    }
-                } finally {
-                    commit();
-                }
+    protected void executeQueuedOperation(QueuedOperation item) throws IOException, SlaveUnavailableException {
+        String sourceFile = item.getSource();
+        String destFile = item.getDestination();
+        try {
+            if (destFile == null) {
+                fetchResponse(SlaveManager.getBasicIssuer().issueDeleteToSlave(this, sourceFile), 300000);
+                return;
+            }
+            String fileName = destFile.substring(destFile.lastIndexOf("/") + 1);
+            String destDir = destFile.substring(0, destFile.lastIndexOf("/"));
+            fetchResponse(SlaveManager.getBasicIssuer().issueRenameToSlave(this, sourceFile, destDir, fileName));
+        } catch (RemoteIOException e) {
+            if (!(e.getCause() instanceof FileNotFoundException)) {
+                throw e.getCause();
             }
         }
     }
@@ -622,7 +617,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
     }
 
-    private boolean processQueueAfterRemerge() {
+    public boolean processQueueAfterRemerge() {
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
         synchronized (renameQueue) {
             int queuedOperations = renameQueue.size();

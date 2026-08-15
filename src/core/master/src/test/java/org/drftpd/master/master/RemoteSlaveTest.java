@@ -17,6 +17,8 @@
  */
 package org.drftpd.master.master;
 
+import com.cedarsoftware.util.io.JsonReader;
+import com.cedarsoftware.util.io.JsonWriter;
 import org.drftpd.common.network.AsyncResponse;
 import org.drftpd.master.GlobalContext;
 import org.drftpd.master.event.Event;
@@ -26,10 +28,15 @@ import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.slavemanagement.SlaveManager;
 import org.drftpd.master.tests.DummySlaveManager;
 import org.drftpd.master.vfs.DirectoryHandle;
+import org.drftpd.slave.protocol.QueuedOperation;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.net.SocketException;
 import java.util.HashSet;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -54,6 +61,42 @@ public class RemoteSlaveTest {
         assertEquals(rslave1, rslave1);
         assertEquals(rslave1, rslave2);
         assertNotEquals(rslave1, rslave3);
+    }
+
+    @Test
+    public void testQueuedOperationsSurviveSerialization() {
+        RemoteSlave original = new RemoteSlave("persisted");
+        ConcurrentLinkedDeque<QueuedOperation> queue = new ConcurrentLinkedDeque<>();
+        queue.add(new QueuedOperation("/source/delete", null));
+        queue.add(new QueuedOperation("/source/rename", "/destination/rename"));
+        original.setRenameQueue(queue);
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (JsonWriter writer = new JsonWriter(output)) {
+            writer.write(original);
+        }
+
+        RemoteSlave restored;
+        try (JsonReader reader = new JsonReader(new ByteArrayInputStream(output.toByteArray()))) {
+            restored = (RemoteSlave) reader.readObject();
+        }
+
+        assertEquals(2, restored.getRenameQueue().size());
+        assertEquals("/source/delete", restored.getRenameQueue().peekFirst().getSource());
+        assertEquals("/destination/rename", restored.getRenameQueue().peekLast().getDestination());
+    }
+
+    @Test
+    public void testFailedQueuedOperationRemainsForRetry() throws Exception {
+        RetryRemoteSlave slave = new RetryRemoteSlave("retry");
+        slave.getRenameQueue().add(new QueuedOperation("/source/delete", null));
+
+        assertThrows(IOException.class, slave::processQueue);
+        assertEquals(1, slave.getRenameQueue().size());
+
+        slave.setFail(false);
+        slave.processQueue();
+        assertTrue(slave.getRenameQueue().isEmpty());
     }
 
     public void testAddNetworkError()
@@ -137,6 +180,30 @@ public class RemoteSlaveTest {
         public AsyncResponse fetchResponse(String index)
                 throws SlaveUnavailableException {
             return null;
+        }
+    }
+
+    private static class RetryRemoteSlave extends RemoteSlave {
+        private boolean _fail = true;
+
+        private RetryRemoteSlave(String name) {
+            super(name);
+        }
+
+        private void setFail(boolean fail) {
+            _fail = fail;
+        }
+
+        @Override
+        protected void executeQueuedOperation(QueuedOperation item) throws IOException {
+            if (_fail) {
+                throw new IOException("transient failure");
+            }
+        }
+
+        @Override
+        public void commit() {
+            // Keep this unit test independent from the on-disk slave manager.
         }
     }
 }

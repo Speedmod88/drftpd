@@ -323,7 +323,7 @@ public class SlaveManagement extends CommandInterface {
         rslave.putRemergeQueue(new RemergeMessage(rslave));
 
         // Wait for remerge and crc queues to drain
-        while (!rslave.getRemergeQueue().isEmpty() && !rslave.getCRCQueue().isEmpty()) {
+        while (!rslave.getRemergeQueue().isEmpty() || !rslave.getCRCQueue().isEmpty()) {
             try {
                 Thread.sleep(500);
             } catch (InterruptedException ignored) {}
@@ -341,9 +341,12 @@ public class SlaveManagement extends CommandInterface {
             }
         }
 
+        if (!rslave.processQueueAfterRemerge()) {
+            return new CommandResponse(200, "Slave went offline while processing deferred operations");
+        }
+
         String message = ("Remerge queueprocess finished");
         GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, rslave));
-        rslave.setRemerging(false);
 
         return StandardCommandManager.genericResponse("RESPONSE_200_COMMAND_OK");
     }

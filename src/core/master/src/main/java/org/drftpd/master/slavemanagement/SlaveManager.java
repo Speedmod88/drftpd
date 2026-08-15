@@ -519,7 +519,6 @@ public class SlaveManager extends SslConfigurationLoader implements Runnable, Ti
                 rSlave.setOffline("IOException deleting file, check logs for specific error");
                 rSlave.addQueueDelete(directory.getPath());
                 logger.error("IOException deleting file, file will be deleted when slave comes online", e);
-                rSlave.addQueueDelete(directory.getPath());
             }
         }
     }
