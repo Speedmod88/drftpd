@@ -31,6 +31,7 @@ import java.util.Set;
 public class AdvancedSearchParams {
 
     private String _name;
+    private Set<String> _names = Collections.emptySet();
     private String _exact;
     private String _regex;
     private String _endsWith;
@@ -63,6 +64,14 @@ public class AdvancedSearchParams {
 
     public void setName(String name) {
         _name = name;
+    }
+
+    public Set<String> getNames() {
+        return _names;
+    }
+
+    public void setNames(Set<String> names) {
+        _names = names == null ? Collections.emptySet() : Set.copyOf(names);
     }
 
     public String getExact() {

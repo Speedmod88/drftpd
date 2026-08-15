@@ -44,6 +44,7 @@ import java.util.regex.PatternSyntaxException;
 
 public final class Dupe2Utils {
     private static final Logger logger = LogManager.getLogger(Dupe2Utils.class);
+    private static final int INDEX_KEY_BATCH_SIZE = 64;
 
     private Dupe2Utils() {
     }
@@ -234,47 +235,46 @@ public final class Dupe2Utils {
     }
 
     private static Set<String> getIndexedCompletedReplacementKeys(Map<String, List<String>> selectedPathsByKey,
-                                                                  Pattern requiredTextPattern,
-                                                                  Collection<Pattern> replacementTextPatterns,
-                                                                  int resultLimit)
+                                                                   Pattern requiredTextPattern,
+                                                                   Collection<Pattern> replacementTextPatterns,
+                                                                   int resultLimit)
             throws IndexException {
-        AdvancedSearchParams params = new AdvancedSearchParams();
-        params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
-        params.setLimit(0);
-        Map<String, String> indexedDirectories = GlobalContext.getGlobalContext().getIndexEngine().advancedFind(
-                GlobalContext.getGlobalContext().getRoot(), params, "FIND-DUPE2-TAG");
         Set<String> replacementKeys = new HashSet<>();
         Map<String, Set<String>> releaseParentPathCache = new HashMap<>();
         Set<String> seenPaths = new HashSet<>();
         int matchedPathCount = 0;
 
-        for (Map.Entry<String, String> item : indexedDirectories.entrySet()) {
-            if (!"d".equals(item.getValue())) {
-                continue;
-            }
-            String path = stripIndexedDirectoryPath(item.getKey());
-            if (!seenPaths.add(path)) {
-                continue;
-            }
-            DirectoryHandle directory = new DirectoryHandle(path);
-            String releaseName = directory.getName();
-            if (isExcludedReleaseName(releaseName) || requiredTextPattern.matcher(releaseName).find()) {
-                continue;
-            }
-            String key = makeDupeKey(releaseName);
-            if (key == null || !selectedPathsByKey.containsKey(key) || replacementKeys.contains(key)) {
-                continue;
-            }
-            if (!replacementTextPatterns.isEmpty() && !matchesAnyRequiredText(releaseName, replacementTextPatterns)) {
-                continue;
-            }
-            if (getReleaseSection(directory, releaseParentPathCache) == null || !isComplete(directory)) {
-                continue;
-            }
-            replacementKeys.add(key);
-            matchedPathCount += selectedPathsByKey.get(key).size();
-            if (resultLimit > 0 && matchedPathCount >= resultLimit) {
-                break;
+        for (Set<String> keyBatch : makeIndexKeyBatches(selectedPathsByKey.keySet())) {
+            Map<String, String> indexedDirectories = findIndexedDirectoriesForKeyBatch(
+                    keyBatch, "FIND-DUPE2-TAG");
+            for (Map.Entry<String, String> item : indexedDirectories.entrySet()) {
+                if (!"d".equals(item.getValue())) {
+                    continue;
+                }
+                String path = stripIndexedDirectoryPath(item.getKey());
+                if (!seenPaths.add(path)) {
+                    continue;
+                }
+                DirectoryHandle directory = new DirectoryHandle(path);
+                String releaseName = directory.getName();
+                if (isExcludedReleaseName(releaseName) || requiredTextPattern.matcher(releaseName).find()) {
+                    continue;
+                }
+                String key = makeDupeKey(releaseName);
+                if (key == null || !selectedPathsByKey.containsKey(key) || replacementKeys.contains(key)) {
+                    continue;
+                }
+                if (!replacementTextPatterns.isEmpty() && !matchesAnyRequiredText(releaseName, replacementTextPatterns)) {
+                    continue;
+                }
+                if (getReleaseSection(directory, releaseParentPathCache) == null || !isComplete(directory)) {
+                    continue;
+                }
+                replacementKeys.add(key);
+                matchedPathCount += selectedPathsByKey.get(key).size();
+                if (resultLimit > 0 && matchedPathCount >= resultLimit) {
+                    return replacementKeys;
+                }
             }
         }
 
@@ -283,43 +283,66 @@ public final class Dupe2Utils {
 
     private static Map<String, List<DupeCandidate>> getIndexedCandidatesForKeys(Set<String> keys)
             throws IndexException {
-        AdvancedSearchParams params = new AdvancedSearchParams();
-        params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
-        params.setLimit(0);
-        IndexEngineInterface indexEngine = GlobalContext.getGlobalContext().getIndexEngine();
-        Map<String, String> indexedDirectories = indexEngine.advancedFind(
-                GlobalContext.getGlobalContext().getRoot(), params, "FIND-DUPE2");
         Map<String, List<DupeCandidate>> candidatesByKey = new HashMap<>();
         Map<String, Set<String>> releaseParentPathCache = new HashMap<>();
         Set<String> seenPaths = new HashSet<>();
 
-        for (Map.Entry<String, String> item : indexedDirectories.entrySet()) {
-            if (!"d".equals(item.getValue())) {
-                continue;
-            }
-            String path = stripIndexedDirectoryPath(item.getKey());
-            if (!seenPaths.add(path)) {
-                continue;
-            }
-            DirectoryHandle directory = new DirectoryHandle(path);
-            if (isExcludedReleaseName(directory.getName())) {
-                continue;
-            }
-            String key = makeDupeKey(directory.getName());
-            if (key == null || !keys.contains(key)) {
-                continue;
-            }
-            SectionInterface section = getReleaseSection(directory, releaseParentPathCache);
-            if (section == null) {
-                continue;
-            }
-            DupeCandidate candidate = makeDupeCandidate(directory, section.getName(), true);
-            if (candidate != null) {
-                candidatesByKey.computeIfAbsent(candidate.getKey(), k -> new ArrayList<>()).add(candidate);
+        for (Set<String> keyBatch : makeIndexKeyBatches(keys)) {
+            Map<String, String> indexedDirectories = findIndexedDirectoriesForKeyBatch(keyBatch, "FIND-DUPE2");
+            for (Map.Entry<String, String> item : indexedDirectories.entrySet()) {
+                if (!"d".equals(item.getValue())) {
+                    continue;
+                }
+                String path = stripIndexedDirectoryPath(item.getKey());
+                if (!seenPaths.add(path)) {
+                    continue;
+                }
+                DirectoryHandle directory = new DirectoryHandle(path);
+                if (isExcludedReleaseName(directory.getName())) {
+                    continue;
+                }
+                String key = makeDupeKey(directory.getName());
+                if (key == null || !keys.contains(key)) {
+                    continue;
+                }
+                SectionInterface section = getReleaseSection(directory, releaseParentPathCache);
+                if (section == null) {
+                    continue;
+                }
+                DupeCandidate candidate = makeDupeCandidate(directory, section.getName(), true);
+                if (candidate != null) {
+                    candidatesByKey.computeIfAbsent(candidate.getKey(), k -> new ArrayList<>()).add(candidate);
+                }
             }
         }
 
         return candidatesByKey;
+    }
+
+    private static List<Set<String>> makeIndexKeyBatches(Collection<String> keys) {
+        List<String> sortedKeys = new ArrayList<>(keys);
+        Collections.sort(sortedKeys);
+        List<Set<String>> batches = new ArrayList<>();
+
+        for (int start = 0; start < sortedKeys.size(); start += INDEX_KEY_BATCH_SIZE) {
+            int end = Math.min(start + INDEX_KEY_BATCH_SIZE, sortedKeys.size());
+            batches.add(new HashSet<>(sortedKeys.subList(start, end)));
+        }
+        return batches;
+    }
+
+    private static Map<String, String> findIndexedDirectoriesForKeyBatch(Set<String> keys, String caller)
+            throws IndexException {
+        Set<String> analyzedNames = new HashSet<>();
+        for (String key : keys) {
+            analyzedNames.add(key.replace('.', ' '));
+        }
+        AdvancedSearchParams params = new AdvancedSearchParams();
+        params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
+        params.setNames(analyzedNames);
+        params.setLimit(0);
+        return GlobalContext.getGlobalContext().getIndexEngine().advancedFind(
+                GlobalContext.getGlobalContext().getRoot(), params, caller);
     }
 
     private static SectionInterface getReleaseSection(DirectoryHandle directory,

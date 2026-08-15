@@ -648,6 +648,14 @@ public class LuceneEngine implements IndexEngineInterface {
                 Query nameQuery = LuceneUtils.analyze("name", TERM_NAME, params.getName());
                 query.add(nameQuery, Occur.MUST);
             }
+            if (!params.getNames().isEmpty()) {
+                BooleanQuery namesQuery = new BooleanQuery();
+                for (String name : params.getNames()) {
+                    namesQuery.add(LuceneUtils.analyze("name", TERM_NAME, name), Occur.SHOULD);
+                }
+                namesQuery.setMinimumNumberShouldMatch(1);
+                query.add(namesQuery, Occur.MUST);
+            }
             if (params.getExact() != null) {
                 if (!LuceneUtils.validWildcards(params.getExact())) {
                     throw new IllegalArgumentException("Wildcards in the first three chars not allowed.");
