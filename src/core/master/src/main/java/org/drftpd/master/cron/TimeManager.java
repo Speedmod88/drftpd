@@ -25,6 +25,9 @@ import org.drftpd.master.config.ConfigInterface;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author zubov
@@ -36,14 +39,16 @@ public class TimeManager {
 
     private static final long MINUTE = 60 * 1000L;
     private static final long HOUR = MINUTE * 60;
+    private static final long WATCHDOG_PERIOD = MINUTE * 5;
+    private static final long WATCHDOG_GRACE = MINUTE * 10;
 
     private final ArrayList<TimeEventInterface> _timedEvents;
+    private final Object _timerLock = new Object();
+    private final ScheduledExecutorService _watchdog;
 
-    TimerTask _processHour = new TimerTask() {
-        public void run() {
-            doReset(Calendar.getInstance());
-        }
-    };
+    private TimerTask _processHour;
+    private volatile long _lastCompletedReset = System.currentTimeMillis();
+    private volatile long _nextExpectedReset = -1;
 
     public TimeManager() {
         this(Calendar.getInstance());
@@ -51,29 +56,98 @@ public class TimeManager {
 
     public TimeManager(Calendar cal) {
         _timedEvents = new ArrayList<>();
-        Timer timer = GlobalContext.getGlobalContext().getTimer();
+        _watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread thread = new Thread(r, "TimeManagerWatchdog");
+            thread.setDaemon(true);
+            return thread;
+        });
         // setup the next time we need to run an event
         // roll the calendar to the next Hour
         cal.add(Calendar.HOUR, 1);
         cal.set(Calendar.MINUTE, 0);
         cal.set(Calendar.SECOND, 0);
         cal.set(Calendar.MILLISECOND, 0);
-        try {
-		timer.scheduleAtFixedRate(_processHour, cal.getTime(), HOUR);
-		logger.info("TimeManager scheduled the next reset to be at {}", cal.getTime());
-        }
-        catch (IllegalStateException e) {
-		logger.error("TimeManager schedule error", e);
-		GlobalContext.getGlobalContext().reloadTimer();
-            try {
-		timer.scheduleAtFixedRate(_processHour, cal.getTime(), HOUR);
-		logger.info("TimeManager scheduled the next reset to be at {}", cal.getTime());
-            }
-            catch (IllegalStateException e2) {
-		logger.error("TimeManager schedule error 2", e2);
-            }
-        }
+        scheduleProcessHour(cal);
+        startWatchdog();
+    }
 
+    private TimerTask newProcessHourTask() {
+        return new TimerTask() {
+            public void run() {
+                try {
+                    doReset(Calendar.getInstance());
+                } catch (Throwable t) {
+                    logger.error("TimeManager hourly reset failed", t);
+                } finally {
+                    _lastCompletedReset = System.currentTimeMillis();
+                    _nextExpectedReset = nextTopOfHour(_lastCompletedReset);
+                }
+            }
+        };
+    }
+
+    private void scheduleProcessHour(Calendar cal) {
+        synchronized (_timerLock) {
+            _processHour = newProcessHourTask();
+            Timer timer = GlobalContext.getGlobalContext().getTimer();
+            Date nextReset = cal.getTime();
+            _nextExpectedReset = nextReset.getTime();
+            try {
+                timer.scheduleAtFixedRate(_processHour, nextReset, HOUR);
+                logger.info("TimeManager scheduled the next reset to be at {}", nextReset);
+            } catch (IllegalStateException e) {
+                logger.error("TimeManager schedule error", e);
+                GlobalContext.getGlobalContext().reloadTimer();
+                timer = GlobalContext.getGlobalContext().getTimer();
+                _processHour = newProcessHourTask();
+                try {
+                    timer.scheduleAtFixedRate(_processHour, nextReset, HOUR);
+                    logger.info("TimeManager scheduled the next reset to be at {}", nextReset);
+                } catch (IllegalStateException e2) {
+                    logger.error("TimeManager schedule error 2", e2);
+                }
+            }
+        }
+    }
+
+    private void startWatchdog() {
+        try {
+            _watchdog.scheduleWithFixedDelay(this::watchdogCheck, WATCHDOG_PERIOD, WATCHDOG_PERIOD, TimeUnit.MILLISECONDS);
+            logger.info("TimeManager watchdog scheduled every {} minutes", WATCHDOG_PERIOD / MINUTE);
+        } catch (RuntimeException e) {
+            logger.error("TimeManager watchdog schedule error", e);
+        }
+    }
+
+    private void watchdogCheck() {
+        try {
+            long now = System.currentTimeMillis();
+            long nextExpected = _nextExpectedReset;
+            if (nextExpected > 0 && now > nextExpected + WATCHDOG_GRACE) {
+                logger.warn("TimeManager watchdog detected stale hourly reset; lastCompleted={}, expected={}, now={}. Reloading timer and rescheduling.",
+                        new Date(_lastCompletedReset), new Date(nextExpected), new Date(now));
+                GlobalContext.getGlobalContext().reloadTimer();
+                Calendar next = Calendar.getInstance();
+                next.setTimeInMillis(now);
+                next.add(Calendar.HOUR, 1);
+                next.set(Calendar.MINUTE, 0);
+                next.set(Calendar.SECOND, 0);
+                next.set(Calendar.MILLISECOND, 0);
+                scheduleProcessHour(next);
+            }
+        } catch (Throwable t) {
+            logger.error("TimeManager watchdog failed", t);
+        }
+    }
+
+    private long nextTopOfHour(long time) {
+        Calendar cal = Calendar.getInstance();
+        cal.setTimeInMillis(time);
+        cal.add(Calendar.HOUR, 1);
+        cal.set(Calendar.MINUTE, 0);
+        cal.set(Calendar.SECOND, 0);
+        cal.set(Calendar.MILLISECOND, 0);
+        return cal.getTimeInMillis();
     }
 
     public void doReset(Calendar cal) {
@@ -90,7 +164,10 @@ public class TimeManager {
         int monthOfYear = cal.get(Calendar.MONTH);
 
         if (minuteOfHour != 0) {
-            throw new IllegalArgumentException("This thread needs to be run within the first minute of the hour, time is - " + cal.getTime());
+            logger.warn("TimeManager reset called outside the first minute of the hour, normalizing time from {}", cal.getTime());
+            cal.set(Calendar.MINUTE, 0);
+            cal.set(Calendar.SECOND, 0);
+            cal.set(Calendar.MILLISECOND, 0);
         }
 
         if (hourOfDay == 0) {
@@ -139,7 +216,7 @@ public class TimeManager {
     /*
      * Checks conf file to see if european calendar is being used.
      */
-    public boolean isEuropeanCalendar() {
+    public static boolean isEuropeanCalendar() {
         ConfigInterface config = GlobalContext.getConfig();
         // Complain about this situation as it should not happen!
         if (config == null) {

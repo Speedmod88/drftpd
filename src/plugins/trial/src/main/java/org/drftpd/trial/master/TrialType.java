@@ -76,8 +76,7 @@ public abstract class TrialType {
         }
 
         _euroTime = false;
-        TimeManager timemgr = new TimeManager();
-        if (timemgr.isEuropeanCalendar()) {
+        if (TimeManager.isEuropeanCalendar()) {
             _euroTime = true;
         }
 
