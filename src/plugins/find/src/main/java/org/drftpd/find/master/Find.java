@@ -243,7 +243,8 @@ public class Find extends CommandInterface {
                 dupe2MatchedPaths = settings.getDupe2RequiredText() == null
                         ? Dupe2Utils.getDupeLoserPaths(inodes.keySet())
                         : Dupe2Utils.getTaggedDupePaths(inodes.keySet(),
-                                settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts());
+                                settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts(),
+                                settings.getLimit());
                 logger.info("FIND Dupe2 filter complete: user={} requiredText=[{}] replacementTexts={} indexedResults={} dupeMatches={}",
                         user.getName(), settings.getDupe2RequiredText(), settings.getDupe2ReplacementTexts(),
                         inodes.size(), dupe2MatchedPaths.size());
