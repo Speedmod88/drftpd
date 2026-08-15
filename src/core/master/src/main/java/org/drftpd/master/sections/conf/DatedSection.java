@@ -20,6 +20,7 @@ package org.drftpd.master.sections.conf;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.drftpd.common.util.PropertyHelper;
+import org.drftpd.master.GlobalContext;
 import org.drftpd.master.cron.TimeEventInterface;
 import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.master.vfs.LinkHandle;
@@ -175,13 +176,16 @@ public class DatedSection extends PlainSection implements TimeEventInterface {
             logger.warn("DatedDirectory {} already exists in section {}", dateDirName, getName());
             return;
         }
-        createLink(newDir);
+        LinkHandle link = createLink(newDir);
+        if (link != null) {
+            GlobalContext.getEventService().publishAsync(new DatedSectionEvent(this, newDir, link, dateDirName));
+        }
     }
 
-    private void createLink(DirectoryHandle targetDir) {
+    private LinkHandle createLink(DirectoryHandle targetDir) {
         // creating the symlink
         if (_now == null || _now.equals("")) {
-            return;
+            return null;
         }
         String linkName = getName() + _now;
         DirectoryHandle root = getGlobalContext().getRoot();
@@ -193,25 +197,26 @@ public class DatedSection extends PlainSection implements TimeEventInterface {
         } catch (ObjectNotValidException e) {
             logger.error("There is already a non-Link inode in the place" +
                     "where the new dated directory should go. Remove it first", e);
-            return;
+            return null;
         }
         if (link != null) {
             try {
                 link.setTarget(targetDir.getPath());
                 link.setLastModified(System.currentTimeMillis());
-                return;
+                return link;
                 // link's target path has been updated
             } catch (FileNotFoundException e) {
                 // will be created below
             }
         }
         try {
-            root.createLinkUnchecked(linkName, targetDir.getPath(), "drftpd", "drftpd");
+            return root.createLinkUnchecked(linkName, targetDir.getPath(), "drftpd", "drftpd");
         } catch (FileExistsException e) {
             logger.error("{} already exists in / for section {}, this should not happen, we just deleted it", linkName, getName(), e);
         } catch (FileNotFoundException e) {
             logger.error("Unable to find the Root DirectoryHandle, this should not happen, it's the root!", e);
         }
+        return null;
     }
 
     @Override
