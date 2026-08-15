@@ -494,8 +494,29 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
         rslave.simpleDelete(getPath() + lrf.getPath());
     }
 
+    private LightRemoteInode nextRemergeSource(Iterator<LightRemoteInode> sourceItr, RemoteSlave remoteSlave) {
+        while (sourceItr.hasNext()) {
+            LightRemoteInode source = sourceItr.next();
+            String sourcePath = getPath().equals(VirtualFileSystem.separator)
+                    ? VirtualFileSystem.separator + source.getName()
+                    : getPath() + source.getPath();
+            if (remoteSlave.hasQueuedOperationForSourcePath(sourcePath)) {
+                logger.debug("[{}][{}] Skipping remerge source {} because a delete/rename is queued for it",
+                        getPath(), remoteSlave.getName(), sourcePath);
+                continue;
+            }
+            return source;
+        }
+        return null;
+    }
+
     public void remerge(List<LightRemoteInode> files, RemoteSlave remoteSlave, long lastModified) throws IOException {
         logger.debug("[{}][{}] Handling remerge request", getPath(), remoteSlave.getName());
+        if (remoteSlave.hasQueuedOperationForSourcePath(getPath())) {
+            logger.debug("[{}][{}] Skipping remerge request because a delete/rename is queued for this path",
+                    getPath(), remoteSlave.getName());
+            return;
+        }
         Iterator<LightRemoteInode> sourceItr = files.iterator();
         // source comes pre-sorted from the slave
         List<InodeHandle> destinationList = null;
@@ -530,9 +551,7 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
         Iterator<InodeHandle> destinationItr = destinationList.iterator();
         LightRemoteInode source = null;
         InodeHandle destination = null;
-        if (sourceItr.hasNext()) {
-            source = sourceItr.next();
-        }
+        source = nextRemergeSource(sourceItr, remoteSlave);
         if (destinationItr.hasNext()) {
             destination = destinationItr.next();
         }
@@ -594,11 +613,7 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                                 "source " + source.getName() + " is not a file -- this shouldn't happen. " +
                                 "This source should already be created through a previous remerge process");
                     }
-                    if (sourceItr.hasNext()) {
-                        source = sourceItr.next();
-                    } else {
-                        source = null;
-                    }
+                    source = nextRemergeSource(sourceItr, remoteSlave);
                 }
                 // all done, both lists are empty
                 return;
@@ -653,11 +668,7 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                             "This source should already be created through a previous remerge process");
                 }
                 // advance one runner
-                if (sourceItr.hasNext()) {
-                    source = sourceItr.next();
-                } else {
-                    source = null;
-                }
+                source = nextRemergeSource(sourceItr, remoteSlave);
             } else if (compare > 0) {
                 // remove the slave
                 destination.removeSlave(remoteSlave);
@@ -747,11 +758,7 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                 } else {
                     destination = null;
                 }
-                if (sourceItr.hasNext()) {
-                    source = sourceItr.next();
-                } else {
-                    source = null;
-                }
+                source = nextRemergeSource(sourceItr, remoteSlave);
             }
         }
     }
