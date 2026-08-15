@@ -141,16 +141,21 @@ public class AutoFreeSpace implements PluginInterface {
             checkedReleases = new ArrayList<>();
             logger.info("MrCleanIt task started");
             try {
-                if (AutoFreeSpaceSettings.getSettings().hasDupeOnlySections()) {
-                    cleanByDupe();
-                }
-
                 Collection<RemoteSlave> availableSlaves;
                 try {
                     availableSlaves = GlobalContext.getGlobalContext().getSlaveManager().getAvailableSlaves();
                 } catch (NoAvailableSlaveException nase) {
                     logger.warn("AUTODELETE: No slaves online, no point in running date/space cleaning procedures");
                     return;
+                }
+
+                List<String> remergingSlaves = getRemergingSlaveNames(availableSlaves);
+                if (AutoFreeSpaceSettings.getSettings().hasDupeOnlySections()) {
+                    if (remergingSlaves.isEmpty()) {
+                        cleanByDupe();
+                    } else {
+                        logger.info("AUTODELETE: AutoFreeSpace skips/defer decision for slaves when remerging: {}", remergingSlaves);
+                    }
                 }
 
                 int slavesCount = 0;
@@ -161,6 +166,10 @@ public class AutoFreeSpace implements PluginInterface {
                     }
                     if (AutoFreeSpaceSettings.getSettings().getExcludeSlaves().contains(remoteSlave.getName())) {
                         logger.debug("Skipping [{}] as it is excluded", remoteSlave.getName());
+                        continue;
+                    }
+                    if (remoteSlave.isRemerging()) {
+                        logger.info("AUTODELETE: AutoFreeSpace skips/defer decision for slave [{}] because it is remerging", remoteSlave.getName());
                         continue;
                     }
 
@@ -181,6 +190,17 @@ public class AutoFreeSpace implements PluginInterface {
                 logger.info("MrCleanIt task finished");
                 isActive = false;
             }
+        }
+
+        private List<String> getRemergingSlaveNames(Collection<RemoteSlave> availableSlaves) {
+            List<String> remergingSlaves = new ArrayList<>();
+            for (RemoteSlave remoteSlave : availableSlaves) {
+                if (remoteSlave.isRemerging()) {
+                    remergingSlaves.add(remoteSlave.getName());
+                }
+            }
+            Collections.sort(remergingSlaves);
+            return remergingSlaves;
         }
 
         /**
