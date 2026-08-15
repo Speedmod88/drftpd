@@ -186,6 +186,13 @@ default.destination=public
 #pre.section.1=*
 #pre.section.1.destination=public
 
+# To specify where dated section symlink announces will appear rather than just using your
+#  default channels, uncomment the next lines and set them there.
+#symlink.path.1=/path/subpath/*
+#symlink.path.1.destination=public
+#symlink.section.1=*
+#symlink.section.1.destination=public
+
 # To specify where the request/reqfilled/reqdel announces will appear rather than just using your
 #  default channels, uncomment the next line and set them there.
 #request.destination=public

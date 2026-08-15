@@ -1,0 +1,2 @@
+# @version $Id$
+symlink=${color}15${bold}NEW DAY:${bold}${coloroff} ${color}${sectioncolor}${bold}${section}${bold}${coloroff} A new day has come! ${bold}${date}${bold} has been created along with its symlink ${bold}${linkname}${bold}.
