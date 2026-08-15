@@ -89,29 +89,43 @@ public final class Dupe2Utils {
     public static Set<String> getTaggedDupePaths(Collection<String> candidateIndexedPaths, String requiredText,
                                                  Collection<String> replacementTexts)
             throws IndexException {
-        Map<String, List<DupeCandidate>> selectedCandidatesByKey = getSelectedCandidatesByKey(
-                candidateIndexedPaths, requiredText);
-        if (selectedCandidatesByKey.isEmpty()) {
+        return getTaggedDupePaths(candidateIndexedPaths, requiredText, replacementTexts, 0);
+    }
+
+    public static Set<String> getTaggedDupePaths(Collection<String> candidateIndexedPaths, String requiredText,
+                                                 Collection<String> replacementTexts, int resultLimit)
+            throws IndexException {
+        long startTime = System.currentTimeMillis();
+        Pattern requiredTextPattern = makeRequiredTextPattern(requiredText);
+        List<Pattern> replacementTextPatterns = makeRequiredTextPatterns(replacementTexts);
+        Map<String, List<String>> selectedPathsByKey = getSelectedTaggedPathsByKey(
+                candidateIndexedPaths, requiredTextPattern);
+        logger.info("DUPE2 tag scan selected candidates: indexedPaths={} keys={} paths={} elapsedMs={}",
+                candidateIndexedPaths.size(), selectedPathsByKey.size(), countPaths(selectedPathsByKey),
+                System.currentTimeMillis() - startTime);
+        if (selectedPathsByKey.isEmpty()) {
             return Collections.emptySet();
         }
 
-        Map<String, List<DupeCandidate>> allCandidatesByKey =
-                getIndexedCandidatesForKeys(selectedCandidatesByKey.keySet());
+        Set<String> replacementKeys = getIndexedCompletedReplacementKeys(selectedPathsByKey,
+                requiredTextPattern, replacementTextPatterns, resultLimit);
         Set<String> taggedPaths = new HashSet<>();
-
-        for (String key : selectedCandidatesByKey.keySet()) {
-            List<DupeCandidate> candidates = allCandidatesByKey.getOrDefault(key, Collections.emptyList());
-            List<DupeCandidate> completedCandidates = getCompletedCandidates(candidates);
-            if (completedCandidates.size() < 2) {
+        for (Map.Entry<String, List<String>> selected : selectedPathsByKey.entrySet()) {
+            if (!replacementKeys.contains(selected.getKey())) {
                 continue;
             }
-            if (hasCompletedReplacementCandidate(completedCandidates, requiredText, replacementTexts)) {
-                for (DupeCandidate candidate : selectedCandidatesByKey.getOrDefault(key, Collections.emptyList())) {
-                    taggedPaths.add(candidate.getDirectory().getPath());
+            for (String path : selected.getValue()) {
+                taggedPaths.add(path);
+                if (resultLimit > 0 && taggedPaths.size() >= resultLimit) {
+                    logger.info("DUPE2 tag scan complete: replacementKeys={} matchedPaths={} elapsedMs={}",
+                            replacementKeys.size(), taggedPaths.size(), System.currentTimeMillis() - startTime);
+                    return taggedPaths;
                 }
             }
         }
 
+        logger.info("DUPE2 tag scan complete: replacementKeys={} matchedPaths={} elapsedMs={}",
+                replacementKeys.size(), taggedPaths.size(), System.currentTimeMillis() - startTime);
         return taggedPaths;
     }
 
@@ -176,6 +190,9 @@ public final class Dupe2Utils {
                 continue;
             }
             DirectoryHandle directory = new DirectoryHandle(path);
+            if (requiredText != null && !matchesRequiredText(directory.getName(), requiredText)) {
+                continue;
+            }
             SectionInterface section = getReleaseSection(directory, releaseParentPathCache);
             if (section == null) {
                 continue;
@@ -184,13 +201,84 @@ public final class Dupe2Utils {
             if (candidate == null || !candidate.isComplete()) {
                 continue;
             }
-            if (requiredText != null && !matchesRequiredText(directory.getName(), requiredText)) {
-                continue;
-            }
             selectedCandidatesByKey.computeIfAbsent(candidate.getKey(), k -> new ArrayList<>()).add(candidate);
         }
 
         return selectedCandidatesByKey;
+    }
+
+    private static Map<String, List<String>> getSelectedTaggedPathsByKey(
+            Collection<String> candidateIndexedPaths, Pattern requiredTextPattern) {
+        Map<String, List<String>> selectedPathsByKey = new HashMap<>();
+        Map<String, Set<String>> releaseParentPathCache = new HashMap<>();
+        Set<String> seenPaths = new HashSet<>();
+
+        for (String candidateIndexedPath : candidateIndexedPaths) {
+            String path = stripIndexedDirectoryPath(candidateIndexedPath);
+            if (!seenPaths.add(path)) {
+                continue;
+            }
+            DirectoryHandle directory = new DirectoryHandle(path);
+            String releaseName = directory.getName();
+            if (!requiredTextPattern.matcher(releaseName).find() || isExcludedReleaseName(releaseName)) {
+                continue;
+            }
+            String key = makeDupeKey(releaseName);
+            if (key == null || getReleaseSection(directory, releaseParentPathCache) == null || !isComplete(directory)) {
+                continue;
+            }
+            selectedPathsByKey.computeIfAbsent(key, k -> new ArrayList<>()).add(path);
+        }
+
+        return selectedPathsByKey;
+    }
+
+    private static Set<String> getIndexedCompletedReplacementKeys(Map<String, List<String>> selectedPathsByKey,
+                                                                  Pattern requiredTextPattern,
+                                                                  Collection<Pattern> replacementTextPatterns,
+                                                                  int resultLimit)
+            throws IndexException {
+        AdvancedSearchParams params = new AdvancedSearchParams();
+        params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
+        params.setLimit(0);
+        Map<String, String> indexedDirectories = GlobalContext.getGlobalContext().getIndexEngine().advancedFind(
+                GlobalContext.getGlobalContext().getRoot(), params, "FIND-DUPE2-TAG");
+        Set<String> replacementKeys = new HashSet<>();
+        Map<String, Set<String>> releaseParentPathCache = new HashMap<>();
+        Set<String> seenPaths = new HashSet<>();
+        int matchedPathCount = 0;
+
+        for (Map.Entry<String, String> item : indexedDirectories.entrySet()) {
+            if (!"d".equals(item.getValue())) {
+                continue;
+            }
+            String path = stripIndexedDirectoryPath(item.getKey());
+            if (!seenPaths.add(path)) {
+                continue;
+            }
+            DirectoryHandle directory = new DirectoryHandle(path);
+            String releaseName = directory.getName();
+            if (isExcludedReleaseName(releaseName) || requiredTextPattern.matcher(releaseName).find()) {
+                continue;
+            }
+            String key = makeDupeKey(releaseName);
+            if (key == null || !selectedPathsByKey.containsKey(key) || replacementKeys.contains(key)) {
+                continue;
+            }
+            if (!replacementTextPatterns.isEmpty() && !matchesAnyRequiredText(releaseName, replacementTextPatterns)) {
+                continue;
+            }
+            if (getReleaseSection(directory, releaseParentPathCache) == null || !isComplete(directory)) {
+                continue;
+            }
+            replacementKeys.add(key);
+            matchedPathCount += selectedPathsByKey.get(key).size();
+            if (resultLimit > 0 && matchedPathCount >= resultLimit) {
+                break;
+            }
+        }
+
+        return replacementKeys;
     }
 
     private static Map<String, List<DupeCandidate>> getIndexedCandidatesForKeys(Set<String> keys)
@@ -265,33 +353,40 @@ public final class Dupe2Utils {
         return releaseParentPaths;
     }
 
-    private static boolean hasCompletedReplacementCandidate(List<DupeCandidate> candidates, String requiredText,
-                                                            Collection<String> replacementTexts) {
-        for (DupeCandidate candidate : candidates) {
-            String releaseName = candidate.getDirectory().getName();
-            if (matchesRequiredText(releaseName, requiredText)) {
-                continue;
-            }
-            if (replacementTexts == null || replacementTexts.isEmpty() || matchesAnyRequiredText(releaseName, replacementTexts)) {
+    private static boolean matchesAnyRequiredText(String releaseName, Iterable<Pattern> requiredTextPatterns) {
+        for (Pattern requiredTextPattern : requiredTextPatterns) {
+            if (requiredTextPattern.matcher(releaseName).find()) {
                 return true;
             }
         }
         return false;
     }
 
-    private static boolean matchesAnyRequiredText(String releaseName, Collection<String> requiredTexts) {
-        for (String requiredText : requiredTexts) {
-            if (matchesRequiredText(releaseName, requiredText)) {
-                return true;
+    private static Pattern makeRequiredTextPattern(String requiredText) {
+        return Pattern.compile("(^|[._ -])" + Pattern.quote(requiredText) + "([._ -]|$)",
+                Pattern.CASE_INSENSITIVE);
+    }
+
+    private static List<Pattern> makeRequiredTextPatterns(Collection<String> requiredTexts) {
+        List<Pattern> patterns = new ArrayList<>();
+        if (requiredTexts != null) {
+            for (String requiredText : requiredTexts) {
+                patterns.add(makeRequiredTextPattern(requiredText));
             }
         }
-        return false;
+        return patterns;
     }
 
     private static boolean matchesRequiredText(String releaseName, String requiredText) {
-        return Pattern.compile("(^|[._ -])" + Pattern.quote(requiredText) + "([._ -]|$)", Pattern.CASE_INSENSITIVE)
-                .matcher(releaseName)
-                .find();
+        return makeRequiredTextPattern(requiredText).matcher(releaseName).find();
+    }
+
+    private static int countPaths(Map<String, List<String>> pathsByKey) {
+        int count = 0;
+        for (List<String> paths : pathsByKey.values()) {
+            count += paths.size();
+        }
+        return count;
     }
 
     private static Set<String> getCandidatePaths(Map<String, List<DupeCandidate>> candidatesByKey) {
