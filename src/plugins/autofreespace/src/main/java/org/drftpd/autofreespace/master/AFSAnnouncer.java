@@ -69,11 +69,15 @@ public class AFSAnnouncer extends AbstractAnnouncer {
 
     @EventSubscriber
     public void onAFSEvent(AFSEvent event) {
-        AnnounceWriter writer = _config.getSimpleWriter("autofreespace");
+        InodeHandle inode = event.getInode();
+        AnnounceWriter writer = inode == null ? null : _config.getPathWriter("autofreespace", inode);
+        if (writer == null) {
+            // Low-space events have no inode, and this preserves the legacy destination fallback.
+            writer = _config.getSimpleWriter("autofreespace");
+        }
         // Check we got a writer back, if it is null do nothing and ignore the event
         if (writer != null) {
             Map<String, Object> env = new HashMap<>(SiteBot.GLOBAL_ENV);
-            InodeHandle inode = event.getInode();
             RemoteSlave slave = event.getSlave();
             try {
                 if (inode != null) {
