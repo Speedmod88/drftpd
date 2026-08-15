@@ -102,6 +102,38 @@
 # Any directories made anywhere else on the site will be passed onto the default                   #
 #  type and announced in #mainchannel with a section name of DEFAULT.                              #
 #                                                                                                  #
+# AVAILABLE PATH-AWARE EVENT TYPES:                                                                #
+# The following prefixes support path.N, path.N.destination, path.N.displayname,                   #
+#  path.N.regex, section.N and section.N.destination. Plugin-specific types are                    #
+#  available only when their corresponding plugin and announcer are loaded.                        #
+#                                                                                                  #
+#default.path.1=/path/subpath/*                                                                     #
+#mkdir.path.1=/path/subpath/*                                                                       #
+#rmdir.path.1=/path/subpath/*                                                                       #
+#wipe.path.1=/path/subpath/*                                                                        #
+#nuke.path.1=/path/subpath/*                                                                        #
+#unnuke.path.1=/path/subpath/*                                                                      #
+#pre.path.1=/path/subpath/*                                                                         #
+#symlink.path.1=/path/subpath/*                                                                     #
+#store.path.1=/path/subpath/*                                                                       #
+#prebw.path.1=/path/subpath/*                                                                       #
+#archive_start.path.1=/path/subpath/*                                                               #
+#archive_finish.path.1=/path/subpath/*                                                              #
+#archive_failed.path.1=/path/subpath/*                                                              #
+#autonuke.path.1=/path/subpath/*                                                                    #
+#autofreespace.path.1=/path/subpath/*                                                               #
+#nukefilter.path.1=/path/subpath/*                                                                  #
+#imdb.path.1=/path/subpath/*                                                                        #
+#tvmaze.path.1=/path/subpath/*                                                                      #
+#mediainfo.path.1=/path/subpath/*                                                                   #
+#mp3.path.1=/path/subpath/*                                                                         #
+#flac.path.1=/path/subpath/*                                                                        #
+#store.first.path.1=/path/subpath/*                                                                 #
+#store.halfway.path.1=/path/subpath/*                                                               #
+#store.race.path.1=/path/subpath/*                                                                  #
+#store.complete.path.1=/path/subpath/*                                                              #
+#store.newraceleader.path.1=/path/subpath/*                                                         #
+#                                                                                                  #
 # TYPES WITHOUT PATH:                                                                              #
 #                                                                                                  #
 # The configuration for events without a path is simpler, there is only one setting                #
@@ -260,7 +292,11 @@ store.path.1.regex=true
 #autonuke.section.1=*
 #autonuke.section.1.destination=public
 
-# To specify where the autofreespace announces will appear rather than just using your
-#  default channels, uncomment the next line and set them there.
+# AutoFreeSpace delete/would-delete events can be routed by path or section.
+# Low-space notices have no path and use autofreespace.destination.
+#autofreespace.path.1=/path/subpath/*
+#autofreespace.path.1.destination=public
+#autofreespace.section.1=*
+#autofreespace.section.1.destination=public
 #autofreespace.destination=public
 
