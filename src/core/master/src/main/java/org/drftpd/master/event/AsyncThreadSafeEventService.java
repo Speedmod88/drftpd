@@ -26,7 +26,8 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * @author djb61
@@ -36,7 +37,7 @@ public final class AsyncThreadSafeEventService extends ThreadSafeEventService {
 
 	private static final Logger logger = LogManager.getLogger(AsyncThreadSafeEventService.class);
 
-    private final LinkedBlockingQueue<QueuedAsyncEvent> _eventQueue = new LinkedBlockingQueue<>();
+    private final PriorityBlockingQueue<QueuedAsyncEvent> _eventQueue = new PriorityBlockingQueue<>();
 
 	private EventHandler eventHandler = null;
 
@@ -221,13 +222,15 @@ public final class AsyncThreadSafeEventService extends ThreadSafeEventService {
         return builder.toString();
     }
 
-    private static class QueuedAsyncEvent {
+    private static class QueuedAsyncEvent implements Comparable<QueuedAsyncEvent> {
+
+        private static final AtomicLong SEQUENCE = new AtomicLong();
 
         private final Object _event;
         private String _topic;
         private Type _genericType;
-        private String sourceThreadName = Thread.currentThread().getName();
-        private long time = System.currentTimeMillis();
+        private final String sourceThreadName = Thread.currentThread().getName();
+        private final long sequence = SEQUENCE.getAndIncrement();
 
         private QueuedAsyncEvent(Object event) {
             _event = event;
@@ -257,6 +260,16 @@ public final class AsyncThreadSafeEventService extends ThreadSafeEventService {
 
         private String getSourceThreadName() {
 		return sourceThreadName;
+        }
+
+        @Override
+        public int compareTo(QueuedAsyncEvent other) {
+            int priority = Boolean.compare(isRemergeEvent(), other.isRemergeEvent());
+            return priority != 0 ? priority : Long.compare(sequence, other.sequence);
+        }
+
+        private boolean isRemergeEvent() {
+            return sourceThreadName.startsWith("RemergeThread - ");
         }
     }
 
@@ -340,7 +353,12 @@ public final class AsyncThreadSafeEventService extends ThreadSafeEventService {
                 } catch (InterruptedException e) {
                     // Do nothing just loop and try again
                 } catch (Throwable t) {
-			logger.error("FATAL ERROR EventHandler FIFO. ({}, {}, {})", queuedEvent.getTopic(), queuedEvent.getGenericType(), queuedEvent.getEvent(), t);
+			if (queuedEvent == null) {
+				logger.error("FATAL ERROR EventHandler FIFO before an event was dequeued", t);
+			} else {
+				logger.error("FATAL ERROR EventHandler FIFO. ({}, {}, {})", queuedEvent.getTopic(),
+						queuedEvent.getGenericType(), queuedEvent.getEvent(), t);
+			}
                 }
             }
         }

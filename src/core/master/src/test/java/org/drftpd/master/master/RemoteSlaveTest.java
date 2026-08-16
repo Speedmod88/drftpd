@@ -99,6 +99,33 @@ public class RemoteSlaveTest {
         assertTrue(slave.getRenameQueue().isEmpty());
     }
 
+    @Test
+    public void testQueuedRenameProtectsSourceAndDestinationPaths() {
+        RemoteSlave slave = new RemoteSlave("queued-paths");
+        slave.getRenameQueue().add(new QueuedOperation("/old/release", "/new/release"));
+
+        assertTrue(slave.hasQueuedOperationForSourcePath("/old/release/file.rar"));
+        assertTrue(slave.hasQueuedOperationForPath("/old/release/file.rar"));
+        assertTrue(slave.hasQueuedOperationForPath("/new/release/file.rar"));
+        assertFalse(slave.hasQueuedOperationForPath("/unrelated/release"));
+    }
+
+    @Test
+    public void testRemergeSessionTimestampLifecycle() {
+        RemoteSlave slave = new RemoteSlave("remerge-session");
+
+        assertEquals(0L, slave.getRemergeSessionStartedAt());
+        slave.setRemerging(true);
+        long startedAt = slave.getRemergeSessionStartedAt();
+        assertTrue(startedAt > 0L);
+
+        slave.setRemerging(true);
+        assertEquals(startedAt, slave.getRemergeSessionStartedAt());
+
+        slave.setRemerging(false);
+        assertEquals(0L, slave.getRemergeSessionStartedAt());
+    }
+
     public void testAddNetworkError()
             throws InterruptedException {
         DummySlaveManager sm = new DummySlaveManager();

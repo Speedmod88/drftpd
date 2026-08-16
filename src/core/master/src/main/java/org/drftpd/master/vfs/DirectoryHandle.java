@@ -510,9 +510,43 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
         return null;
     }
 
-    public void remerge(List<LightRemoteInode> files, RemoteSlave remoteSlave, long lastModified) throws IOException {
+    private boolean preserveDestinationDuringRemerge(InodeHandle destination, RemoteSlave remoteSlave,
+                                                      long remergeStartedAt) {
+        if (remoteSlave.hasQueuedOperationForPath(destination.getPath())) {
+            logger.debug("[{}][{}] Preserving {} because a delete/rename is queued for it",
+                    getPath(), remoteSlave.getName(), destination.getPath());
+            return true;
+        }
+        try {
+            if (remergeStartedAt > 0L && (destination.creationTime() >= remergeStartedAt
+                    || destination.lastModified() >= remergeStartedAt)) {
+                logger.debug("[{}][{}] Preserving {} because it changed after this remerge started",
+                        getPath(), remoteSlave.getName(), destination.getPath());
+                return true;
+            }
+            if (destination.isFile() && ((FileHandle) destination).isTransferring()) {
+                logger.debug("[{}][{}] Preserving {} because it has an active transfer",
+                        getPath(), remoteSlave.getName(), destination.getPath());
+                return true;
+            }
+        } catch (FileNotFoundException e) {
+            // Another operation already removed it, so there is nothing left to reconcile.
+            return true;
+        }
+        return false;
+    }
+
+    private void removeSlaveDuringRemerge(InodeHandle destination, RemoteSlave remoteSlave,
+                                           long remergeStartedAt) throws FileNotFoundException {
+        if (!preserveDestinationDuringRemerge(destination, remoteSlave, remergeStartedAt)) {
+            destination.removeSlave(remoteSlave);
+        }
+    }
+
+    public void remerge(List<LightRemoteInode> files, RemoteSlave remoteSlave, long lastModified,
+                        long remergeStartedAt) throws IOException {
         logger.debug("[{}][{}] Handling remerge request", getPath(), remoteSlave.getName());
-        if (remoteSlave.hasQueuedOperationForSourcePath(getPath())) {
+        if (remoteSlave.hasQueuedOperationForPath(getPath())) {
             logger.debug("[{}][{}] Skipping remerge request because a delete/rename is queued for this path",
                     getPath(), remoteSlave.getName());
             return;
@@ -569,7 +603,7 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                 while (destination != null) {
                     // can removeSlave()'s from all types of Inodes, no type
                     // checking needed
-                    destination.removeSlave(remoteSlave);
+                    removeSlaveDuringRemerge(destination, remoteSlave, remergeStartedAt);
 
                     if (destinationItr.hasNext()) {
                         destination = destinationItr.next();
@@ -669,7 +703,7 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                 source = nextRemergeSource(sourceItr, remoteSlave);
             } else if (compare > 0) {
                 // remove the slave
-                destination.removeSlave(remoteSlave);
+                removeSlaveDuringRemerge(destination, remoteSlave, remergeStartedAt);
                 // advance one runner
                 if (destinationItr.hasNext()) {
                     destination = destinationItr.next();
@@ -677,6 +711,16 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                     destination = null;
                 }
             } else if (compare == 0) {
+                if (destination.isFile()
+                        && preserveDestinationDuringRemerge(destination, remoteSlave, remergeStartedAt)) {
+                    if (destinationItr.hasNext()) {
+                        destination = destinationItr.next();
+                    } else {
+                        destination = null;
+                    }
+                    source = nextRemergeSource(sourceItr, remoteSlave);
+                    continue;
+                }
                 if (destination.isLink()) {
                     // this is bad, links don't exist on slaves
                     // name collision

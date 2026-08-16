@@ -83,6 +83,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     private transient long _lastResponseReceived = System.currentTimeMillis();
     private transient long _lastCommandSent = System.currentTimeMillis();
     private transient long _lastRemergeCommandReceived = 0L;
+    private transient volatile long _remergeSessionStartedAt = 0L;
     private final String _name;
     private transient DiskStatus _status;
     private HostMaskCollection _ipMasks;
@@ -502,7 +503,16 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public void setRemerging(boolean remerging) {
+        if (remerging && !_isRemerging) {
+            _remergeSessionStartedAt = System.currentTimeMillis();
+        } else if (!remerging) {
+            _remergeSessionStartedAt = 0L;
+        }
         _isRemerging = remerging;
+    }
+
+    public long getRemergeSessionStartedAt() {
+        return _remergeSessionStartedAt;
     }
 
     /**
@@ -566,6 +576,19 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return false;
     }
 
+    public boolean hasQueuedOperationForPath(String path) {
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        synchronized (renameQueue) {
+            for (QueuedOperation item : renameQueue) {
+                if (pathMatchesOrIsChild(path, item.getSource())
+                        || pathMatchesOrIsChild(path, item.getDestination())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static boolean pathMatchesOrIsChild(String path, String parent) {
         if (path == null || parent == null) {
             return false;
@@ -622,7 +645,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         synchronized (renameQueue) {
             int queuedOperations = renameQueue.size();
             if (queuedOperations == 0) {
-                _isRemerging = false;
+                setRemerging(false);
                 return true;
             }
 
@@ -631,16 +654,16 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
             try {
                 processQueueLocked();
-                _isRemerging = false;
+                setRemerging(false);
                 logger.info("Finished queued delete/rename operations after remerge for slave {}", getName());
                 return true;
             } catch (IOException e) {
                 logger.error("IOException while processing queued delete/rename operations after remerge for {}", getName(), e);
-                _isRemerging = false;
+                setRemerging(false);
                 setOffline("IOException processing queued operations after remerge");
             } catch (SlaveUnavailableException e) {
                 logger.error("Slave unavailable while processing queued delete/rename operations after remerge for {}", getName(), e);
-                _isRemerging = false;
+                setRemerging(false);
                 setOffline(e);
             }
             return false;
@@ -1423,6 +1446,47 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
     }
 
+    private boolean waitForVfsEventQueueCapacity() throws InterruptedException {
+        int pauseThreshold = getPositiveIntProperty("remerge.vfs.pause.threshold", 50000);
+        int resumeThreshold = Math.min(
+                getPositiveIntProperty("remerge.vfs.resume.threshold", 10000), pauseThreshold - 1);
+        int queueSize = GlobalContext.getEventServiceSlowest().getQueueSize();
+        if (queueSize < pauseThreshold) {
+            return true;
+        }
+
+        String message = "Pausing remerge processing while FIFO3 drains (" + queueSize
+                + " queued VFS events, resume below " + resumeThreshold + ")";
+        logger.warn("{} for slave {}", message, getName());
+        GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+
+        while (isOnline() && GlobalContext.getEventServiceSlowest().getQueueSize() > resumeThreshold) {
+            Thread.sleep(500L);
+        }
+        if (!isOnline()) {
+            return false;
+        }
+
+        message = "Resuming remerge processing after FIFO3 drained to "
+                + GlobalContext.getEventServiceSlowest().getQueueSize() + " event(s)";
+        logger.info("{} for slave {}", message, getName());
+        GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+        return true;
+    }
+
+    private int getPositiveIntProperty(String name, int defaultValue) {
+        String value = GlobalContext.getConfig().getMainProperties().getProperty(name, Integer.toString(defaultValue));
+        try {
+            int parsed = Integer.parseInt(value);
+            if (parsed > 0) {
+                return parsed;
+            }
+        } catch (NumberFormatException ignored) {
+        }
+        logger.warn("Invalid {} value '{}', using {}", name, value, defaultValue);
+        return defaultValue;
+    }
+
     public void shutdown() {
         try {
             sendCommand(new AsyncCommand("shutdown", "shutdown"));
@@ -1543,7 +1607,11 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                 DirectoryHandle dir = new DirectoryHandle(msg.getDirectory());
 
                 try {
-                    dir.remerge(msg.getFiles(), msg.getRslave(), msg.getLastModified());
+                    if (!waitForVfsEventQueueCapacity()) {
+                        break;
+                    }
+                    dir.remerge(msg.getFiles(), msg.getRslave(), msg.getLastModified(),
+                            msg.getRslave().getRemergeSessionStartedAt());
                 } catch (PartialRemergeDirectoryException e) {
                     logger.warn("Partial remerge directory mismatch while remerging {}", msg.getRslave().getName(), e);
                     if (msg.getRslave().requestInstantFullRemergeFallback(e)) {
