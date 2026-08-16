@@ -383,9 +383,21 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
      */
     private void initializeSlaveAfterThreadIsRunning() throws IOException,
             SlaveUnavailableException, ProtocolException {
+        String remergeMode = GlobalContext.getConfig().getMainProperties()
+                .getProperty("partial.remerge.mode", "off");
+        boolean instantOnline = shouldDeferQueuedOperationsUntilAfterRemerge(remergeMode);
+
         commit();
-        processQueue();
         resetInstantFullRemergeFallback();
+        if (instantOnline) {
+            int queuedOperations = getOrCreateRenameQueue().size();
+            if (queuedOperations > 0) {
+                logger.info("Deferring {} queued delete/rename operation(s) for slave {} until instant remerge finishes",
+                        queuedOperations, getName());
+            }
+        } else {
+            processQueue();
+        }
 
         // checking ssl availability
         String checkSSLIndex = SlaveManager.getBasicIssuer().issueCheckSSL(this);
@@ -393,41 +405,34 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
         long skipAgeCutoff = 0L;
 
-        String remergeMode = GlobalContext.getConfig().getMainProperties().getProperty("partial.remerge.mode");
         _remergeChecksums = GlobalContext.getConfig().getMainProperties().
                 getProperty("enableremergechecksums", "false").equalsIgnoreCase("true");
         boolean partialRemerge = false;
-        boolean instantOnline = false;
-        if (remergeMode == null) {
-            logger.error("Slave partial remerge undefined in master.conf, defaulting to \"off\"");
-        } else {
-            if (remergeMode.equalsIgnoreCase("connect")) {
-                try {
-                    skipAgeCutoff = Long.parseLong(getProperty("lastConnect"));
-                    partialRemerge = true;
-                } catch (NumberFormatException e) {
-                    logger.warn("Slave partial remerge mode set to \"off\" as lastConnect time is undefined, this may " +
-                            " resolve itself automatically on next slave connection");
-                }
-            } else if (remergeMode.equalsIgnoreCase("disconnect")) {
-                try {
-                    skipAgeCutoff = Long.valueOf(getProperty("lastOnline"));
-                    partialRemerge = true;
-                } catch (NumberFormatException e) {
-                    logger.warn("Slave partial remerge mode set to \"off\" as lastOnline time is undefined, this may " +
-                            " resolve itself automatically on next slave connection");
-                }
-            } else if (remergeMode.equalsIgnoreCase("instant")) {
-		skipAgeCutoff = Long.parseLong(getProperty("lastConnect"));
-		if (skipAgeCutoff < 1731206543000L) {
-			skipAgeCutoff = 1731206543000L;
-		}
-
-                instantOnline = true;
-                setAvailable(true);
-                logger.info("Slave added: '{}' status: {}", getName(), _status);
-                GlobalContext.getEventService().publishAsync(new SlaveEvent("ADDSLAVE", this));
+        if (remergeMode.equalsIgnoreCase("connect")) {
+            try {
+                skipAgeCutoff = Long.parseLong(getProperty("lastConnect"));
+                partialRemerge = true;
+            } catch (NumberFormatException e) {
+                logger.warn("Slave partial remerge mode set to \"off\" as lastConnect time is undefined, this may " +
+                        " resolve itself automatically on next slave connection");
             }
+        } else if (remergeMode.equalsIgnoreCase("disconnect")) {
+            try {
+                skipAgeCutoff = Long.parseLong(getProperty("lastOnline"));
+                partialRemerge = true;
+            } catch (NumberFormatException e) {
+                logger.warn("Slave partial remerge mode set to \"off\" as lastOnline time is undefined, this may " +
+                        " resolve itself automatically on next slave connection");
+            }
+        } else if (instantOnline) {
+            skipAgeCutoff = Long.parseLong(getProperty("lastConnect"));
+            if (skipAgeCutoff < 1731206543000L) {
+                skipAgeCutoff = 1731206543000L;
+            }
+
+            setAvailable(true);
+            logger.info("Slave added: '{}' status: {}", getName(), _status);
+            GlobalContext.getEventService().publishAsync(new SlaveEvent("ADDSLAVE", this));
         }
         String remergeIndex;
         if (partialRemerge) {
@@ -544,6 +549,10 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             renameQueue.removeFirstOccurrence(item);
             commit();
         }
+    }
+
+    static boolean shouldDeferQueuedOperationsUntilAfterRemerge(String remergeMode) {
+        return "instant".equalsIgnoreCase(remergeMode);
     }
 
     protected void executeQueuedOperation(QueuedOperation item) throws IOException, SlaveUnavailableException {
