@@ -37,6 +37,7 @@ import org.drftpd.common.slave.TransferIndex;
 import org.drftpd.common.slave.TransferStatus;
 import org.drftpd.common.util.HostMaskCollection;
 import org.drftpd.master.GlobalContext;
+import org.drftpd.master.event.AsyncThreadSafeEventService;
 import org.drftpd.master.event.SlaveEvent;
 import org.drftpd.master.exceptions.FatalException;
 import org.drftpd.master.exceptions.SlaveUnavailableException;
@@ -60,6 +61,7 @@ import java.net.SocketTimeoutException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.PatternSyntaxException;
 
 /**
@@ -84,17 +86,22 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     private transient long _lastCommandSent = System.currentTimeMillis();
     private transient long _lastRemergeCommandReceived = 0L;
     private transient volatile long _remergeSessionStartedAt = 0L;
+    private final transient AtomicLong _nextRemergeIdleReport;
     private final String _name;
     private transient DiskStatus _status;
     private HostMaskCollection _ipMasks;
     private Properties _keysAndValues;
     private final transient KeyedMap<Key<?>, Object> _transientKeyedMap;
     private ConcurrentLinkedDeque<QueuedOperation> _renameQueue;
+    private transient Map<String, Integer> _queuedSourcePathCounts;
+    private transient Map<String, Integer> _queuedPathCounts;
     private transient LinkedBlockingDeque<String> _indexPool;
     private transient ConcurrentHashMap<String, AsyncResponse> _indexWithCommands;
     private transient ObjectInputStream _sin;
     private transient Socket _socket;
     private transient ObjectOutputStream _sout;
+    private final transient AtomicLong _connectionGeneration;
+    private final transient Set<String> _abandonedCommandIndexes;
     private transient ConcurrentHashMap<TransferIndex, RemoteTransfer> _transfers;
     private transient boolean _initRemergeCompleted;
     private final transient Object _commandMonitor;
@@ -121,6 +128,9 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         _instantFullRemergeFallbackRequested = new AtomicBoolean();
         _instantFullRemergeFallbackStarted = new AtomicBoolean();
         _discardRemergeMessages = new AtomicBoolean();
+        _connectionGeneration = new AtomicLong();
+        _abandonedCommandIndexes = ConcurrentHashMap.newKeySet();
+        _nextRemergeIdleReport = new AtomicLong();
     }
 
     public static Hashtable<String, RemoteSlave> rslavesToHashtable(Collection<RemoteSlave> rslaves) {
@@ -206,17 +216,57 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             if (!isRemerging()) {
                 return false;
             }
-            addQueuedOperation(fileName, destName);
-            logger.info("Queued {} on remerging slave {}: {}{}",
-                    destName == null ? "delete" : "rename", getName(), fileName,
-                    destName == null ? "" : " -> " + destName);
+            boolean added = addQueuedOperation(fileName, destName);
+            if (added) {
+                int queueSize = renameQueue.size();
+                if (queueSize == 1 || queueSize % 100 == 0) {
+                    logger.info("Queued delete/rename operation count for remerging slave {}: {}",
+                            getName(), queueSize);
+                } else {
+                    logger.debug("Queued {} on remerging slave {}: {}{}",
+                            destName == null ? "delete" : "rename", getName(), fileName,
+                            destName == null ? "" : " -> " + destName);
+                }
+            } else {
+                logger.debug("Skipped duplicate queued {} on remerging slave {}: {}{}",
+                        destName == null ? "delete" : "rename", getName(), fileName,
+                        destName == null ? "" : " -> " + destName);
+            }
             return true;
         }
     }
 
-    private void addQueuedOperation(String fileName, String destName) {
-        getOrCreateRenameQueue().add(new QueuedOperation(fileName, destName));
-        commit();
+    private boolean addQueuedOperation(String fileName, String destName) {
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        QueuedOperation operation = new QueuedOperation(fileName, destName);
+        if (renameQueue.contains(operation)) {
+            return false;
+        }
+        renameQueue.addLast(operation);
+        indexQueuedOperation(operation);
+        scheduleQueuedOperationsCommit();
+        return true;
+    }
+
+    protected void scheduleQueuedOperationsCommit() {
+        CommitManager.getCommitManager().add(this, getQueuedOperationsCommitDelay());
+    }
+
+    protected void flushQueuedOperationsCommit() {
+        CommitManager commitManager = CommitManager.getCommitManager();
+        commitManager.remove(this);
+        commitManager.writeImmediately(this);
+    }
+
+    private long getQueuedOperationsCommitDelay() {
+        String value = GlobalContext.getConfig().getMainProperties()
+                .getProperty("slave.operation.queue.commit.delay", "60000");
+        try {
+            return Math.max(0L, Long.parseLong(value));
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid slave.operation.queue.commit.delay '{}', using 60000", value);
+            return 60000L;
+        }
     }
 
     public void setProperty(String name, String value) {
@@ -381,8 +431,9 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
      *
      * @throws ProtocolException
      */
-    private void initializeSlaveAfterThreadIsRunning() throws IOException,
+    private void initializeSlaveAfterThreadIsRunning(long connectionGeneration) throws IOException,
             SlaveUnavailableException, ProtocolException {
+        ensureConnectionCurrent(connectionGeneration);
         String remergeMode = GlobalContext.getConfig().getMainProperties()
                 .getProperty("partial.remerge.mode", "off");
         boolean instantOnline = shouldDeferQueuedOperationsUntilAfterRemerge(remergeMode);
@@ -398,10 +449,12 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         } else {
             processQueue();
         }
+        ensureConnectionCurrent(connectionGeneration);
 
         // checking ssl availability
         String checkSSLIndex = SlaveManager.getBasicIssuer().issueCheckSSL(this);
         getTransientKeyedMap().setObject(SSL, fetchCheckSSLFromIndex(checkSSLIndex));
+        ensureConnectionCurrent(connectionGeneration);
 
         long skipAgeCutoff = 0L;
 
@@ -430,10 +483,12 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                 skipAgeCutoff = 1731206543000L;
             }
 
+            ensureConnectionCurrent(connectionGeneration);
             setAvailable(true);
             logger.info("Slave added: '{}' status: {}", getName(), _status);
             GlobalContext.getEventService().publishAsync(new SlaveEvent("ADDSLAVE", this));
         }
+        ensureConnectionCurrent(connectionGeneration);
         String remergeIndex;
         if (partialRemerge) {
             remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", true, skipAgeCutoff, System.currentTimeMillis(), false);
@@ -451,6 +506,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         } finally {
             _remergeCommandRunning.set(false);
         }
+        ensureConnectionCurrent(connectionGeneration);
 
         if (_instantFullRemergeFallbackRequested.get()) {
             logger.info("Initial partial remerge finished after full remerge fallback was requested for {}", getName());
@@ -529,25 +585,33 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
     public void processQueue() throws IOException, SlaveUnavailableException {
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
-        synchronized (renameQueue) {
-            int queuedOperations = renameQueue.size();
-            if (queuedOperations > 0) {
-                logger.info("Processing {} queued delete/rename operation(s) for slave {}", queuedOperations, getName());
-            }
-            processQueueLocked();
-            if (queuedOperations > 0) {
-                logger.info("Finished processing queued delete/rename operation(s) for slave {}", getName());
-            }
+        int queuedOperations = renameQueue.size();
+        if (queuedOperations == 0) {
+            return;
+        }
+
+        logger.info("Processing {} queued delete/rename operation(s) for slave {}", queuedOperations, getName());
+        try {
+            processQueuedOperations();
+            logger.info("Finished processing queued delete/rename operation(s) for slave {}", getName());
+        } finally {
+            // Persist all progress once synchronously. During a long drain the
+            // delayed commit also checkpoints progress at the configured interval.
+            flushQueuedOperationsCommit();
         }
     }
 
-    private void processQueueLocked() throws IOException, SlaveUnavailableException {
+    private void processQueuedOperations() throws IOException, SlaveUnavailableException {
         QueuedOperation item;
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
-        while ((item = renameQueue.peek()) != null) {
+        while ((item = renameQueue.peekFirst()) != null) {
             executeQueuedOperation(item);
-            renameQueue.removeFirstOccurrence(item);
-            commit();
+            synchronized (renameQueue) {
+                if (renameQueue.removeFirstOccurrence(item)) {
+                    unindexQueuedOperation(item);
+                    scheduleQueuedOperationsCommit();
+                }
+            }
         }
     }
 
@@ -576,40 +640,32 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     public boolean hasQueuedOperationForSourcePath(String path) {
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
         synchronized (renameQueue) {
-            for (QueuedOperation item : renameQueue) {
-                if (pathMatchesOrIsChild(path, item.getSource())) {
-                    return true;
-                }
-            }
+            return hasQueuedPathOrAncestor(path, getQueuedSourcePathCounts());
         }
-        return false;
     }
 
     public boolean hasQueuedOperationForPath(String path) {
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
         synchronized (renameQueue) {
-            for (QueuedOperation item : renameQueue) {
-                if (pathMatchesOrIsChild(path, item.getSource())
-                        || pathMatchesOrIsChild(path, item.getDestination())) {
-                    return true;
-                }
-            }
+            return hasQueuedPathOrAncestor(path, getQueuedPathCounts());
         }
-        return false;
     }
 
-    private static boolean pathMatchesOrIsChild(String path, String parent) {
-        if (path == null || parent == null) {
+    private static boolean hasQueuedPathOrAncestor(String path, Map<String, Integer> pathCounts) {
+        if (path == null || pathCounts.isEmpty()) {
             return false;
         }
-        String normalizedPath = normalizeQueuedPath(path);
-        String normalizedParent = normalizeQueuedPath(parent);
-        if ("/".equals(normalizedParent)) {
-            return normalizedPath.startsWith("/");
+        String candidate = normalizeQueuedPath(path).toLowerCase(Locale.ENGLISH);
+        while (true) {
+            if (pathCounts.containsKey(candidate)) {
+                return true;
+            }
+            if ("/".equals(candidate)) {
+                return false;
+            }
+            int separator = candidate.lastIndexOf('/');
+            candidate = separator <= 0 ? "/" : candidate.substring(0, separator);
         }
-        return normalizedPath.equalsIgnoreCase(normalizedParent)
-                || normalizedPath.toLowerCase(Locale.ENGLISH).startsWith(
-                        normalizedParent.toLowerCase(Locale.ENGLISH) + "/");
     }
 
     private static String normalizeQueuedPath(String path) {
@@ -651,32 +707,41 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
     public boolean processQueueAfterRemerge() {
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
-        synchronized (renameQueue) {
-            int queuedOperations = renameQueue.size();
-            if (queuedOperations == 0) {
-                setRemerging(false);
-                return true;
-            }
-
-            String message = "Running " + queuedOperations + " queued delete/rename operation(s) after remerge";
-            logger.info("{} for slave {}", message, getName());
-            GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
-            try {
-                processQueueLocked();
-                setRemerging(false);
-                logger.info("Finished queued delete/rename operations after remerge for slave {}", getName());
-                return true;
-            } catch (IOException e) {
-                logger.error("IOException while processing queued delete/rename operations after remerge for {}", getName(), e);
-                setRemerging(false);
-                setOffline("IOException processing queued operations after remerge");
-            } catch (SlaveUnavailableException e) {
-                logger.error("Slave unavailable while processing queued delete/rename operations after remerge for {}", getName(), e);
-                setRemerging(false);
-                setOffline(e);
-            }
-            return false;
+        int queuedOperations = renameQueue.size();
+        if (queuedOperations == 0) {
+            setRemerging(false);
+            return true;
         }
+
+        String message = "Running " + queuedOperations + " queued delete/rename operation(s) after remerge";
+        logger.info("{} for slave {}", message, getName());
+        GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+        try {
+            while (true) {
+                processQueue();
+                synchronized (renameQueue) {
+                    if (!renameQueue.isEmpty()) {
+                        continue;
+                    }
+                    // Queue producers use this same lock when deciding whether
+                    // to defer an operation, so no item can be stranded between
+                    // the final empty check and leaving remerge state.
+                    setRemerging(false);
+                    break;
+                }
+            }
+            logger.info("Finished queued delete/rename operations after remerge for slave {}", getName());
+            return true;
+        } catch (IOException e) {
+            logger.error("IOException while processing queued delete/rename operations after remerge for {}", getName(), e);
+            setRemerging(false);
+            setOffline("IOException processing queued operations after remerge");
+        } catch (SlaveUnavailableException e) {
+            logger.error("Slave unavailable while processing queued delete/rename operations after remerge for {}", getName(), e);
+            setRemerging(false);
+            setOffline(e);
+        }
+        return false;
     }
 
     public final void setLastDirection(char direction, long l) {
@@ -747,6 +812,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
     public synchronized void connect(Socket socket, ObjectInputStream in,
                                      ObjectOutputStream out) {
+        long connectionGeneration = _connectionGeneration.incrementAndGet();
         _socket = socket;
         _sout = out;
         _sin = in;
@@ -771,6 +837,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         } else {
             _indexWithCommands.clear();
         }
+        _abandonedCommandIndexes.clear();
+        _nextRemergeIdleReport.set(0L);
 
         if (_transfers == null) {
             _transfers = new ConcurrentHashMap<>();
@@ -786,25 +854,25 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         try {
             GlobalContext.getGlobalContext().getSlaveManager().getProtocolCentral().handshakeWithSlave(this);
         } catch (ProtocolException e) {
-            setOffline(e);
+            setOfflineIfCurrent(connectionGeneration, e);
         }
 
         class InitiateRemergeThread implements Runnable {
             public void run() {
                 try {
-                    initializeSlaveAfterThreadIsRunning();
+                    initializeSlaveAfterThreadIsRunning(connectionGeneration);
                 } catch (Exception e) {
-                    setOffline(e);
+                    setOfflineIfCurrent(connectionGeneration, e);
                 }
             }
         }
 
         new Thread(new InitiateRemergeThread(), "RemoteSlaveRemerge - " + getName()).start();
-        start();
+        start(connectionGeneration, socket, in);
     }
 
-    private void start() {
-        Thread t = new Thread(this);
+    private void start(long connectionGeneration, Socket socket, ObjectInputStream in) {
+        Thread t = new Thread(() -> runConnection(connectionGeneration, socket, in));
         t.setName("RemoteSlave - " + getName());
         t.start();
     }
@@ -815,8 +883,9 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public String fetchIndex() throws SlaveUnavailableException {
+        long connectionGeneration = _connectionGeneration.get();
         String index;
-        while (isOnline()) {
+        while (isConnectionCurrent(connectionGeneration)) {
             try {
                 index = _indexPool.poll(1000, TimeUnit.MILLISECONDS);
                 if (index == null) {
@@ -825,7 +894,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                     return index;
                 }
                 if (getActualTimeout() < (System.currentTimeMillis() - _lastResponseReceived)) {
-                    setOffline("Index pool exhausted and no response from slave in "
+                    setOfflineIfCurrent(connectionGeneration,
+                            "Index pool exhausted and no response from slave in "
                             + (System.currentTimeMillis() - _lastResponseReceived)
                             + " milliseconds");
                     throw new SlaveUnavailableException();
@@ -863,25 +933,26 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
      * on the Slave side
      */
     public AsyncResponse fetchResponse(String index, int wait) throws SlaveUnavailableException, RemoteIOException {
+        long connectionGeneration = _connectionGeneration.get();
         long total = System.currentTimeMillis();
-        long lastUpdate = 0L;
-        long reportIdle = 60000L;
         int count = 0;
 
-        while (isOnline() && !_indexWithCommands.containsKey(index)) {
+        while (isConnectionCurrent(connectionGeneration) && !_indexWithCommands.containsKey(index)) {
 
-		//Whatever the wait provided (bad coding), this must not loop for too long otherwise this blocks the whole FIFO queue
-		if (Thread.currentThread().getName().equals("AsyncEventHandler") && count > 100) {
-
-			logger.error("!!! FETCH RESPONSE EXCESS LOOPING count:{}, total:{}, now:{}, wait:{}, slave:{}", count, total, System.currentTimeMillis(), wait, _name);
-			throw new RuntimeException("!!! FETCH RESPONSE EXCESS LOOPINP FAILSAFE !!!");
-		}
+            // Event handlers must remain nonblocking because each service has one consumer.
+            if (AsyncThreadSafeEventService.isEventHandlerThread() && count > 100) {
+                _abandonedCommandIndexes.add(index);
+                logger.warn("Deferred command reply after {} ms to keep the event FIFO moving: index={}, slave={}",
+                        System.currentTimeMillis() - total, index, _name);
+                throw new SlaveUnavailableException(
+                        "Slave response deferred while processing an asynchronous event");
+            }
 
             // will wait a maximum of 50 milliseconds before waking up
             // Any longer and we risk slow exchange of commands between master and slave
             try {
                 synchronized (_commandMonitor) {
-			count++;
+                    count++;
                     _commandMonitor.wait(50);
                 }
             } catch (InterruptedException e) {
@@ -891,40 +962,21 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             //wtf shutdown slave?
             if ((wait != 0) && ((System.currentTimeMillis() - total) >= wait)) {
 
-		long duration = (System.currentTimeMillis() - total);
+                long duration = (System.currentTimeMillis() - total);
 
-		logger.error("!!! FETCH RESPONSE OFFLINE THREAD!? count:{}, total:{}, now:{}, wait:{}, slave:{}", count, total, System.currentTimeMillis(), wait, _name);
-                setOffline("Slave has taken too long while waiting for reply " + index + " | wait time: " + duration);
+                logger.error("Command response timed out: count={}, wait={}, slave={}, index={}",
+                        count, duration, _name, index);
+                setOfflineIfCurrent(connectionGeneration,
+                        "Slave has taken too long while waiting for reply " + index
+                                + " | wait time: " + duration);
             }
 
-            // Handle remerge status reporting if we are remerging
             if (isRemerging()) {
-                // Only do something if we have not received a remerge command from slave in 15 seconds
-                if ((System.currentTimeMillis() - _lastRemergeCommandReceived) >= reportIdle) {
-                    if (lastUpdate >= 0L && (System.currentTimeMillis() - lastUpdate) <= reportIdle) {
-                        // skip for at least 15 seconds, not spamming the log
-                        continue;
-                    }
-
-                    // We have not received remerge data from slave, report current master status for this slave
-                    logger.warn("We are still remerging, but have not received remerge command from Slave in {} " +
-                            "seconds", (reportIdle / 1000));
-                    logger.warn("remergeQueue: {}, remergePaused: {}, Last remerge command received: {}",
-                            _remergeQueue.size(), _remergePaused.get(), _lastRemergeCommandReceived);
-
-                    // Set last remerge report
-                    lastUpdate = System.currentTimeMillis();
-
-                    // Incremental back-off untill we are out of this
-                    reportIdle *= 2;
-                } else {
-                    // reset reportIdle if we continue
-                    reportIdle = 60000L;
-                }
+                reportIdleRemergeOncePerMinute();
             }
         }
 
-        if (!isOnline()) {
+        if (!isConnectionCurrent(connectionGeneration)) {
             throw new SlaveUnavailableException("Slave went offline while processing command");
         }
 
@@ -945,6 +997,22 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return rar;
     }
 
+    private void reportIdleRemergeOncePerMinute() {
+        long now = System.currentTimeMillis();
+        if ((now - _lastRemergeCommandReceived) < 60000L) {
+            return;
+        }
+
+        long nextReport = _nextRemergeIdleReport.get();
+        if (now < nextReport || !_nextRemergeIdleReport.compareAndSet(nextReport, now + 60000L)) {
+            return;
+        }
+
+        logger.warn("Slave {} is still remerging but has not sent remerge data for at least 60 seconds: "
+                        + "queue={}, paused={}, lastRemergeResponse={}",
+                _name, _remergeQueue.size(), _remergePaused.get(), _lastRemergeCommandReceived);
+    }
+
     public synchronized String getPASVIP() throws SlaveUnavailableException {
         if (!isOnline())
             throw new SlaveUnavailableException();
@@ -958,6 +1026,20 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
     public boolean isOnline() {
         return ((_socket != null) && _socket.isConnected() && !_socket.isClosed());
+    }
+
+    private boolean isConnectionCurrent(long connectionGeneration) {
+        return _connectionGeneration.get() == connectionGeneration && isOnline();
+    }
+
+    private void ensureConnectionCurrent(long connectionGeneration) throws SlaveUnavailableException {
+        if (!isConnectionCurrent(connectionGeneration)) {
+            throw new SlaveUnavailableException("Slave connection was replaced while initializing");
+        }
+    }
+
+    private boolean isConnectionGenerationCurrent(long connectionGeneration, Socket socket) {
+        return _connectionGeneration.get() == connectionGeneration && _socket == socket;
     }
 
     public long getCheckSumForPath(String path) throws IOException,
@@ -979,15 +1061,20 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public void run() {
+        runConnection(_connectionGeneration.get(), _socket, _sin);
+    }
+
+    private void runConnection(long connectionGeneration, Socket connectionSocket,
+                               ObjectInputStream connectionInput) {
         logger.debug("Starting RemoteSlave for {}", getName());
 
         try {
             String pingIndex = null;
-            while (isOnline()) {
+            while (isConnectionCurrent(connectionGeneration)) {
                 AsyncResponse ar = null;
 
                 try {
-                    ar = readAsyncResponse();
+                    ar = readAsyncResponse(connectionGeneration, connectionSocket, connectionInput);
                     _lastResponseReceived = System.currentTimeMillis();
                 } catch (SlaveUnavailableException e3) {
                     // no reason for slave thread to be running if the slave is not online
@@ -995,6 +1082,10 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                     return;
                 } catch (SocketTimeoutException e) {
                     // handled below
+                }
+
+                if (!isConnectionCurrent(connectionGeneration)) {
+                    return;
                 }
 
                 if ((getActualTimeout() > (System.currentTimeMillis() - _lastResponseReceived))
@@ -1006,7 +1097,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                     }
                     pingIndex = SlaveManager.getBasicIssuer().issuePingToSlave(this);
                 } else if (getActualTimeout() < (System.currentTimeMillis() - _lastResponseReceived)) {
-                    setOffline("Slave seems to have gone offline, have not received a response in "
+                    setOfflineIfCurrent(connectionGeneration,
+                            "Slave seems to have gone offline, have not received a response in "
                             + (System.currentTimeMillis() - _lastResponseReceived)
                             + " milliseconds");
                     throw new SlaveUnavailableException();
@@ -1072,24 +1164,35 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                         }
                     }
                     default -> {
-                        _indexWithCommands.put(ar.getIndex(), ar);
-                        if (pingIndex != null && pingIndex.equals(ar.getIndex())) {
-                            fetchResponse(pingIndex);
-                            pingIndex = null;
+                        if (_abandonedCommandIndexes.remove(ar.getIndex())) {
+                            _indexPool.offer(ar.getIndex());
+                            logger.debug("Released abandoned command index {} after its late response from {}",
+                                    ar.getIndex(), getName());
                         } else if (ar.getIndex().equals("SiteBotMessage")) {
                             String message = ((AsyncResponseSiteBotMessage) ar).getMessage();
                             GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
                         } else {
-                            synchronized (_commandMonitor) {
-                                _commandMonitor.notifyAll();
+                            _indexWithCommands.put(ar.getIndex(), ar);
+                            if (pingIndex != null && pingIndex.equals(ar.getIndex())) {
+                                fetchResponse(pingIndex);
+                                pingIndex = null;
+                            } else {
+                                synchronized (_commandMonitor) {
+                                    _commandMonitor.notifyAll();
+                                }
                             }
                         }
                     }
                 }
             }
         } catch (Throwable e) {
-            logger.error("Slave thread threw an error, dropping slave offline", e);
-            setOffline("error: " + e.getMessage());
+            if (isConnectionGenerationCurrent(connectionGeneration, connectionSocket)) {
+                logger.error("Slave thread threw an error, dropping slave offline", e);
+                setOfflineIfCurrent(connectionGeneration, "error: " + e.getMessage());
+            } else {
+                logger.debug("Ignoring failure from stale slave connection generation {} for {}",
+                        connectionGeneration, getName(), e);
+            }
         }
     }
 
@@ -1119,7 +1222,23 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         setOfflineReal(reason);
     }
 
-    private void setOfflineReal(String reason) {
+    private synchronized boolean setOfflineIfCurrent(long connectionGeneration, String reason) {
+        if (_connectionGeneration.get() != connectionGeneration || !isOnline()) {
+            logger.debug("Ignoring setOffline from stale connection generation {} for {}: {}",
+                    connectionGeneration, getName(), reason);
+            return false;
+        }
+        setOfflineReal(reason);
+        return true;
+    }
+
+    private boolean setOfflineIfCurrent(long connectionGeneration, Throwable throwable) {
+        String reason = throwable.getMessage() == null ? "No Message" : throwable.getMessage();
+        logger.info("setOfflineIfCurrent()", throwable);
+        return setOfflineIfCurrent(connectionGeneration, reason);
+    }
+
+    private synchronized void setOfflineReal(String reason) {
         // If remerging and remerge is paused, wake it
         if (isRemerging()) {
             if (_remergePaused.get()) {
@@ -1165,6 +1284,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
         if (_indexWithCommands != null)
             _indexWithCommands.clear();
+        _abandonedCommandIndexes.clear();
         if (_transfers != null)
             _transfers.clear();
         _status = null;
@@ -1196,11 +1316,12 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
      * @throws SlaveUnavailableException
      * @throws SocketTimeoutException
      */
-    private AsyncResponse readAsyncResponse() throws SlaveUnavailableException,
-            SocketTimeoutException {
+    private AsyncResponse readAsyncResponse(long connectionGeneration, Socket connectionSocket,
+                                            ObjectInputStream in)
+            throws SlaveUnavailableException, SocketTimeoutException {
         Object obj;
-        ObjectInputStream in = _sin;
-        if (!isOnline()) {
+        if (!isConnectionGenerationCurrent(connectionGeneration, connectionSocket)
+                || connectionSocket.isClosed()) {
             throw new SlaveUnavailableException("Slave is unavailable");
         }
         while (true) {
@@ -1208,7 +1329,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                 obj = in.readObject();
             } catch (ClassNotFoundException e) {
                 logger.error("ClassNotFound reading AsyncResponse", e);
-                setOffline("ClassNotFound reading AsyncResponse");
+                setOfflineIfCurrent(connectionGeneration, "ClassNotFound reading AsyncResponse");
                 throw new SlaveUnavailableException(
                         "Slave is unavailable - Class Not Found");
             } catch (SocketTimeoutException e) {
@@ -1216,7 +1337,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                 throw e;
             } catch (IOException e) {
                 logger.error("IOException reading AsyncResponse", e);
-                setOffline("IOException reading AsyncResponse");
+                setOfflineIfCurrent(connectionGeneration, "IOException reading AsyncResponse");
                 throw new SlaveUnavailableException(
                         "Slave is unavailable - IOException");
             }
@@ -1253,6 +1374,10 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
         try {
             logger.debug("Sending {}", rac);
+            if (_indexPool != null) {
+                // A reconnect can refill the pool between fetchIndex() and this write.
+                _indexPool.remove(rac.getIndex());
+            }
             out.writeObject(rac);
             out.flush();
             out.reset();
@@ -1325,9 +1450,21 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public void setRenameQueue(ConcurrentLinkedDeque<QueuedOperation> renameQueue) {
-        _renameQueue = Objects.requireNonNullElseGet(renameQueue, ConcurrentLinkedDeque::new);
+        ConcurrentLinkedDeque<QueuedOperation> loadedQueue =
+                Objects.requireNonNullElseGet(renameQueue, ConcurrentLinkedDeque::new);
+        LinkedHashSet<QueuedOperation> uniqueOperations = new LinkedHashSet<>();
+        for (QueuedOperation operation : loadedQueue) {
+            if (operation != null) {
+                uniqueOperations.add(operation);
+            }
+        }
+        _renameQueue = new ConcurrentLinkedDeque<>(uniqueOperations);
+        rebuildQueuedOperationPathIndexes();
         if (!_renameQueue.isEmpty()) {
-            logger.info("Loaded {} persisted queued delete/rename operation(s) for slave {}", _renameQueue.size(), getName());
+            int removedDuplicates = loadedQueue.size() - _renameQueue.size();
+            logger.info("Loaded {} persisted queued delete/rename operation(s) for slave {}{}",
+                    _renameQueue.size(), getName(), removedDuplicates > 0
+                            ? " (removed " + removedDuplicates + " duplicate(s))" : "");
         }
     }
 
@@ -1335,7 +1472,61 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         if (_renameQueue == null) {
             _renameQueue = new ConcurrentLinkedDeque<>();
         }
+        if (_queuedSourcePathCounts == null || _queuedPathCounts == null) {
+            rebuildQueuedOperationPathIndexes();
+        }
         return _renameQueue;
+    }
+
+    private Map<String, Integer> getQueuedSourcePathCounts() {
+        if (_queuedSourcePathCounts == null) {
+            _queuedSourcePathCounts = new HashMap<>();
+        }
+        return _queuedSourcePathCounts;
+    }
+
+    private Map<String, Integer> getQueuedPathCounts() {
+        if (_queuedPathCounts == null) {
+            _queuedPathCounts = new HashMap<>();
+        }
+        return _queuedPathCounts;
+    }
+
+    private void rebuildQueuedOperationPathIndexes() {
+        getQueuedSourcePathCounts().clear();
+        getQueuedPathCounts().clear();
+        if (_renameQueue != null) {
+            for (QueuedOperation operation : _renameQueue) {
+                indexQueuedOperation(operation);
+            }
+        }
+    }
+
+    private void indexQueuedOperation(QueuedOperation operation) {
+        incrementQueuedPath(getQueuedSourcePathCounts(), operation.getSource());
+        incrementQueuedPath(getQueuedPathCounts(), operation.getSource());
+        incrementQueuedPath(getQueuedPathCounts(), operation.getDestination());
+    }
+
+    private void unindexQueuedOperation(QueuedOperation operation) {
+        decrementQueuedPath(getQueuedSourcePathCounts(), operation.getSource());
+        decrementQueuedPath(getQueuedPathCounts(), operation.getSource());
+        decrementQueuedPath(getQueuedPathCounts(), operation.getDestination());
+    }
+
+    private static void incrementQueuedPath(Map<String, Integer> pathCounts, String path) {
+        if (path != null) {
+            String normalizedPath = normalizeQueuedPath(path).toLowerCase(Locale.ENGLISH);
+            pathCounts.merge(normalizedPath, 1, Integer::sum);
+        }
+    }
+
+    private static void decrementQueuedPath(Map<String, Integer> pathCounts, String path) {
+        if (path == null) {
+            return;
+        }
+        String normalizedPath = normalizeQueuedPath(path).toLowerCase(Locale.ENGLISH);
+        pathCounts.computeIfPresent(normalizedPath, (ignored, count) -> count > 1 ? count - 1 : null);
     }
 
     public LinkedBlockingQueue<RemergeMessage> getRemergeQueue() {
@@ -1453,47 +1644,6 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                 }
             }
         }
-    }
-
-    private boolean waitForVfsEventQueueCapacity() throws InterruptedException {
-        int pauseThreshold = getPositiveIntProperty("remerge.vfs.pause.threshold", 50000);
-        int resumeThreshold = Math.min(
-                getPositiveIntProperty("remerge.vfs.resume.threshold", 10000), pauseThreshold - 1);
-        int queueSize = GlobalContext.getEventServiceSlowest().getQueueSize();
-        if (queueSize < pauseThreshold) {
-            return true;
-        }
-
-        String message = "Pausing remerge processing while FIFO3 drains (" + queueSize
-                + " queued VFS events, resume below " + resumeThreshold + ")";
-        logger.warn("{} for slave {}", message, getName());
-        GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
-
-        while (isOnline() && GlobalContext.getEventServiceSlowest().getQueueSize() > resumeThreshold) {
-            Thread.sleep(500L);
-        }
-        if (!isOnline()) {
-            return false;
-        }
-
-        message = "Resuming remerge processing after FIFO3 drained to "
-                + GlobalContext.getEventServiceSlowest().getQueueSize() + " event(s)";
-        logger.info("{} for slave {}", message, getName());
-        GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
-        return true;
-    }
-
-    private int getPositiveIntProperty(String name, int defaultValue) {
-        String value = GlobalContext.getConfig().getMainProperties().getProperty(name, Integer.toString(defaultValue));
-        try {
-            int parsed = Integer.parseInt(value);
-            if (parsed > 0) {
-                return parsed;
-            }
-        } catch (NumberFormatException ignored) {
-        }
-        logger.warn("Invalid {} value '{}', using {}", name, value, defaultValue);
-        return defaultValue;
     }
 
     public void shutdown() {
@@ -1616,9 +1766,6 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                 DirectoryHandle dir = new DirectoryHandle(msg.getDirectory());
 
                 try {
-                    if (!waitForVfsEventQueueCapacity()) {
-                        break;
-                    }
                     dir.remerge(msg.getFiles(), msg.getRslave(), msg.getLastModified(),
                             msg.getRslave().getRemergeSessionStartedAt());
                 } catch (PartialRemergeDirectoryException e) {

@@ -102,12 +102,56 @@ public class RemoteSlaveTest {
     @Test
     public void testQueuedRenameProtectsSourceAndDestinationPaths() {
         RemoteSlave slave = new RemoteSlave("queued-paths");
-        slave.getRenameQueue().add(new QueuedOperation("/old/release", "/new/release"));
+        ConcurrentLinkedDeque<QueuedOperation> queue = new ConcurrentLinkedDeque<>();
+        queue.add(new QueuedOperation("/old/release", "/new/release"));
+        slave.setRenameQueue(queue);
 
         assertTrue(slave.hasQueuedOperationForSourcePath("/old/release/file.rar"));
         assertTrue(slave.hasQueuedOperationForPath("/old/release/file.rar"));
         assertTrue(slave.hasQueuedOperationForPath("/new/release/file.rar"));
         assertFalse(slave.hasQueuedOperationForPath("/unrelated/release"));
+    }
+
+    @Test
+    public void testDuplicateQueuedOperationsAreCoalesced() {
+        QueueRemoteSlave slave = new QueueRemoteSlave("deduplicated");
+
+        slave.queueDelete("/release/file.rar");
+        slave.queueDelete("/release/file.rar");
+        slave.queueRename("/release/file.rar", "/archive/file.rar");
+        slave.queueRename("/release/file.rar", "/archive/file.rar");
+
+        assertEquals(2, slave.getRenameQueue().size());
+        assertEquals(2, slave.getScheduledCommits());
+    }
+
+    @Test
+    public void testPersistedQueueIsDeduplicatedOnLoad() {
+        RemoteSlave slave = new RemoteSlave("loaded-deduplicated");
+        ConcurrentLinkedDeque<QueuedOperation> queue = new ConcurrentLinkedDeque<>();
+        queue.add(new QueuedOperation("/release/file.rar", null));
+        queue.add(new QueuedOperation("/release/file.rar", null));
+        queue.add(new QueuedOperation("/release/file.rar", "/archive/file.rar"));
+
+        slave.setRenameQueue(queue);
+
+        assertEquals(2, slave.getRenameQueue().size());
+        assertTrue(slave.hasQueuedOperationForPath("/release/file.rar"));
+        assertTrue(slave.hasQueuedOperationForPath("/archive/file.rar"));
+    }
+
+    @Test
+    public void testQueueDrainUsesOneFinalSynchronousCommit() throws Exception {
+        QueueRemoteSlave slave = new QueueRemoteSlave("batched-persistence");
+        slave.queueDelete("/release/one.rar");
+        slave.queueDelete("/release/two.rar");
+        slave.resetCommitCounts();
+
+        slave.processQueue();
+
+        assertTrue(slave.getRenameQueue().isEmpty());
+        assertEquals(2, slave.getScheduledCommits());
+        assertEquals(1, slave.getFlushedCommits());
     }
 
     @Test
@@ -229,8 +273,58 @@ public class RemoteSlaveTest {
         }
 
         @Override
-        public void commit() {
+        protected void scheduleQueuedOperationsCommit() {
+            // Keep this unit test independent from the global commit manager.
+        }
+
+        @Override
+        protected void flushQueuedOperationsCommit() {
             // Keep this unit test independent from the on-disk slave manager.
+        }
+    }
+
+    private static class QueueRemoteSlave extends RemoteSlave {
+        private int _scheduledCommits;
+        private int _flushedCommits;
+
+        private QueueRemoteSlave(String name) {
+            super(name);
+        }
+
+        private void queueDelete(String path) {
+            addQueueDelete(path);
+        }
+
+        private void queueRename(String source, String destination) {
+            addQueueRename(source, destination);
+        }
+
+        private int getScheduledCommits() {
+            return _scheduledCommits;
+        }
+
+        private int getFlushedCommits() {
+            return _flushedCommits;
+        }
+
+        private void resetCommitCounts() {
+            _scheduledCommits = 0;
+            _flushedCommits = 0;
+        }
+
+        @Override
+        protected void executeQueuedOperation(QueuedOperation item) {
+            // No remote slave is needed for queue bookkeeping tests.
+        }
+
+        @Override
+        protected void scheduleQueuedOperationsCommit() {
+            _scheduledCommits++;
+        }
+
+        @Override
+        protected void flushQueuedOperationsCommit() {
+            _flushedCommits++;
         }
     }
 }

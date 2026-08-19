@@ -71,13 +71,6 @@ protocol.2=TLSv1.3
 remerge.pause.threshold=250
 remerge.resume.threshold=50
 
-# Pause background remerge reconciliation when the slow VFS/index event queue
-# reaches this size. This prevents large instant remerges from exhausting heap
-# or delaying index updates for current uploads.
-# Default: pause at [50000], resume below [10000]
-remerge.vfs.pause.threshold=50000
-remerge.vfs.resume.threshold=10000
-
 # Enable checksums on remerge
 # Gets checksum from slave for remerged files missing checksum in VFS.
 # Default: [false]
@@ -117,6 +110,12 @@ european.cal=false
 #  RAMDISK = 500
 # Default: [10000]
 disk.commit.delay=10000
+
+# Persist queued slave delete/rename operations on the background commit thread.
+# Repeated queue changes during this interval are written as one slave-file update.
+# A clean master shutdown always drains pending commits immediately.
+# Default: [60000]
+slave.operation.queue.commit.delay=60000
 
 # This can filter you "site slaves" or "!slaves" output.
 # Filter matches from the first characters .startsWith()
