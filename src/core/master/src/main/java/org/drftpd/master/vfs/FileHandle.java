@@ -21,6 +21,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.drftpd.master.exceptions.NoAvailableSlaveException;
 import org.drftpd.master.exceptions.SlaveUnavailableException;
+import org.drftpd.master.event.AsyncThreadSafeEventService;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.slave.exceptions.ObjectNotFoundException;
 
@@ -163,6 +164,10 @@ public class FileHandle extends InodeHandle implements FileHandleInterface {
             FileNotFoundException {
         long checksum = 0L;
         if (getSize() != 0L) {
+            if (AsyncThreadSafeEventService.isEventHandlerThread()) {
+                throw new NoAvailableSlaveException(
+                        "Remote checksum lookup deferred from an asynchronous event handler");
+            }
             while (true) {
                 synchronized (getInode()) {
                     RemoteSlave rslave = getASlaveForFunction();

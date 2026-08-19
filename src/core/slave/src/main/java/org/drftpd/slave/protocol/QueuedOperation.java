@@ -18,6 +18,7 @@
 package org.drftpd.slave.protocol;
 
 import java.io.Serializable;
+import java.util.Objects;
 
 /**
  * @author zubov
@@ -39,17 +40,20 @@ public class QueuedOperation implements Serializable {
         this._destination = dest;
     }
 
+    @Override
     public boolean equals(Object obj) {
-        if (!(obj instanceof QueuedOperation)) {
+        if (this == obj) {
+            return true;
+        }
+        if (!(obj instanceof QueuedOperation arg)) {
             return false;
         }
-
-        QueuedOperation arg = (QueuedOperation) obj;
-        return arg.getSource().equals(getSource());
+        return _source.equals(arg._source) && Objects.equals(_destination, arg._destination);
     }
 
+    @Override
     public int hashCode() {
-        return _source.hashCode();
+        return Objects.hash(_source, _destination);
     }
 
     public String getSource() {

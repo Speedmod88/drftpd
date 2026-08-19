@@ -39,6 +39,10 @@ import org.drftpd.common.util.PropertyHelper;
 import org.drftpd.slave.diskselection.DiskSelectionInterface;
 import org.drftpd.slave.exceptions.FileExistsException;
 import org.drftpd.slave.network.AsyncResponseDiskStatus;
+import org.drftpd.slave.network.AsyncResponseMaxPath;
+import org.drftpd.slave.network.AsyncResponseRemerge;
+import org.drftpd.slave.network.AsyncResponseSSLCheck;
+import org.drftpd.slave.network.AsyncResponseTransfer;
 import org.drftpd.slave.network.AsyncResponseTransferStatus;
 import org.drftpd.slave.network.Transfer;
 import org.drftpd.slave.protocol.SlaveProtocolCentral;
@@ -61,6 +65,12 @@ import java.nio.file.NoSuchFileException;
 import java.security.GeneralSecurityException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.CRC32;
 import java.util.zip.CheckedInputStream;
 
@@ -83,6 +93,12 @@ public class Slave extends SslConfigurationLoader {
 
     private static final int actualTimeout = 60000; // one minute, evaluated on a SocketTimeout
 
+    private static final int RESPONSE_PRIORITY_CONTROL = 0;
+    private static final int RESPONSE_PRIORITY_STATUS = 1;
+    private static final int RESPONSE_PRIORITY_DISK = 2;
+    private static final int RESPONSE_PRIORITY_REMERGE = 3;
+    private static final int MAX_QUEUED_REMERGE_RESPONSES = 16;
+
     private int _bufferSize;
 
     private int _maxPathLength;
@@ -102,6 +118,23 @@ public class Slave extends SslConfigurationLoader {
     private ObjectInputStream _sin;
 
     private ObjectOutputStream _sout;
+
+    private final PriorityBlockingQueue<QueuedResponse> _responseQueue = new PriorityBlockingQueue<>();
+
+    private final Semaphore _remergeResponseSlots =
+            new Semaphore(MAX_QUEUED_REMERGE_RESPONSES, true);
+
+    private final AtomicInteger _pendingRemergeResponses = new AtomicInteger();
+
+    private final AtomicLong _responseSequence = new AtomicLong();
+
+    private final AtomicReference<RuntimeException> _responseWriterFailure = new AtomicReference<>();
+
+    private final Object _responseWriterMonitor = new Object();
+
+    private volatile boolean _responseWriterRunning;
+
+    private Thread _responseWriterThread;
 
     private Map<TransferIndex, Transfer> _transfers;
 
@@ -267,6 +300,7 @@ public class Slave extends SslConfigurationLoader {
         _sout.writeObject(slaveName);
         _sout.flush();
         _sout.reset();
+        startResponseWriter();
     }
 
     public Properties getConfig() {
@@ -346,6 +380,7 @@ public class Slave extends SslConfigurationLoader {
 
     public void shutdown() {
         logger.warn("Shutdown() called");
+        stopResponseWriter();
         if (_sin != null) {
             logger.warn("Closing _sin");
             try {
@@ -631,26 +666,219 @@ public class Slave extends SslConfigurationLoader {
         }
     }
 
-    public synchronized void sendResponse(AsyncResponse response) {
+    public void sendResponse(AsyncResponse response) {
         if (response == null) {
             // handler doesn't return anything or it sends reply on it's own
             // (threaded for example)
             return;
         }
 
-        try {
-            _sout.writeObject(response);
-            _sout.flush();
-            _sout.reset();
-            if (!(response instanceof AsyncResponseTransferStatus)) {
-                logger.debug("Slave wrote response - {}", response);
-            }
+        RuntimeException writerFailure = _responseWriterFailure.get();
+        if (writerFailure != null) {
+            throw writerFailure;
+        }
+        if (!_responseWriterRunning) {
+            throw new IllegalStateException("Slave response writer is not running");
+        }
 
-            if (response instanceof AsyncResponseException) {
-                logger.debug("", ((AsyncResponseException) response).getThrowable());
+        int priority = getResponsePriority(response);
+        boolean remergeResponse = priority == RESPONSE_PRIORITY_REMERGE;
+        if (remergeResponse) {
+            reserveRemergeResponseSlot();
+            _pendingRemergeResponses.incrementAndGet();
+        }
+
+        QueuedResponse queuedResponse = new QueuedResponse(
+                response, priority, _responseSequence.getAndIncrement(), remergeResponse);
+        try {
+            _responseQueue.add(queuedResponse);
+        } catch (RuntimeException e) {
+            if (remergeResponse) {
+                completeRemergeResponse();
+            }
+            throw e;
+        }
+    }
+
+    public void awaitRemergeResponsesFlushed() throws IOException, InterruptedException {
+        synchronized (_responseWriterMonitor) {
+            while (_pendingRemergeResponses.get() > 0) {
+                RuntimeException writerFailure = _responseWriterFailure.get();
+                if (writerFailure != null) {
+                    throw new IOException("Slave response writer failed", writerFailure);
+                }
+                if (!_responseWriterRunning) {
+                    throw new IOException("Slave response writer stopped before remerge responses were flushed");
+                }
+                _responseWriterMonitor.wait(1000L);
+            }
+        }
+    }
+
+    private void startResponseWriter() {
+        _responseWriterFailure.set(null);
+        _responseWriterRunning = true;
+        _responseWriterThread = new Thread(this::writeQueuedResponses, "Slave Response Writer");
+        _responseWriterThread.start();
+    }
+
+    private void stopResponseWriter() {
+        _responseWriterRunning = false;
+        Thread writerThread = _responseWriterThread;
+        if (writerThread != null) {
+            writerThread.interrupt();
+            if (writerThread != Thread.currentThread()) {
+                try {
+                    writerThread.join(1000L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+        synchronized (_responseWriterMonitor) {
+            _responseWriterMonitor.notifyAll();
+        }
+    }
+
+    private void writeQueuedResponses() {
+        try {
+            while (_responseWriterRunning) {
+                QueuedResponse queuedResponse;
+                try {
+                    queuedResponse = _responseQueue.poll(1000L, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    if (!_responseWriterRunning) {
+                        return;
+                    }
+                    continue;
+                }
+                if (queuedResponse == null) {
+                    continue;
+                }
+
+                try {
+                    writeResponse(queuedResponse.response());
+                } finally {
+                    if (queuedResponse.remergeResponse()) {
+                        completeRemergeResponse();
+                    }
+                }
             }
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            RuntimeException failure = new RuntimeException("Unable to write response to master", e);
+            _responseWriterFailure.compareAndSet(null, failure);
+            logger.error("Slave response writer failed", e);
+            _responseWriterRunning = false;
+            setOnline(false);
+            try {
+                if (_socket != null) {
+                    _socket.close();
+                }
+            } catch (IOException ignored) {
+            }
+        } finally {
+            releaseQueuedRemergeResponses();
+            synchronized (_responseWriterMonitor) {
+                _responseWriterMonitor.notifyAll();
+            }
+        }
+    }
+
+    private void writeResponse(AsyncResponse response) throws IOException {
+        _sout.writeObject(response);
+        _sout.flush();
+        _sout.reset();
+        if (!(response instanceof AsyncResponseTransferStatus)) {
+            logger.debug("Slave wrote response - {}", response);
+        }
+
+        if (response instanceof AsyncResponseException) {
+            logger.debug("", ((AsyncResponseException) response).getThrowable());
+        }
+    }
+
+    private void reserveRemergeResponseSlot() {
+        while (_responseWriterRunning) {
+            RuntimeException writerFailure = _responseWriterFailure.get();
+            if (writerFailure != null) {
+                throw writerFailure;
+            }
+            try {
+                if (_remergeResponseSlots.tryAcquire(1L, TimeUnit.SECONDS)) {
+                    return;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted waiting to queue a remerge response", e);
+            }
+        }
+        throw new IllegalStateException("Slave response writer stopped while queueing remerge data");
+    }
+
+    private void completeRemergeResponse() {
+        _pendingRemergeResponses.decrementAndGet();
+        _remergeResponseSlots.release();
+        synchronized (_responseWriterMonitor) {
+            _responseWriterMonitor.notifyAll();
+        }
+    }
+
+    private void releaseQueuedRemergeResponses() {
+        QueuedResponse queuedResponse;
+        while ((queuedResponse = _responseQueue.poll()) != null) {
+            if (queuedResponse.remergeResponse()) {
+                completeRemergeResponse();
+            }
+        }
+    }
+
+    static int getResponsePriority(AsyncResponse response) {
+        if (response instanceof AsyncResponseRemerge) {
+            return RESPONSE_PRIORITY_REMERGE;
+        }
+        if (response instanceof AsyncResponseDiskStatus) {
+            return RESPONSE_PRIORITY_DISK;
+        }
+        if (response instanceof AsyncResponseTransferStatus) {
+            return RESPONSE_PRIORITY_STATUS;
+        }
+        if (response.getClass() == AsyncResponse.class
+                || response instanceof AsyncResponseException
+                || response instanceof AsyncResponseTransfer
+                || response instanceof AsyncResponseMaxPath
+                || response instanceof AsyncResponseSSLCheck) {
+            return RESPONSE_PRIORITY_CONTROL;
+        }
+        return RESPONSE_PRIORITY_STATUS;
+    }
+
+    static final class QueuedResponse implements Comparable<QueuedResponse> {
+        private final AsyncResponse response;
+        private final int priority;
+        private final long sequence;
+        private final boolean remergeResponse;
+
+        QueuedResponse(AsyncResponse response, int priority, long sequence, boolean remergeResponse) {
+            this.response = response;
+            this.priority = priority;
+            this.sequence = sequence;
+            this.remergeResponse = remergeResponse;
+        }
+
+        AsyncResponse response() {
+            return response;
+        }
+
+        boolean remergeResponse() {
+            return remergeResponse;
+        }
+
+        @Override
+        public int compareTo(QueuedResponse other) {
+            int priorityComparison = Integer.compare(priority, other.priority);
+            return priorityComparison != 0
+                    ? priorityComparison
+                    : Long.compare(sequence, other.sequence);
         }
     }
 

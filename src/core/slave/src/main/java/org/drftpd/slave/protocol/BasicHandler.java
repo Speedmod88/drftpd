@@ -222,7 +222,8 @@ public class BasicHandler extends AbstractHandler {
                     skipAgeCutoff += System.currentTimeMillis() - masterTime;
                 }
                 Date cutoffDate = new Date(skipAgeCutoff);
-                remergeDecision = "Instant online: " + (instantOnline ? "enabled" : "disabled")  + ", Partial remerge: enabled. skipping all files last modified before " + cutoffDate.toString() + ".";
+                remergeDecision = "Instant online: " + (instantOnline ? "enabled" : "disabled")
+                        + ", Partial remerge: enabled. skipping all files last modified before " + cutoffDate + ".";
             } else if (instantOnline) {
                 remergeDecision = "Instant online: enabled, Partial remerge: disabled. Remerging in background.";
             } else {
@@ -231,123 +232,12 @@ public class BasicHandler extends AbstractHandler {
             logger.info(remergeDecision);
             sendResponse(new AsyncResponseSiteBotMessage(remergeDecision));
 
-            logger.debug("Remerging start");
-
-            var roots = getSlaveObject().getRoots().getRootList();
-
-            SortedSet<Map.Entry<String, Root.DirectoryContent>> sortedInodeSet = new TreeSet<Map.Entry<String, Root.DirectoryContent>>(new Comparator<Map.Entry<String, Root.DirectoryContent>>() {
-                @Override
-                public int compare(Map.Entry<String, Root.DirectoryContent> o1, Map.Entry<String, Root.DirectoryContent> o2) {
-                    var leftKey = o1.getKey();
-                    long leftKeySeparatorCount = leftKey.codePoints().filter(ch -> ch == File.separatorChar).count();
-                    var leftValue = o1.getValue();
-
-                    var rightKey = o2.getKey();
-                    long rightKeySeparatorCount = rightKey.codePoints().filter(ch -> ch == File.separatorChar).count();
-                    var rightValue = o2.getValue();
-
-                    if (leftKeySeparatorCount < rightKeySeparatorCount) {
-                        return 1;
-                    }
-                    else if (leftKeySeparatorCount > rightKeySeparatorCount) {
-                        return -1;
-                    }
-                    else if (leftValue.dirAttributes.isDirectory() && !rightValue.dirAttributes.isDirectory()) {
-                        return 1;
-                    }
-                    else if (!leftValue.dirAttributes.isDirectory() && rightValue.dirAttributes.isDirectory()) {
-                        return -1;
-                    } else {
-                        return leftKey.compareToIgnoreCase(rightKey);
-                    }
-                }
-            });
-
-            TreeMap<String, Root.DirectoryContent> inodeTree = new TreeMap<>();
-            for (Root root : roots) {
-                logger.debug("Getting file list for root {}", root);
-                root.getAllInodes(inodeTree, () -> !getSlaveObject().isOnline(), true);
+            logger.debug("Remerging started");
+            if (!performSequentialRemerge(partialRemerge, skipAgeCutoff)) {
+                return null;
             }
 
-            var remergeItems = new LinkedList<AsyncResponseRemerge>();
-
-            inodeTree.forEach((dir, dirContent) -> {
-                var node = new AbstractMap.SimpleEntry<String, Root.DirectoryContent>(dir, dirContent);
-                sortedInodeSet.add(node);
-            });
-
-            final long cutoff = skipAgeCutoff;
-            // master expects results depth first, sortedInodeSet's comparator handles it
-            sortedInodeSet.forEach((node) -> {
-                String dir = node.getKey();
-                if (dir == "") {
-                    dir = "/";
-                }
-                Root.DirectoryContent dirContent = node.getValue();
-
-                // Create a sorted list of inodes
-                // -directories before files
-                // -ordered alphabetically, case insensitive
-                List<LightRemoteInode> sortedInodes = new ArrayList<LightRemoteInode>();
-                dirContent.inodes.forEach((name, attr) -> {
-                    var inode = new LightRemoteInode(
-                        name,
-                        "drftpd",
-                        "drftpd",
-                        attr.isDirectory(),
-                        attr.lastModifiedTime().toMillis(),
-                        attr.size()
-                    );
-
-                    sortedInodes.add(inode);
-                });
-
-                sortedInodes.sort(new Comparator<LightRemoteInode>() {
-                    public int compare(LightRemoteInode o1, LightRemoteInode o2) {
-                        if (o1.isDirectory() && !o2.isDirectory()) {
-                            return -1;
-                        }
-                        else if (!o1.isDirectory() && o2.isDirectory()) {
-                            return 1;
-                        } else {
-                            return String.CASE_INSENSITIVE_ORDER.compare(o1.getName(), o2.getName());
-                        }
-                    }
-                });
-
-                var lastModified = dirContent.dirAttributes.lastModifiedTime().toMillis();
-                if (partialRemerge && lastModified <= cutoff) {
-                    logger.trace("Partial remerge skipping {}, lastModified {} <= cutoff {}", dir, lastModified, cutoff);
-                }
-                else
-                {
-                    var arr = new AsyncResponseRemerge(dir, sortedInodes, lastModified);
-                    remergeItems.add(arr);
-                }
-            });
-
-            for (var remergeItem : remergeItems) {
-                while (remergePaused.get() && getSlaveObject().isOnline()) {
-                    logger.debug("Remerging paused, sleeping");
-                    synchronized (remergeWaitObj) {
-                        try {
-                            remergeWaitObj.wait(1000);
-                        } catch (InterruptedException e) {
-                            // Either we have been woken properly in which case we will exit the
-                            // loop or we have not in which case we will wait again.
-                        }
-                    }
-                }
-
-                if (!getSlaveObject().isOnline()) {
-                    // Slave has shut down, no need to continue with remerge
-                    return null;
-                }
-
-                logger.trace("Sending {} to the master", remergeItem.getPath());
-                sendResponse(remergeItem);
-            }
-
+            getSlaveObject().awaitRemergeResponsesFlushed();
             logger.debug("Remerging done");
             return new AsyncResponse(ac.getIndex());
         } catch (Throwable e) {
@@ -357,6 +247,88 @@ public class BasicHandler extends AbstractHandler {
             return new AsyncResponseException(ac.getIndex(), e);
         } finally {
             _remerging.set(false);
+        }
+    }
+
+    private boolean performSequentialRemerge(boolean partialRemerge, long skipAgeCutoff) throws IOException {
+        List<Root> roots = getSlaveObject().getRoots().getRootList();
+        SortedSet<Map.Entry<String, Root.DirectoryContent>> sortedInodeSet = new TreeSet<>((left, right) -> {
+            String leftKey = left.getKey();
+            String rightKey = right.getKey();
+            long leftDepth = leftKey.codePoints().filter(ch -> ch == File.separatorChar).count();
+            long rightDepth = rightKey.codePoints().filter(ch -> ch == File.separatorChar).count();
+
+            if (leftDepth != rightDepth) {
+                return Long.compare(rightDepth, leftDepth);
+            }
+            if (left.getValue().dirAttributes.isDirectory() != right.getValue().dirAttributes.isDirectory()) {
+                return left.getValue().dirAttributes.isDirectory() ? 1 : -1;
+            }
+            return leftKey.compareToIgnoreCase(rightKey);
+        });
+
+        TreeMap<String, Root.DirectoryContent> inodeTree = new TreeMap<>();
+        for (Root root : roots) {
+            logger.debug("Getting file list for root {}", root);
+            root.getAllInodes(inodeTree, () -> !getSlaveObject().isOnline(), true);
+        }
+
+        inodeTree.forEach((dir, dirContent) ->
+                sortedInodeSet.add(new AbstractMap.SimpleEntry<>(dir, dirContent)));
+
+        List<AsyncResponseRemerge> remergeItems = new LinkedList<>();
+        for (Map.Entry<String, Root.DirectoryContent> node : sortedInodeSet) {
+            String dir = node.getKey().isEmpty() ? "/" : node.getKey();
+            Root.DirectoryContent dirContent = node.getValue();
+            List<LightRemoteInode> sortedInodes = new ArrayList<>();
+
+            dirContent.inodes.forEach((name, attr) -> sortedInodes.add(new LightRemoteInode(
+                    name,
+                    "drftpd",
+                    "drftpd",
+                    attr.isDirectory(),
+                    attr.lastModifiedTime().toMillis(),
+                    attr.size()
+            )));
+            sortedInodes.sort((left, right) -> {
+                if (left.isDirectory() != right.isDirectory()) {
+                    return left.isDirectory() ? -1 : 1;
+                }
+                return String.CASE_INSENSITIVE_ORDER.compare(left.getName(), right.getName());
+            });
+
+            long lastModified = dirContent.dirAttributes.lastModifiedTime().toMillis();
+            if (partialRemerge && lastModified <= skipAgeCutoff) {
+                logger.trace("Partial remerge skipping {}, lastModified {} <= cutoff {}",
+                        dir, lastModified, skipAgeCutoff);
+            } else {
+                remergeItems.add(new AsyncResponseRemerge(dir, sortedInodes, lastModified));
+            }
+        }
+
+        for (AsyncResponseRemerge remergeItem : remergeItems) {
+            waitWhileRemergePaused();
+            if (!getSlaveObject().isOnline()) {
+                return false;
+            }
+
+            logger.trace("Sending {} to the master", remergeItem.getPath());
+            sendResponse(remergeItem);
+        }
+        return true;
+    }
+
+    private void waitWhileRemergePaused() {
+        while (remergePaused.get() && getSlaveObject().isOnline() && _remerging.get()) {
+            logger.debug("Remerging paused, sleeping");
+            synchronized (remergeWaitObj) {
+                try {
+                    remergeWaitObj.wait(1000L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
         }
     }
 
@@ -419,21 +391,4 @@ public class BasicHandler extends AbstractHandler {
         return new AsyncResponseSSLCheck(ac.getIndex(), getSlaveObject().getSSLContext() != null);
     }
 
-    static class RemergeItem {
-        private final List<String> _dd;
-        private final AsyncResponseRemerge _arr;
-
-        public RemergeItem(List<String> dd, AsyncResponseRemerge arr) {
-            _dd = dd;
-            _arr = arr;
-        }
-
-        public List<String> getDepthDirectories() {
-            return _dd;
-        }
-
-        public AsyncResponseRemerge getAsyncResponseRemerge() {
-            return _arr;
-        }
-    }
 }

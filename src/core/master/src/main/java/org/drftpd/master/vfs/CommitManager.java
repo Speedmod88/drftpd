@@ -96,11 +96,19 @@ public class CommitManager {
      * @param object The Commitable object
      */
     public void add(Commitable object) {
+        add(object, -1L);
+    }
+
+    /**
+     * Adds a commit with an object-specific delay. Repeated additions of the
+     * same object are coalesced into the already queued write.
+     */
+    public void add(Commitable object, long delay) {
         if (contains(object)) {
             return;
             // object already queued to write
         }
-        _commitQueue.offer(new CommitableWrapper(object));
+        _commitQueue.offer(new CommitableWrapper(object, delay));
         _queueSize.incrementAndGet();
     }
 
@@ -193,10 +201,9 @@ public class CommitManager {
     private void processAllLoop() {
         while (true) {
             long delay = getCommitDelay();
-            long time = System.currentTimeMillis() - delay;
             for (Iterator<CommitableWrapper> iter = _commitQueue.iterator(); iter.hasNext(); ) {
                 CommitableWrapper cw = iter.next();
-                if (cw.getTime() < time || _drainQueue) {
+                if (cw.isReady(System.currentTimeMillis(), delay) || _drainQueue) {
                     if (writeCommitable(cw.getCommitable())) {
                         iter.remove();
                         _queueSize.decrementAndGet();
@@ -227,10 +234,12 @@ public class CommitManager {
     private static class CommitableWrapper {
         private final Commitable _object;
         private final long _time;
+        private final long _delay;
 
-        private CommitableWrapper(Commitable object) {
+        private CommitableWrapper(Commitable object, long delay) {
             _object = object;
             _time = System.currentTimeMillis();
+            _delay = delay;
         }
 
         public Commitable getCommitable() {
@@ -239,6 +248,11 @@ public class CommitManager {
 
         public long getTime() {
             return _time;
+        }
+
+        public boolean isReady(long now, long defaultDelay) {
+            long delay = _delay >= 0L ? _delay : defaultDelay;
+            return now - _time >= delay;
         }
 
         @Override
