@@ -131,7 +131,12 @@ public class MasterProtocolCentral {
             out.reset();
 
             logger.debug("Reading slave response.");
-            HandshakeWrapper hw = (HandshakeWrapper) in.readObject();
+            Object response = in.readObject();
+            if (!(response instanceof HandshakeWrapper)) {
+                String className = response == null ? "null" : response.getClass().getName();
+                throw new ProtocolException("Expected HandshakeWrapper, received " + className);
+            }
+            HandshakeWrapper hw = (HandshakeWrapper) response;
             logger.debug("Slave response read");
             if (!hw.pluginStatus()) {
                 logger.debug("There was an error during the handshake, check logs.", hw.getException());

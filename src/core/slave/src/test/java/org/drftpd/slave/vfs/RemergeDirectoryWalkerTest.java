@@ -111,6 +111,26 @@ public class RemergeDirectoryWalkerTest {
         assertEquals(List.of("created-during-scan.txt"), inodeNames(snapshot(snapshots, "/b")));
     }
 
+    @Test
+    public void testReportsScanProgressBeforeChildFirstEmission() throws IOException {
+        Path root = Files.createDirectories(temporaryDirectory.resolve("progress"));
+        Files.createDirectories(root.resolve("a/leaf"));
+
+        RemergeDirectoryWalker walker = new RemergeDirectoryWalker(List.of(new Root(root.toString())));
+        List<String> scanned = new ArrayList<>();
+        List<String> emitted = new ArrayList<>();
+
+        assertTrue(walker.walk("/", () -> false,
+                (path, directoriesScanned) -> scanned.add(path),
+                snapshot -> {
+                    emitted.add(snapshot.getPath());
+                    return true;
+                }));
+
+        assertEquals(List.of("/", "/a", "/a/leaf"), scanned);
+        assertEquals(List.of("/a/leaf", "/a", "/"), emitted);
+    }
+
     private static void assertBefore(List<RemergeDirectoryWalker.DirectorySnapshot> snapshots,
                                      String child, String parent) {
         int childIndex = indexOf(snapshots, child);

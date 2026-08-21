@@ -71,13 +71,14 @@ public class BasicHandler extends AbstractHandler {
 
         Map<TransferIndex, Transfer> transfers = getSlaveObject().getTransferMap();
 
-        if (!transfers.containsKey(ti)) {
-            return null;
-        }
-
         Transfer t = transfers.get(ti);
+        if (t == null) {
+            logger.debug("Transfer {} was already gone when abort was received", ti);
+            return new AsyncResponse(ac.getIndex());
+        }
+        sendResponse(new AsyncResponse(ac.getIndex()));
         t.abort(ac.getArgsArray()[1]);
-        return new AsyncResponse(ac.getIndex());
+        return null;
     }
 
     // CONNECT
@@ -162,6 +163,9 @@ public class BasicHandler extends AbstractHandler {
         long minSpeed = Long.parseLong(ac.getArgsArray()[5]);
         long maxSpeed = Long.parseLong(ac.getArgsArray()[6]);
         Transfer t = getSlaveObject().getTransfer(transferIndex);
+        if (t == null) {
+            return missingTransferResponse(ac, transferIndex, "receive");
+        }
         t.setMinSpeed(minSpeed);
         t.setMaxSpeed(maxSpeed);
         getSlaveObject().sendResponse(new AsyncResponse(ac.getIndex())); // return calling thread on master
@@ -241,7 +245,8 @@ public class BasicHandler extends AbstractHandler {
             return new AsyncResponse(ac.getIndex());
         } catch (Throwable e) {
             logger.error("Exception during merging", e);
-            sendResponse(new AsyncResponseSiteBotMessage("Exception during merging"));
+            sendResponse(new AsyncResponseSiteBotMessage("Remerge failed: "
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())));
 
             return new AsyncResponseException(ac.getIndex(), e);
         } finally {
@@ -252,11 +257,23 @@ public class BasicHandler extends AbstractHandler {
     private boolean performSequentialRemerge(String basePath, boolean partialRemerge,
                                              long skipAgeCutoff) throws IOException {
         RemergeDirectoryWalker walker = new RemergeDirectoryWalker(
-                getSlaveObject().getRoots().getRootList());
+                getSlaveObject().getRoots().getRootList(),
+                getPositiveIntConfig("remerge.read.attempts", 3),
+                getPositiveLongConfig("remerge.read.retry.delay", 5000L));
         long startedAt = System.currentTimeMillis();
         long[] counts = new long[3];
+        long progressInterval = getPositiveLongConfig("remerge.progress.interval", 30000L);
+        long[] nextProgressAt = new long[]{0L};
 
-        boolean completed = walker.walk(basePath, () -> !getSlaveObject().isOnline(), snapshot -> {
+        boolean completed = walker.walk(basePath, () -> !getSlaveObject().isOnline(),
+                (path, directoriesScanned) -> {
+                    long now = System.currentTimeMillis();
+                    if (now >= nextProgressAt[0]) {
+                        sendResponse(new AsyncResponseRemergeProgress(
+                                path, directoriesScanned, now - startedAt));
+                        nextProgressAt[0] = now + progressInterval;
+                    }
+                }, snapshot -> {
             counts[0]++;
             if (!waitWhileRemergePaused()) {
                 return false;
@@ -284,6 +301,26 @@ public class BasicHandler extends AbstractHandler {
                 completed ? "completed" : "cancelled", counts[0], counts[1], counts[2],
                 System.currentTimeMillis() - startedAt);
         return completed;
+    }
+
+    private int getPositiveIntConfig(String name, int defaultValue) {
+        String value = getSlaveObject().getConfig().getProperty(name, Integer.toString(defaultValue));
+        try {
+            return Math.max(1, Integer.parseInt(value));
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid {} '{}', using {}", name, value, defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private long getPositiveLongConfig(String name, long defaultValue) {
+        String value = getSlaveObject().getConfig().getProperty(name, Long.toString(defaultValue));
+        try {
+            return Math.max(1L, Long.parseLong(value));
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid {} '{}', using {}", name, value, defaultValue);
+            return defaultValue;
+        }
     }
 
     private boolean waitWhileRemergePaused() {
@@ -325,6 +362,9 @@ public class BasicHandler extends AbstractHandler {
         long minSpeed = Long.parseLong(ac.getArgsArray()[5]);
         long maxSpeed = Long.parseLong(ac.getArgsArray()[6]);
         Transfer t = getSlaveObject().getTransfer(transferIndex);
+        if (t == null) {
+            return missingTransferResponse(ac, transferIndex, "send");
+        }
         t.setMinSpeed(minSpeed);
         t.setMaxSpeed(maxSpeed);
         sendResponse(new AsyncResponse(ac.getIndex()));
@@ -336,6 +376,15 @@ public class BasicHandler extends AbstractHandler {
             return new AsyncResponseTransferStatus(new TransferStatus(t
                     .getTransferIndex(), e));
         }
+    }
+
+    private AsyncResponse missingTransferResponse(AsyncCommandArgument ac, TransferIndex transferIndex,
+                                                  String operation) {
+        IOException failure = new IOException(
+                "Transfer " + transferIndex + " no longer exists while handling " + operation);
+        logger.warn("Ignoring stale {} command for missing transfer {}", operation, transferIndex);
+        sendResponse(new AsyncResponse(ac.getIndex()));
+        return new AsyncResponseTransferStatus(new TransferStatus(transferIndex, failure));
     }
 
     // CHECKSUM

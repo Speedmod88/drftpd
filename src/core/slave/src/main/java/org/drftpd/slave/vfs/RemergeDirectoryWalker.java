@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.DirectoryIteratorException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
@@ -40,13 +41,26 @@ public final class RemergeDirectoryWalker {
     private static final Logger logger = LogManager.getLogger(RemergeDirectoryWalker.class);
 
     private final List<Root> roots;
+    private final int readAttempts;
+    private final long retryDelayMillis;
 
     public RemergeDirectoryWalker(Collection<Root> roots) {
+        this(roots, 3, 5000L);
+    }
+
+    public RemergeDirectoryWalker(Collection<Root> roots, int readAttempts, long retryDelayMillis) {
         this.roots = List.copyOf(roots);
+        this.readAttempts = Math.max(1, readAttempts);
+        this.retryDelayMillis = Math.max(0L, retryDelayMillis);
     }
 
     public boolean walk(String basePath, BooleanSupplier cancelled, DirectoryConsumer consumer)
             throws IOException {
+        return walk(basePath, cancelled, (path, directoriesScanned) -> { }, consumer);
+    }
+
+    public boolean walk(String basePath, BooleanSupplier cancelled, ProgressConsumer progressConsumer,
+                        DirectoryConsumer consumer) throws IOException {
         String normalizedBasePath = normalizePath(basePath);
         List<Path> physicalBasePaths = new ArrayList<>();
         for (Root root : roots) {
@@ -68,6 +82,8 @@ public final class RemergeDirectoryWalker {
         if (rootSnapshot == null) {
             throw new FileNotFoundException("Remerge path does not exist on any slave root: " + basePath);
         }
+        long directoriesScanned = 1L;
+        progressConsumer.accept(rootSnapshot.getPath(), directoriesScanned);
 
         Deque<DirectoryFrame> stack = new ArrayDeque<>();
         stack.push(new DirectoryFrame(rootSnapshot));
@@ -86,6 +102,7 @@ public final class RemergeDirectoryWalker {
                     return false;
                 }
                 if (childSnapshot != null) {
+                    progressConsumer.accept(childSnapshot.getPath(), ++directoriesScanned);
                     stack.push(new DirectoryFrame(childSnapshot));
                 } else {
                     logger.debug("Directory disappeared during remerge scan: {}/{}",
@@ -104,6 +121,36 @@ public final class RemergeDirectoryWalker {
 
     private DirectorySnapshot readDirectory(String relativePath, Collection<Path> physicalDirectories,
                                             BooleanSupplier cancelled) throws IOException {
+        IOException lastFailure = null;
+        for (int attempt = 1; attempt <= readAttempts; attempt++) {
+            try {
+                return readDirectoryOnce(relativePath, physicalDirectories, cancelled);
+            } catch (DirectoryIteratorException e) {
+                lastFailure = e.getCause();
+            } catch (IOException e) {
+                lastFailure = e;
+            }
+
+            if (cancelled.getAsBoolean()) {
+                return null;
+            }
+            if (attempt < readAttempts) {
+                logger.warn("Remerge scan could not read /{} (attempt {}/{}); retrying in {} ms: {}",
+                        relativePath, attempt, readAttempts, retryDelayMillis, lastFailure.getMessage());
+                try {
+                    Thread.sleep(retryDelayMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while retrying remerge directory /" + relativePath, e);
+                }
+            }
+        }
+        throw new IOException("Remerge scan failed at /" + relativePath + " after "
+                + readAttempts + " attempt(s)", lastFailure);
+    }
+
+    private DirectorySnapshot readDirectoryOnce(String relativePath, Collection<Path> physicalDirectories,
+                                                 BooleanSupplier cancelled) throws IOException {
         BasicFileAttributes directoryAttributes = null;
         Map<String, BasicFileAttributes> entries = new TreeMap<>();
         Map<String, List<Path>> childDirectories = new TreeMap<>();
@@ -250,6 +297,11 @@ public final class RemergeDirectoryWalker {
     @FunctionalInterface
     public interface DirectoryConsumer {
         boolean accept(DirectorySnapshot snapshot) throws IOException;
+    }
+
+    @FunctionalInterface
+    public interface ProgressConsumer {
+        void accept(String path, long directoriesScanned) throws IOException;
     }
 
     public static final class DirectorySnapshot {
