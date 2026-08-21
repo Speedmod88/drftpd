@@ -146,9 +146,14 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     public static String getSlaveNameFromObjectInput(ObjectInputStream in)
             throws IOException {
         try {
-            return (String) in.readObject();
+            Object slaveName = in.readObject();
+            if (!(slaveName instanceof String)) {
+                String className = slaveName == null ? "null" : slaveName.getClass().getName();
+                throw new IOException("Expected slave name string, received " + className);
+            }
+            return (String) slaveName;
         } catch (ClassNotFoundException e) {
-            throw new RuntimeException(e);
+            throw new IOException("Unable to deserialize slave name", e);
         }
     }
 
@@ -850,11 +855,13 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         _lastNetworkError = System.currentTimeMillis();
         _initRemergeCompleted = false;
         setRemerging(true);
+        _lastRemergeCommandReceived = System.currentTimeMillis();
 
         try {
             GlobalContext.getGlobalContext().getSlaveManager().getProtocolCentral().handshakeWithSlave(this);
         } catch (ProtocolException e) {
             setOfflineIfCurrent(connectionGeneration, e);
+            return;
         }
 
         class InitiateRemergeThread implements Runnable {
@@ -941,7 +948,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
             // Event handlers must remain nonblocking because each service has one consumer.
             if (AsyncThreadSafeEventService.isEventHandlerThread() && count > 100) {
-                _abandonedCommandIndexes.add(index);
+                abandonCommandResponse(index);
                 logger.warn("Deferred command reply after {} ms to keep the event FIFO moving: index={}, slave={}",
                         System.currentTimeMillis() - total, index, _name);
                 throw new SlaveUnavailableException(
@@ -995,6 +1002,16 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             throw new SlaveUnavailableException("Exception on slave that is unable to be handled by the master");
         }
         return rar;
+    }
+
+    public void abandonCommandResponse(String index) {
+        synchronized (_commandMonitor) {
+            if (_indexWithCommands.remove(index) != null) {
+                _indexPool.offer(index);
+            } else {
+                _abandonedCommandIndexes.add(index);
+            }
+        }
     }
 
     private void reportIdleRemergeOncePerMinute() {
@@ -1147,37 +1164,43 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                             putRemergeQueue(new RemergeMessage((AsyncResponseRemerge) ar, this));
                         }
                     }
+                    case "RemergeProgress" -> {
+                        AsyncResponseRemergeProgress progress = (AsyncResponseRemergeProgress) ar;
+                        _lastRemergeCommandReceived = System.currentTimeMillis();
+                        logger.info("Slave {} remerge scan progress: directories={}, elapsed={} ms, current={}",
+                                getName(), progress.getDirectoriesScanned(), progress.getElapsedMillis(),
+                                progress.getPath());
+                    }
                     case "DiskStatus" -> _status = ((AsyncResponseDiskStatus) ar).getDiskStatus();
                     case "TransferStatus" -> {
                         TransferStatus ats = ((AsyncResponseTransferStatus) ar).getTransferStatus();
-                        RemoteTransfer rt;
-                        try {
-                            rt = getTransfer(ats.getTransferIndex());
-                        } catch (SlaveUnavailableException e1) {
-                            // no reason for slave thread to be running if the
-                            // slave is not online
-                            return;
+                        RemoteTransfer rt = _transfers.get(ats.getTransferIndex());
+                        if (rt == null) {
+                            logger.debug("Ignoring late status for transfer {} on slave {}",
+                                    ats.getTransferIndex(), getName());
+                            continue;
                         }
                         rt.updateTransferStatus(ats);
                         if (ats.isFinished()) {
-                            removeTransfer(ats.getTransferIndex());
+                            removeTransfer(ats.getTransferIndex(), rt);
                         }
                     }
                     default -> {
-                        if (_abandonedCommandIndexes.remove(ar.getIndex())) {
-                            _indexPool.offer(ar.getIndex());
-                            logger.debug("Released abandoned command index {} after its late response from {}",
-                                    ar.getIndex(), getName());
-                        } else if (ar.getIndex().equals("SiteBotMessage")) {
+                        if (ar.getIndex().equals("SiteBotMessage")) {
                             String message = ((AsyncResponseSiteBotMessage) ar).getMessage();
                             GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
                         } else {
-                            _indexWithCommands.put(ar.getIndex(), ar);
-                            if (pingIndex != null && pingIndex.equals(ar.getIndex())) {
-                                fetchResponse(pingIndex);
-                                pingIndex = null;
-                            } else {
-                                synchronized (_commandMonitor) {
+                            synchronized (_commandMonitor) {
+                                if (_abandonedCommandIndexes.remove(ar.getIndex())) {
+                                    _indexPool.offer(ar.getIndex());
+                                    logger.debug("Released abandoned command index {} after its late response from {}",
+                                            ar.getIndex(), getName());
+                                } else {
+                                    _indexWithCommands.put(ar.getIndex(), ar);
+                                    if (pingIndex != null && pingIndex.equals(ar.getIndex())) {
+                                        fetchResponse(pingIndex);
+                                        pingIndex = null;
+                                    }
                                     _commandMonitor.notifyAll();
                                 }
                             }
@@ -1200,14 +1223,10 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return Integer.parseInt(getProperty("timeout", Integer.toString(SlaveManager.actualTimeout)));
     }
 
-    private void removeTransfer(TransferIndex transferIndex) {
-        RemoteTransfer transfer = _transfers.remove(transferIndex);
-
-        if (transfer == null) {
-            if (!isOnline()) {
-                return;
-            }
-            throw new IllegalStateException("there is a bug in code");
+    private void removeTransfer(TransferIndex transferIndex, RemoteTransfer transfer) {
+        if (!_transfers.remove(transferIndex, transfer)) {
+            logger.debug("Transfer {} was already removed from slave {}", transferIndex, getName());
+            return;
         }
         if (transfer.getTransferDirection() == Transfer.TRANSFER_RECEIVING_UPLOAD) {
             updateDownloadedBytes(transfer.getTransfered());
@@ -1217,13 +1236,17 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         commit();
     }
 
+    public void finishAbortedTransfer(TransferIndex transferIndex, RemoteTransfer transfer) {
+        removeTransfer(transferIndex, transfer);
+    }
+
     public void setOffline(String reason) {
         logger.debug("setOffline() {}", reason);
         setOfflineReal(reason);
     }
 
     private synchronized boolean setOfflineIfCurrent(long connectionGeneration, String reason) {
-        if (_connectionGeneration.get() != connectionGeneration || !isOnline()) {
+        if (_connectionGeneration.get() != connectionGeneration || _socket == null) {
             logger.debug("Ignoring setOffline from stale connection generation {} for {}: {}",
                     connectionGeneration, getName(), reason);
             return false;
@@ -1239,16 +1262,9 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     private synchronized void setOfflineReal(String reason) {
-        // If remerging and remerge is paused, wake it
+        // The connection is being closed, so only reset local remerge state.
         if (isRemerging()) {
-            if (_remergePaused.get()) {
-                try {
-                    SlaveManager.getBasicIssuer().issueRemergeResumeToSlave(this);
-                } catch (SlaveUnavailableException e) {
-                    // Socket already closed to slave, ignore.
-                }
-                _remergePaused.set(false);
-            }
+            _remergePaused.set(false);
             setRemerging(false);
         }
         // If the slave is still processing the remerge queue clear all
@@ -1345,7 +1361,11 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                 if (obj instanceof AsyncResponse) {
                     return (AsyncResponse) obj;
                 }
-                logger.error("Throwing away an unexpected class - {} - {}", obj.getClass().getName(), obj);
+                String message = "Protocol violation: expected AsyncResponse, received "
+                        + obj.getClass().getName();
+                logger.error(message);
+                setOfflineIfCurrent(connectionGeneration, message);
+                throw new SlaveUnavailableException(message);
             }
         }
     }
@@ -1357,10 +1377,6 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return art.getConnectInfo();
     }
 
-    /**
-     * Will not set a slave offline, it is the job of the calling thread to
-     * decide to do this
-     */
     public synchronized void sendCommand(AsyncCommandArgument rac)
             throws SlaveUnavailableException {
         if (rac == null) {
@@ -1368,6 +1384,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
 
         ObjectOutputStream out = _sout;
+        long connectionGeneration = _connectionGeneration.get();
         if (!isOnline()) {
             throw new SlaveUnavailableException();
         }
@@ -1382,8 +1399,10 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             out.flush();
             out.reset();
         } catch (IOException e) {
-            logger.error("error in sendCommand()", e);
-            throw new SlaveUnavailableException("error sending command (exception already handled)", e);
+            logger.warn("Command write failed for slave {}; retiring connection generation {}",
+                    getName(), connectionGeneration, e);
+            setOfflineIfCurrent(connectionGeneration, "IOException writing command: " + e.getMessage());
+            throw new SlaveUnavailableException("error sending command", e);
         }
         _lastCommandSent = System.currentTimeMillis();
     }

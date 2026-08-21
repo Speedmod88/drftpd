@@ -78,8 +78,7 @@ public class SlaveProtocolCentral {
      *
      * @see HandshakeWrapper
      */
-    @SuppressWarnings("unchecked")
-    public void handshakeWithMaster() {
+    public void handshakeWithMaster() throws ProtocolException {
         HandshakeWrapper hw = new HandshakeWrapper();
         hw.setPluginStatus(true);
 
@@ -89,11 +88,19 @@ public class SlaveProtocolCentral {
 
             if (o instanceof AsyncCommandArgument) {
                 AsyncCommandArgument ac = (AsyncCommandArgument) o;
-                throw new RuntimeException("An error happened: " + ac.getArgs());
+                throw new ProtocolException("Master rejected slave connection: " + ac.getArgs());
             }
 
-            List<String> protocols = (List<String>) o;
-            for (String protocol : protocols) {
+            if (!(o instanceof List<?>)) {
+                String className = o == null ? "null" : o.getClass().getName();
+                throw new ProtocolException("Expected protocol list, received " + className);
+            }
+
+            for (Object protocolObject : (List<?>) o) {
+                if (!(protocolObject instanceof String)) {
+                    throw new ProtocolException("Protocol list contains a non-string value");
+                }
+                String protocol = (String) protocolObject;
                 logger.debug("Checking availability for: {}", protocol);
 
                 if (!_protocols.contains(protocol)) {
@@ -113,8 +120,14 @@ public class SlaveProtocolCentral {
 
         try {
             getSlaveObject().getOutputStream().writeObject(hw);
+            getSlaveObject().getOutputStream().flush();
+            getSlaveObject().getOutputStream().reset();
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            throw new ProtocolException(e);
+        }
+
+        if (!hw.pluginStatus()) {
+            throw new ProtocolException(hw.getException());
         }
     }
 

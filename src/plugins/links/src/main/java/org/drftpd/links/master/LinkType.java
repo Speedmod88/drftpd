@@ -28,6 +28,8 @@ import org.drftpd.slave.exceptions.FileExistsException;
 
 import java.io.FileNotFoundException;
 import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -38,6 +40,8 @@ import java.util.regex.Pattern;
 
 public abstract class LinkType {
     protected static final Logger logger = LogManager.getLogger(LinkType.class);
+    private static final long COLLISION_WARNING_INTERVAL = 3600000L;
+    private static final ConcurrentMap<String, Long> collisionWarnings = new ConcurrentHashMap<>();
 
     private final int _confnum;
     private final String _dirname;
@@ -246,7 +250,8 @@ public abstract class LinkType {
         } catch (FileNotFoundException e) {
             // this is okay, the link does not exist
         } catch (ObjectNotValidException e) {
-            logger.error("There is already a non-Link inode in the place where this link should go. ({})", linkNameFinal, e);
+            warnLinkCollision(linkDir, linkNameFinal,
+                    "A non-link inode already occupies the configured link path");
             return;
         }
 
@@ -263,9 +268,28 @@ public abstract class LinkType {
         try {
             linkDir.createLinkUnchecked(linkNameFinal, targetDir.getPath(), "drftpd", "drftpd");
         } catch (FileExistsException e) {
-            logger.error("{} already exists in {}, this should not happen, we just deleted it", linkNameFinal, linkDir, e);
+            warnLinkCollision(linkDir, linkNameFinal,
+                    "The configured link path was created concurrently");
         } catch (FileNotFoundException e) {
             // linkDir has been deleted, ignore
+        }
+    }
+
+    private void warnLinkCollision(DirectoryHandle linkDir, String linkName, String reason) {
+        String collisionKey = linkDir.getPath() + "/" + linkName;
+        long now = System.currentTimeMillis();
+        Long previous = collisionWarnings.putIfAbsent(collisionKey, now);
+        boolean shouldWarn = previous == null;
+        if (!shouldWarn && now - previous >= COLLISION_WARNING_INTERVAL) {
+            shouldWarn = collisionWarnings.replace(collisionKey, previous, now);
+        }
+        if (shouldWarn) {
+            logger.warn("{}. Preserving the existing inode and skipping link creation: {}",
+                    reason, collisionKey);
+        }
+        if (collisionWarnings.size() > 10000) {
+            collisionWarnings.entrySet().removeIf(
+                    entry -> now - entry.getValue() >= COLLISION_WARNING_INTERVAL);
         }
     }
 

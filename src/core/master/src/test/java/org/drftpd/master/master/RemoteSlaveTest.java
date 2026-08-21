@@ -34,6 +34,8 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.net.SocketException;
 import java.util.HashSet;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -61,6 +63,21 @@ public class RemoteSlaveTest {
         assertEquals(rslave1, rslave1);
         assertEquals(rslave1, rslave2);
         assertNotEquals(rslave1, rslave3);
+    }
+
+    @Test
+    public void testRejectsNonStringSlaveNameDuringHandshake() throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ObjectOutputStream output = new ObjectOutputStream(bytes)) {
+            output.writeObject(42);
+        }
+
+        try (ObjectInputStream input = new ObjectInputStream(
+                new ByteArrayInputStream(bytes.toByteArray()))) {
+            IOException failure = assertThrows(IOException.class,
+                    () -> RemoteSlave.getSlaveNameFromObjectInput(input));
+            assertTrue(failure.getMessage().toLowerCase().contains("expected slave name string"));
+        }
     }
 
     @Test
