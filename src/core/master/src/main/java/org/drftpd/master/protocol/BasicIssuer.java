@@ -153,15 +153,17 @@ public class BasicIssuer extends AbstractBasicIssuer {
     }
 
 
-    public void issueAbortToSlave(RemoteSlave rslave, TransferIndex transferIndex, String reason)
+    public String issueAbortToSlave(RemoteSlave rslave, TransferIndex transferIndex, String reason)
             throws SlaveUnavailableException {
         if (reason == null) {
             reason = "null";
         }
-        rslave.sendCommand(new AsyncCommandArgument("abort", "abort",
+        String index = rslave.fetchIndex();
+        rslave.sendCommand(new AsyncCommandArgument(index, "abort",
                 new String[]{transferIndex.toString(), reason}));
 
-        logger.info("!! issueAbortToSlave done");
+        logger.info("!! issueAbortToSlave done with cmd index '{}'", index);
+        return index;
     }
 
 

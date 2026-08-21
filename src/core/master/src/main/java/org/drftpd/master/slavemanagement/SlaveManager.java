@@ -429,7 +429,8 @@ public class SlaveManager extends SslConfigurationLoader implements Runnable, Ti
                     out.writeObject(new AsyncCommandArgument("", "error", "Already online"));
                     out.flush();
                     socket.close();
-                    throw new IOException("Already online: " + slaveName);
+                    logger.warn("Rejected duplicate connection for online slave {}", slaveName);
+                    continue;
                 }
             } catch (Exception e) {
                 if (socket != null) {

@@ -58,6 +58,8 @@ public class RemoteTransfer {
 
     private TransferPointer _pointer;
 
+    private boolean _abortRequested;
+
     private static final Object TRANSFER_LOCK = new Object();
 
     public RemoteTransfer(ConnectInfo ci, RemoteSlave rslave)
@@ -70,7 +72,10 @@ public class RemoteTransfer {
         _status = ci.getTransferStatus();
     }
 
-    public void updateTransferStatus(TransferStatus ts) {
+    public synchronized void updateTransferStatus(TransferStatus ts) {
+        if (_abortRequested) {
+            return;
+        }
         _status = ts;
 
         if (_status.isFinished()) {
@@ -149,35 +154,21 @@ public class RemoteTransfer {
         return _address;
     }
 
-    public void abort(String reason) {
-        if (_status.isFinished()) {
+    public synchronized void abort(String reason) {
+        if (_status.isFinished() || _abortRequested) {
             // no need to abort a transfer that isn't transferring
             return;
         }
+        _abortRequested = true;
         logger.warn("abort() called for [{}] with reason: {}", toString(), reason);
 
-        // We need to catch the SlaveUnavailableException if thrown but need to unlink before we update _status
-        Throwable t = null;
+        Throwable failure = new IOException("Transfer aborted: " + reason);
 
         try {
-            SlaveManager.getBasicIssuer().issueAbortToSlave(_rslave, getTransferIndex(), reason);
+            String index = SlaveManager.getBasicIssuer().issueAbortToSlave(_rslave, getTransferIndex(), reason);
+            _rslave.abandonCommandResponse(index);
         } catch (SlaveUnavailableException e) {
-            t = e;
-        }
-
-        long sleepStart = System.currentTimeMillis();
-        // We need to wait for the remote transfer to be aborted, but not infinite so add a timeout
-        while (_pointer != null) {
-            logger.debug("abort() - waiting for remote abort to be done");
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                // Ignore
-            }
-            if ((System.currentTimeMillis() - sleepStart) >= 1000) {
-                logger.error("abort() - Timed out waiting 1 second for slave to handle abort()");
-                break;
-            }
+            failure = e;
         }
 
         synchronized (TRANSFER_LOCK) {
@@ -187,10 +178,8 @@ public class RemoteTransfer {
             _pointer = null;
         }
 
-        // We aborted the upload so reset the TransferStatus
-        if (t != null) {
-            _status = new TransferStatus(getTransferIndex(), t);
-        }
+        _rslave.finishAbortedTransfer(getTransferIndex(), this);
+        _status = new TransferStatus(getTransferIndex(), failure);
     }
 
     public void receiveFile(String path, char type, long position, String inetAddress, long minSpeed, long maxSpeed)
@@ -207,7 +196,9 @@ public class RemoteTransfer {
             throw e.getCause();
         }
         synchronized (TRANSFER_LOCK) {
-            _pointer = new TransferPointer(_path, this);
+            if (!_status.isFinished()) {
+                _pointer = new TransferPointer(_path, this);
+            }
         }
     }
 
@@ -223,7 +214,9 @@ public class RemoteTransfer {
             throw e.getCause();
         }
         synchronized (TRANSFER_LOCK) {
-            _pointer = new TransferPointer(_path, this);
+            if (!_status.isFinished()) {
+                _pointer = new TransferPointer(_path, this);
+            }
         }
     }
 

@@ -65,8 +65,13 @@ import java.nio.file.NoSuchFileException;
 import java.security.GeneralSecurityException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -136,6 +141,14 @@ public class Slave extends SslConfigurationLoader {
 
     private Thread _responseWriterThread;
 
+    private final ThreadPoolExecutor _controlCommandExecutor;
+
+    private final ThreadPoolExecutor _transferCommandExecutor;
+
+    private final ThreadPoolExecutor _filesystemCommandExecutor;
+
+    private final ThreadPoolExecutor _remergeCommandExecutor;
+
     private Map<TransferIndex, Transfer> _transfers;
 
     private boolean _uploadChecksums;
@@ -149,10 +162,6 @@ public class Slave extends SslConfigurationLoader {
     private DiskSelectionInterface _diskSelection = null;
 
     private boolean _ignorePartialRemerge;
-
-    private boolean _threadedRemerge;
-
-    private int _threadedThreads;
 
     private int _rootCollectionThreads;
 
@@ -169,6 +178,14 @@ public class Slave extends SslConfigurationLoader {
     public Slave(Properties p) throws IOException, SSLUnavailableException {
         super(SETTING_PREFIX);
         _cfg = p;
+        _controlCommandExecutor = createCommandExecutor("Slave Control Command", p,
+                "command.control.threads", 8, "command.control.queue", 256);
+        _transferCommandExecutor = createCommandExecutor("Slave Transfer Command", p,
+                "command.transfer.threads", 256, "command.transfer.queue", 256);
+        _filesystemCommandExecutor = createCommandExecutor("Slave Filesystem Command", p,
+                "command.filesystem.threads", 8, "command.filesystem.queue", 256);
+        _remergeCommandExecutor = createCommandExecutor("Slave Remerge Command", p,
+                "command.remerge.threads", 1, "command.remerge.queue", 1);
         try {
             _sslConfig = load(Paths.get(""));
             SSLService.getSSLService().registerSSLConfiguration(SETTING_PREFIX, _sslConfig);
@@ -252,14 +269,6 @@ public class Slave extends SslConfigurationLoader {
         }
 
         _ignorePartialRemerge = p.getProperty("ignore.partialremerge", "false").equalsIgnoreCase("true");
-        _threadedRemerge = p.getProperty("threadedremerge", "false").equalsIgnoreCase("true");
-        _threadedThreads = 0;
-        try {
-            _threadedThreads = Integer.parseInt(p.getProperty("threadedthreads", "0"));
-        } catch (NumberFormatException e) {
-            logger.warn("Unable to read threadedthreads from config, falling back to cpu core calculation");
-        }
-
         logger.info("Slave {} connecting to master at {}. Configuration: Conccurrent Root Iteration: {}",
                 slaveName, masterIsa, _concurrentRootIteration);
 
@@ -326,17 +335,11 @@ public class Slave extends SslConfigurationLoader {
 
         Properties p = ConfigLoader.loadConfig("slave.conf");
         Slave s = new Slave(p);
-
-        // Register to master
-        s.getProtocolCentral().handshakeWithMaster();
-
         try {
+            // Register to master
+            s.getProtocolCentral().handshakeWithMaster();
             s.sendResponse(new AsyncResponseDiskStatus(s.getDiskStatus()));
-        } catch (Throwable t) {
-            throw new RuntimeException("Error, check config on master for this slave", t);
-        }
-        s.setOnline(true);
-        try {
+            s.setOnline(true);
             s.listenForCommands();
         } catch (IOException e) {
             throw new RuntimeException("Fatal IOException during main boot() process, Slave stopping", e);
@@ -380,6 +383,7 @@ public class Slave extends SslConfigurationLoader {
 
     public void shutdown() {
         logger.warn("Shutdown() called");
+        stopCommandExecutors();
         stopResponseWriter();
         if (_sin != null) {
             logger.warn("Closing _sin");
@@ -564,7 +568,12 @@ public class Slave extends SslConfigurationLoader {
             AsyncCommandArgument ac;
 
             try {
-                ac = (AsyncCommandArgument) _sin.readObject();
+                Object commandObject = _sin.readObject();
+                if (!(commandObject instanceof AsyncCommandArgument)) {
+                    String className = commandObject == null ? "null" : commandObject.getClass().getName();
+                    throw new IOException("Protocol violation: expected AsyncCommandArgument, received " + className);
+                }
+                ac = (AsyncCommandArgument) commandObject;
 
                 if (ac == null) {
                     continue;
@@ -588,24 +597,79 @@ public class Slave extends SslConfigurationLoader {
             }
 
             logger.debug("Slave fetched {}", ac);
-            class AsyncCommandHandler implements Runnable {
-                private final AsyncCommandArgument _command;
+            dispatchCommand(ac);
+        }
+    }
 
-                public AsyncCommandHandler(AsyncCommandArgument command) {
-                    _command = command;
+    private void dispatchCommand(AsyncCommandArgument command) {
+        ExecutorService executor = getCommandExecutor(command.getName());
+        try {
+            executor.execute(() -> {
+                try {
+                    sendResponse(handleCommand(command));
+                } catch (Throwable e) {
+                    sendResponse(new AsyncResponseException(command.getIndex(), e));
                 }
+            });
+        } catch (RejectedExecutionException e) {
+            logger.warn("Rejecting {} command because its bounded executor is full", command.getName());
+            sendResponse(new AsyncResponseException(command.getIndex(),
+                    new IOException("Slave command executor is busy: " + command.getName())));
+        }
+    }
 
-                public void run() {
-                    try {
-                        sendResponse(handleCommand(_command));
-                    } catch (Throwable e) {
-                        sendResponse(new AsyncResponseException(_command.getIndex(), e));
-                    }
-                }
-            }
-            Thread t = new Thread(new AsyncCommandHandler(ac));
-            t.setName("AsyncCommandHandler - " + ac.getClass());
-            t.start();
+    private ExecutorService getCommandExecutor(String commandName) {
+        if ("remerge".equals(commandName)) {
+            return _remergeCommandExecutor;
+        }
+        if ("receive".equals(commandName) || "send".equals(commandName)) {
+            return _transferCommandExecutor;
+        }
+        if ("delete".equals(commandName) || "rename".equals(commandName)
+                || "checksum".equals(commandName)) {
+            return _filesystemCommandExecutor;
+        }
+        return _controlCommandExecutor;
+    }
+
+    private ThreadPoolExecutor createCommandExecutor(String threadName, Properties properties,
+                                                       String threadProperty, int defaultThreads,
+                                                       String queueProperty, int defaultQueueSize) {
+        int threads = getPositiveIntProperty(properties, threadProperty, defaultThreads);
+        int queueSize = getPositiveIntProperty(properties, queueProperty, defaultQueueSize);
+        AtomicInteger threadSequence = new AtomicInteger();
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable, threadName + "-" + threadSequence.incrementAndGet());
+            thread.setPriority(Thread.NORM_PRIORITY);
+            return thread;
+        };
+        return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(queueSize), threadFactory, new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    private int getPositiveIntProperty(Properties properties, String name, int defaultValue) {
+        String configuredValue = properties.getProperty(name, Integer.toString(defaultValue));
+        try {
+            return Math.max(1, Integer.parseInt(configuredValue));
+        } catch (NumberFormatException e) {
+            logger.warn("Unable to read {} from config, using {}", name, defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private void stopCommandExecutors() {
+        stopCommandExecutor(_remergeCommandExecutor);
+        stopCommandExecutor(_filesystemCommandExecutor);
+        stopCommandExecutor(_transferCommandExecutor);
+        stopCommandExecutor(_controlCommandExecutor);
+    }
+
+    private void stopCommandExecutor(ThreadPoolExecutor executor) {
+        executor.shutdownNow();
+        try {
+            executor.awaitTermination(1L, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -943,14 +1007,6 @@ public class Slave extends SslConfigurationLoader {
 
     public boolean ignorePartialRemerge() {
         return _ignorePartialRemerge;
-    }
-
-    public boolean threadedRemerge() {
-        return _threadedRemerge;
-    }
-
-    public int threadedThreads() {
-        return _threadedThreads;
     }
 
     public int rootCollectionThreads() {

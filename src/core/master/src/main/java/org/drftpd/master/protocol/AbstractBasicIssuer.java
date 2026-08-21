@@ -54,7 +54,7 @@ public abstract class AbstractBasicIssuer extends AbstractIssuer {
 
     public abstract String issueStatusToSlave(RemoteSlave rslave) throws SlaveUnavailableException;
 
-    public abstract void issueAbortToSlave(RemoteSlave rslave, TransferIndex transferIndex, String reason)
+    public abstract String issueAbortToSlave(RemoteSlave rslave, TransferIndex transferIndex, String reason)
             throws SlaveUnavailableException;
 
 

@@ -78,14 +78,28 @@ protocol.2=TLSv1.3
 # Default: [false]
 ignore.partialremerge=false
 
-# Settings this to true will make remerge go faster by threading the remerge process.
-# Default: [true]
-threadedremerge=true
+# A failed filesystem read is retried before the remerge is failed. The slave
+# never reports a successful remerge when a directory remains unreadable.
+# Defaults: attempts [3], delay [5000] milliseconds
+remerge.read.attempts=3
+remerge.read.retry.delay=5000
 
-# When threadedremerge is enabled this controls how many threads will be spawned for the remerge.
-# 0 means it will do a calculation based on cpu's anything higher will override this
-# Default: [0]
-threadedthreads=0
+# Report remerge scan progress to the master log at this interval. This covers
+# time spent scanning before a directory response is ready.
+# Default: [30000] milliseconds
+remerge.progress.interval=30000
+
+# Bounded command executors prevent an unresponsive master connection or a
+# command burst from creating unlimited slave threads.
+# Defaults: control [8/256], transfer [256/256], filesystem [8/256], remerge [1/1]
+command.control.threads=8
+command.control.queue=256
+command.transfer.threads=256
+command.transfer.queue=256
+command.filesystem.threads=8
+command.filesystem.queue=256
+command.remerge.threads=1
+command.remerge.queue=1
 
 # The amount of concurrent root collection actions we allow simultaneously.
 # If you have 1 root this will allow 3 concurrent I/O actions
