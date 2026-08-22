@@ -886,7 +886,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
     public long fetchChecksumFromIndex(String index) throws RemoteIOException,
             SlaveUnavailableException {
-        return ((AsyncResponseChecksum) fetchResponse(index)).getChecksum();
+        return ((AsyncResponseChecksum) fetchResponse(index, getActualTimeout(), false)).getChecksum();
     }
 
     public String fetchIndex() throws SlaveUnavailableException {
@@ -940,6 +940,11 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
      * on the Slave side
      */
     public AsyncResponse fetchResponse(String index, int wait) throws SlaveUnavailableException, RemoteIOException {
+        return fetchResponse(index, wait, true);
+    }
+
+    private AsyncResponse fetchResponse(String index, int wait, boolean disconnectOnTimeout)
+            throws SlaveUnavailableException, RemoteIOException {
         long connectionGeneration = _connectionGeneration.get();
         long total = System.currentTimeMillis();
         int count = 0;
@@ -967,15 +972,23 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             }
 
             //wtf shutdown slave?
-            if ((wait != 0) && ((System.currentTimeMillis() - total) >= wait)) {
+            if ((wait != 0) && ((System.currentTimeMillis() - total) >= wait)
+                    && !_indexWithCommands.containsKey(index)) {
 
                 long duration = (System.currentTimeMillis() - total);
+                String timeoutMessage = "Slave has taken too long while waiting for reply " + index
+                        + " | wait time: " + duration;
 
-                logger.error("Command response timed out: count={}, wait={}, slave={}, index={}",
-                        count, duration, _name, index);
-                setOfflineIfCurrent(connectionGeneration,
-                        "Slave has taken too long while waiting for reply " + index
-                                + " | wait time: " + duration);
+                if (disconnectOnTimeout) {
+                    logger.error("Command response timed out: count={}, wait={}, slave={}, index={}",
+                            count, duration, _name, index);
+                    setOfflineIfCurrent(connectionGeneration, timeoutMessage);
+                } else {
+                    abandonCommandResponse(index);
+                    logger.warn("Checksum response timed out without disconnecting slave: wait={}, slave={}, index={}",
+                            duration, _name, index);
+                    throw new RemoteIOException(new SocketTimeoutException(timeoutMessage));
+                }
             }
 
             if (isRemerging()) {
