@@ -729,6 +729,9 @@ public class Dir extends CommandInterface {
      * http://www.southrivertech.com/support/titanftp/webhelp/xcrc.htm
      * <p>
      * Originally implemented by CuteFTP Pro and Globalscape FTP Server
+     * <p>
+     * XCRC is an explicit integrity request, so always calculate it from the
+     * physical file instead of returning VFS metadata cached during upload.
      */
     public CommandResponse doXCRC(CommandRequest request) {
 
@@ -758,9 +761,9 @@ public class Dir extends CommandInterface {
             }
 
             return new CommandResponse(250, "XCRC Successful. "
-                    + Checksum.formatChecksum(myFile.getCheckSum()));
+                    + Checksum.formatChecksum(myFile.getCheckSumFromSlave()));
         } catch (NoAvailableSlaveException e1) {
-            logger.warn("", e1);
+            logger.warn("Unable to calculate fresh checksum for {}: {}", myFile.getPath(), e1.getMessage());
 
             return new CommandResponse(550, "NoAvailableSlaveException: "
                     + e1.getMessage());

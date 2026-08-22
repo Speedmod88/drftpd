@@ -162,29 +162,33 @@ public class FileHandle extends InodeHandle implements FileHandleInterface {
      */
     public long getCheckSumFromSlave() throws NoAvailableSlaveException,
             FileNotFoundException {
-        long checksum = 0L;
-        if (getSize() != 0L) {
-            if (AsyncThreadSafeEventService.isEventHandlerThread()) {
-                throw new NoAvailableSlaveException(
-                        "Remote checksum lookup deferred from an asynchronous event handler");
-            }
-            while (true) {
-                synchronized (getInode()) {
-                    RemoteSlave rslave = getASlaveForFunction();
-                    try {
-                        checksum = rslave.getCheckSumForPath(getPath());
-                    } catch (IOException e) {
-                        rslave.setOffline(e);
-                        continue;
-                    } catch (SlaveUnavailableException e) {
-                        continue;
-                    }
+        if (getSize() == 0L) {
+            return 0L;
+        }
+        if (AsyncThreadSafeEventService.isEventHandlerThread()) {
+            throw new NoAvailableSlaveException(
+                    "Remote checksum lookup deferred from an asynchronous event handler");
+        }
+
+        synchronized (getInode()) {
+            Exception lastFailure = null;
+            for (RemoteSlave rslave : getAvailableSlaves()) {
+                try {
+                    long checksum = rslave.getCheckSumForPath(getPath());
                     setCheckSum(checksum);
                     return checksum;
+                } catch (IOException | SlaveUnavailableException e) {
+                    lastFailure = e;
+                    logger.warn("Unable to fetch checksum for {} from slave {}: {}",
+                            getPath(), rslave.getName(), e.getMessage());
                 }
             }
+
+            String failureMessage = lastFailure == null || lastFailure.getMessage() == null
+                    ? "" : ": " + lastFailure.getMessage();
+            throw new NoAvailableSlaveException(
+                    "Unable to fetch checksum for " + getPath() + failureMessage);
         }
-        return checksum;
     }
 
     /**

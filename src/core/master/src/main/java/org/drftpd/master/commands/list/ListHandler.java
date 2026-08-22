@@ -26,7 +26,6 @@ import org.drftpd.common.vfs.InodeHandleInterface;
 import org.drftpd.master.GlobalContext;
 import org.drftpd.master.Master;
 import org.drftpd.master.commands.*;
-import org.drftpd.master.exceptions.NoAvailableSlaveException;
 import org.drftpd.master.network.*;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.usermanager.User;
@@ -331,12 +330,11 @@ public class ListHandler extends CommandInterface {
                         isFileHandle = true;
                     }
 
-                    try {
-                        if (isFileHandle && file.getCheckSum() != 0) {
-                            line.append("x.crc32=" + Checksum.formatChecksum(file.getCheckSum()) + ";");
+                    if (isFileHandle) {
+                        long checksum = file.getCheckSumCached();
+                        if (checksum != 0L) {
+                            line.append("x.crc32=" + Checksum.formatChecksum(checksum) + ";");
                         }
-                    } catch (NoAvailableSlaveException e) {
-                        logger.debug("Unable to fetch checksum for: {}", inode.getPath());
                     }
 
                     line.append("size=" + inode.getSize() + ";");

@@ -46,7 +46,7 @@ public class BasicIssuer extends AbstractBasicIssuer {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommandArgument(index, "checksum", path));
 
-        logger.info("!! issueChecksumToSlave done with cmd index '{}'", index);
+        logger.info("Issued checksum command: slave={} index={} path={}", rslave.getName(), index, path);
 
         return index;
     }
