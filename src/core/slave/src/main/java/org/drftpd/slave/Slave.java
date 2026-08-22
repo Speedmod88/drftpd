@@ -147,6 +147,8 @@ public class Slave extends SslConfigurationLoader {
 
     private final ThreadPoolExecutor _filesystemCommandExecutor;
 
+    private final ThreadPoolExecutor _checksumCommandExecutor;
+
     private final ThreadPoolExecutor _remergeCommandExecutor;
 
     private Map<TransferIndex, Transfer> _transfers;
@@ -184,6 +186,8 @@ public class Slave extends SslConfigurationLoader {
                 "command.transfer.threads", 256, "command.transfer.queue", 256);
         _filesystemCommandExecutor = createCommandExecutor("Slave Filesystem Command", p,
                 "command.filesystem.threads", 8, "command.filesystem.queue", 256);
+        _checksumCommandExecutor = createCommandExecutor("Slave Checksum Command", p,
+                "command.checksum.threads", 2, "command.checksum.queue", 256);
         _remergeCommandExecutor = createCommandExecutor("Slave Remerge Command", p,
                 "command.remerge.threads", 1, "command.remerge.queue", 1);
         try {
@@ -619,17 +623,29 @@ public class Slave extends SslConfigurationLoader {
     }
 
     private ExecutorService getCommandExecutor(String commandName) {
+        return switch (getCommandExecutorType(commandName)) {
+            case REMERGE -> _remergeCommandExecutor;
+            case TRANSFER -> _transferCommandExecutor;
+            case FILESYSTEM -> _filesystemCommandExecutor;
+            case CHECKSUM -> _checksumCommandExecutor;
+            case CONTROL -> _controlCommandExecutor;
+        };
+    }
+
+    static CommandExecutorType getCommandExecutorType(String commandName) {
         if ("remerge".equals(commandName)) {
-            return _remergeCommandExecutor;
+            return CommandExecutorType.REMERGE;
         }
         if ("receive".equals(commandName) || "send".equals(commandName)) {
-            return _transferCommandExecutor;
+            return CommandExecutorType.TRANSFER;
         }
-        if ("delete".equals(commandName) || "rename".equals(commandName)
-                || "checksum".equals(commandName)) {
-            return _filesystemCommandExecutor;
+        if ("delete".equals(commandName) || "rename".equals(commandName)) {
+            return CommandExecutorType.FILESYSTEM;
         }
-        return _controlCommandExecutor;
+        if ("checksum".equals(commandName)) {
+            return CommandExecutorType.CHECKSUM;
+        }
+        return CommandExecutorType.CONTROL;
     }
 
     private ThreadPoolExecutor createCommandExecutor(String threadName, Properties properties,
@@ -659,6 +675,7 @@ public class Slave extends SslConfigurationLoader {
 
     private void stopCommandExecutors() {
         stopCommandExecutor(_remergeCommandExecutor);
+        stopCommandExecutor(_checksumCommandExecutor);
         stopCommandExecutor(_filesystemCommandExecutor);
         stopCommandExecutor(_transferCommandExecutor);
         stopCommandExecutor(_controlCommandExecutor);
@@ -944,6 +961,14 @@ public class Slave extends SslConfigurationLoader {
                     ? priorityComparison
                     : Long.compare(sequence, other.sequence);
         }
+    }
+
+    enum CommandExecutorType {
+        CONTROL,
+        TRANSFER,
+        FILESYSTEM,
+        CHECKSUM,
+        REMERGE
     }
 
     /**
