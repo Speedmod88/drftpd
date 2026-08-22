@@ -25,11 +25,14 @@ import org.drftpd.common.extensibility.PluginDependencies;
 import org.drftpd.common.extensibility.PluginInterface;
 import org.drftpd.links.master.LinkManager;
 import org.drftpd.links.master.LinkType;
+import org.drftpd.master.GlobalContext;
 import org.drftpd.master.event.ReloadEvent;
 import org.drftpd.master.event.TransferEvent;
 import org.drftpd.master.exceptions.NoAvailableSlaveException;
 import org.drftpd.master.exceptions.SlaveUnavailableException;
+import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.master.vfs.event.VirtualFileSystemInodeDeletedEvent;
+import org.drftpd.zipscript.master.sfv.event.SFVMemberTransferEvent;
 import org.drftpd.zipscript.master.sfv.vfs.ZipscriptVFSDataSFV;
 
 import java.io.FileNotFoundException;
@@ -68,6 +71,16 @@ public class SFVIncompleteManager implements PluginInterface {
         _linkmanager = LinkManager.getLinkManager();
     }
 
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
+    public void onSFVMemberTransferEvent(SFVMemberTransferEvent event) {
+        if (!event.getCommand().equals("STOR") || !event.getSFVStatus().isFinished()) {
+            return;
+        }
+
+        logger.debug("Removing SFV incomplete links for completed release {}", event.getDirectory().getPath());
+        deleteIncompleteLinks(event.getDirectory());
+    }
+
     /*
      * Checks to see if a .sfv file is uploaded, and creates a missing link
      *
@@ -92,11 +105,7 @@ public class SFVIncompleteManager implements PluginInterface {
         ZipscriptVFSDataSFV sfvData = new ZipscriptVFSDataSFV(event.getDirectory());
         try {
             if (sfvData.getSFVStatus().isFinished()) {
-                for (LinkType link : _linkmanager.getLinks()) {
-                    if (link.getEventType().equals("sfvincomplete")) {
-                        link.doDeleteLink(event.getDirectory());
-                    }
-                }
+                deleteIncompleteLinks(event.getDirectory());
             }
         } catch (FileNotFoundException e) {
             // no .sfv found - ignore
@@ -121,11 +130,7 @@ public class SFVIncompleteManager implements PluginInterface {
             if (vfsevent.getInode().getParent().exists()) {
                 // Check to see if file deleted was .sfv
                 if (vfsevent.getInode().getName().endsWith(".sfv")) {
-                    for (LinkType link : _linkmanager.getLinks()) {
-                        if (link.getEventType().equals("sfvincomplete")) {
-                            link.doDeleteLink(vfsevent.getInode().getParent());
-                        }
-                    }
+                    deleteIncompleteLinks(vfsevent.getInode().getParent());
                 } else {
                     ZipscriptVFSDataSFV sfvData = new ZipscriptVFSDataSFV(vfsevent.getInode().getParent());
                     try {
@@ -144,6 +149,14 @@ public class SFVIncompleteManager implements PluginInterface {
                         // no slaves available for .sfv - ignore
                     }
                 }
+            }
+        }
+    }
+
+    private void deleteIncompleteLinks(DirectoryHandle directory) {
+        for (LinkType link : _linkmanager.getLinks()) {
+            if (link.getEventType().equals("sfvincomplete")) {
+                link.doDeleteLink(directory);
             }
         }
     }
