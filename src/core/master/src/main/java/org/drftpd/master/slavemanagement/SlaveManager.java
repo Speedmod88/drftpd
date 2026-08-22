@@ -47,6 +47,7 @@ import javax.net.ssl.SSLSocket;
 import java.beans.XMLDecoder;
 import java.io.*;
 import java.net.InetSocketAddress;
+import java.net.SocketTimeoutException;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.Map.Entry;
@@ -510,15 +511,21 @@ public class SlaveManager extends SslConfigurationLoader implements Runnable, Ti
             RemoteSlave rSlave = slaveEntry.getKey();
             String index = slaveEntry.getValue();
             try {
-                rSlave.fetchResponse(index, 300000);
+                rSlave.fetchResponseWithoutDisconnect(index, 300000);
             } catch (SlaveUnavailableException e) {
                 rSlave.addQueueDelete(directory.getPath());
             } catch (RemoteIOException e) {
                 if (e.getCause() instanceof FileNotFoundException) {
                     continue;
                 }
-                rSlave.setOffline("IOException deleting file, check logs for specific error");
                 rSlave.addQueueDelete(directory.getPath());
+                if (e.getCause() instanceof SocketTimeoutException) {
+                    logger.warn("Directory delete response timed out for {} on {}; queued for retry without disconnecting slave",
+                            directory.getPath(), rSlave.getName());
+                    continue;
+                }
+
+                rSlave.setOffline("IOException deleting file, check logs for specific error");
                 logger.error("IOException deleting file, file will be deleted when slave comes online", e);
             }
         }
