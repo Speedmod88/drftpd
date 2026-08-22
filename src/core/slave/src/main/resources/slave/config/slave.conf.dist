@@ -91,13 +91,16 @@ remerge.progress.interval=30000
 
 # Bounded command executors prevent an unresponsive master connection or a
 # command burst from creating unlimited slave threads.
-# Defaults: control [8/256], transfer [256/256], filesystem [8/256], remerge [1/1]
+# Checksums use their own pool so long full-file scans cannot delay delete/rename replies.
+# Defaults: control [8/256], transfer [256/256], filesystem [8/256], checksum [2/256], remerge [1/1]
 command.control.threads=8
 command.control.queue=256
 command.transfer.threads=256
 command.transfer.queue=256
 command.filesystem.threads=8
 command.filesystem.queue=256
+command.checksum.threads=2
+command.checksum.queue=256
 command.remerge.threads=1
 command.remerge.queue=1
 

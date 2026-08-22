@@ -772,14 +772,21 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             return;
         }
         try {
-            fetchResponse(SlaveManager.getBasicIssuer().issueDeleteToSlave(this, path), 300000);
+            fetchResponseWithoutDisconnect(
+                    SlaveManager.getBasicIssuer().issueDeleteToSlave(this, path), 300000);
         } catch (RemoteIOException e) {
             if (e.getCause() instanceof FileNotFoundException) {
                 return;
             }
 
-            setOffline("IOException deleting file, check logs for specific error");
             addQueueDelete(path);
+            if (e.getCause() instanceof SocketTimeoutException) {
+                logger.warn("Delete response timed out for {} on {}; queued for retry without disconnecting slave",
+                        path, getName());
+                return;
+            }
+
+            setOffline("IOException deleting file, check logs for specific error");
             logger.error("IOException deleting file, file will be deleted when slave comes online", e);
         } catch (SlaveUnavailableException e) {
             // Already offline and we ARE successful in deleting the file
@@ -886,7 +893,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
     public long fetchChecksumFromIndex(String index) throws RemoteIOException,
             SlaveUnavailableException {
-        return ((AsyncResponseChecksum) fetchResponse(index, getActualTimeout(), false)).getChecksum();
+        return ((AsyncResponseChecksum) fetchResponseWithoutDisconnect(index, getActualTimeout())).getChecksum();
     }
 
     public String fetchIndex() throws SlaveUnavailableException {
@@ -943,6 +950,11 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return fetchResponse(index, wait, true);
     }
 
+    public AsyncResponse fetchResponseWithoutDisconnect(String index, int wait)
+            throws SlaveUnavailableException, RemoteIOException {
+        return fetchResponse(index, wait, false);
+    }
+
     private AsyncResponse fetchResponse(String index, int wait, boolean disconnectOnTimeout)
             throws SlaveUnavailableException, RemoteIOException {
         long connectionGeneration = _connectionGeneration.get();
@@ -985,7 +997,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                     setOfflineIfCurrent(connectionGeneration, timeoutMessage);
                 } else {
                     abandonCommandResponse(index);
-                    logger.warn("Checksum response timed out without disconnecting slave: wait={}, slave={}, index={}",
+                    logger.warn("Command response timed out without disconnecting slave: wait={}, slave={}, index={}",
                             duration, _name, index);
                     throw new RemoteIOException(new SocketTimeoutException(timeoutMessage));
                 }
