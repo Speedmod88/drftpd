@@ -772,14 +772,21 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             return;
         }
         try {
-            fetchResponse(SlaveManager.getBasicIssuer().issueDeleteToSlave(this, path), 300000);
+            fetchResponseWithoutDisconnect(
+                    SlaveManager.getBasicIssuer().issueDeleteToSlave(this, path), 300000);
         } catch (RemoteIOException e) {
             if (e.getCause() instanceof FileNotFoundException) {
                 return;
             }
 
-            setOffline("IOException deleting file, check logs for specific error");
             addQueueDelete(path);
+            if (e.getCause() instanceof SocketTimeoutException) {
+                logger.warn("Delete response timed out for {} on {}; queued for retry without disconnecting slave",
+                        path, getName());
+                return;
+            }
+
+            setOffline("IOException deleting file, check logs for specific error");
             logger.error("IOException deleting file, file will be deleted when slave comes online", e);
         } catch (SlaveUnavailableException e) {
             // Already offline and we ARE successful in deleting the file
@@ -940,6 +947,16 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
      * on the Slave side
      */
     public AsyncResponse fetchResponse(String index, int wait) throws SlaveUnavailableException, RemoteIOException {
+        return fetchResponse(index, wait, true);
+    }
+
+    public AsyncResponse fetchResponseWithoutDisconnect(String index, int wait)
+            throws SlaveUnavailableException, RemoteIOException {
+        return fetchResponse(index, wait, false);
+    }
+
+    private AsyncResponse fetchResponse(String index, int wait, boolean disconnectOnTimeout)
+            throws SlaveUnavailableException, RemoteIOException {
         long connectionGeneration = _connectionGeneration.get();
         long total = System.currentTimeMillis();
         int count = 0;
@@ -967,15 +984,23 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             }
 
             //wtf shutdown slave?
-            if ((wait != 0) && ((System.currentTimeMillis() - total) >= wait)) {
+            if ((wait != 0) && ((System.currentTimeMillis() - total) >= wait)
+                    && !_indexWithCommands.containsKey(index)) {
 
                 long duration = (System.currentTimeMillis() - total);
+                String timeoutMessage = "Slave has taken too long while waiting for reply " + index
+                        + " | wait time: " + duration;
 
-                logger.error("Command response timed out: count={}, wait={}, slave={}, index={}",
-                        count, duration, _name, index);
-                setOfflineIfCurrent(connectionGeneration,
-                        "Slave has taken too long while waiting for reply " + index
-                                + " | wait time: " + duration);
+                if (disconnectOnTimeout) {
+                    logger.error("Command response timed out: count={}, wait={}, slave={}, index={}",
+                            count, duration, _name, index);
+                    setOfflineIfCurrent(connectionGeneration, timeoutMessage);
+                } else {
+                    abandonCommandResponse(index);
+                    logger.warn("Command response timed out without disconnecting slave: wait={}, slave={}, index={}",
+                            duration, _name, index);
+                    throw new RemoteIOException(new SocketTimeoutException(timeoutMessage));
+                }
             }
 
             if (isRemerging()) {

@@ -21,9 +21,20 @@ import org.junit.jupiter.api.Test;
 import java.util.Collections;
 import java.util.concurrent.PriorityBlockingQueue;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 public class SlaveResponseQueueTest {
+
+    @Test
+    public void testChecksumCommandsDoNotShareDeleteRenameExecutor() {
+        assertEquals(Slave.CommandExecutorType.CHECKSUM,
+                Slave.getCommandExecutorType("checksum"));
+        assertEquals(Slave.CommandExecutorType.FILESYSTEM,
+                Slave.getCommandExecutorType("delete"));
+        assertEquals(Slave.CommandExecutorType.FILESYSTEM,
+                Slave.getCommandExecutorType("rename"));
+    }
 
     @Test
     public void testControlResponsesOvertakeStatusAndRemergeResponses() {
