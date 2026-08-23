@@ -491,7 +491,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             ensureConnectionCurrent(connectionGeneration);
             setAvailable(true);
             logger.info("Slave added: '{}' status: {}", getName(), _status);
-            GlobalContext.getEventService().publishAsync(new SlaveEvent("ADDSLAVE", this));
+            publishAddSlaveEvent();
         }
         ensureConnectionCurrent(connectionGeneration);
         String remergeIndex;
@@ -523,7 +523,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
         if (_remergePaused.get()) {
             String message = ("Remerge was paused on slave after completion, issuing resume so not to break manual remerges");
-            GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+            GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", message, this));
             logger.debug("Remerge was paused on slave after completion, issuing resume so not to break manual remerges");
             SlaveManager.getBasicIssuer().issueRemergeResumeToSlave(this);
             _remergePaused.set(false);
@@ -701,12 +701,23 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
         if (GlobalContext.getConfig().getMainProperties().getProperty("partial.remerge.mode").equalsIgnoreCase("instant")) {
             setRemerging(false);
-            GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", "Remerge queueprocess finished", this));
+            GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", "Remerge queueprocess finished", this));
         } else {
             setAvailable(true);
             setRemerging(false);
             logger.info("Slave added: '{}' status: {}", getName(), _status);
-            GlobalContext.getEventService().publishAsync(new SlaveEvent("ADDSLAVE", this));
+            publishAddSlaveEvent();
+        }
+    }
+
+    private void publishAddSlaveEvent() {
+        try {
+            logger.info("Publishing ADDSLAVE event for slave {}", getName());
+            GlobalContext.publishSlaveEvent(
+                    new SlaveEvent("ADDSLAVE", this, getSlaveStatus()));
+        } catch (SlaveUnavailableException e) {
+            logger.warn("Unable to snapshot status while publishing ADDSLAVE for {}", getName(), e);
+            GlobalContext.publishSlaveEvent(new SlaveEvent("ADDSLAVE", this));
         }
     }
 
@@ -720,7 +731,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
         String message = "Running " + queuedOperations + " queued delete/rename operation(s) after remerge";
         logger.info("{} for slave {}", message, getName());
-        GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+        GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", message, this));
         try {
             while (true) {
                 processQueue();
@@ -1213,7 +1224,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                     default -> {
                         if (ar.getIndex().equals("SiteBotMessage")) {
                             String message = ((AsyncResponseSiteBotMessage) ar).getMessage();
-                            GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+                            GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", message, this));
                         } else {
                             synchronized (_commandMonitor) {
                                 if (_abandonedCommandIndexes.remove(ar.getIndex())) {
@@ -1287,6 +1298,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     private synchronized void setOfflineReal(String reason) {
+        boolean hadConnection = _socket != null;
         // The connection is being closed, so only reset local remerge state.
         if (isRemerging()) {
             _remergePaused.set(false);
@@ -1330,11 +1342,15 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             _transfers.clear();
         _status = null;
 
-        if (_isAvailable) {
-            GlobalContext.getEventService().publishAsync(
+        boolean publishDeleteEvent = hadConnection || _isAvailable;
+        logger.info("Publishing {} event for slave {}: reason={}, hadConnection={}, available={}",
+                publishDeleteEvent ? "DELSLAVE" : "MSGSLAVE", getName(), reason,
+                hadConnection, _isAvailable);
+        if (publishDeleteEvent) {
+            GlobalContext.publishSlaveEvent(
                     new SlaveEvent("DELSLAVE", reason, this));
         } else {
-            GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", reason, this));
+            GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", reason, this));
         }
 
         setAvailable(false);
@@ -1614,7 +1630,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         String message = "Partial remerge failed at " + path + " (case " + e.getMergeCase()
                 + "). Falling back to full instant remerge";
         logger.warn("{} for slave {}", message, getName(), e);
-        GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+        GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", message, this));
 
         new Thread(() -> runInstantFullRemergeFallback(e), "RemergeFallback - " + getName()).start();
         return true;
@@ -1653,7 +1669,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
             if (_remergePaused.get()) {
                 String message = "Remerge was paused on slave after fallback completion, issuing resume so not to break manual remerges";
-                GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
+                GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", message, this));
                 logger.debug(message);
                 resumeRemergeIfPaused();
             }

@@ -331,7 +331,7 @@ public class SlaveManagement extends CommandInterface {
 
         if (rslave._remergePaused.get()) {
             String message = "Remerge was paused on slave after completion, issuing resume so not to break manual remerges";
-            GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, rslave));
+            GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", message, rslave));
             try {
                 SlaveManager.getBasicIssuer().issueRemergeResumeToSlave(rslave);
                 rslave._remergePaused.set(false);
@@ -346,7 +346,7 @@ public class SlaveManagement extends CommandInterface {
         }
 
         String message = ("Remerge queueprocess finished");
-        GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, rslave));
+        GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", message, rslave));
 
         return StandardCommandManager.genericResponse("RESPONSE_200_COMMAND_OK");
     }
