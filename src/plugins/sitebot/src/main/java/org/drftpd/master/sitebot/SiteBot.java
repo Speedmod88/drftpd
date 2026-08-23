@@ -106,6 +106,7 @@ public class SiteBot implements ReplyConstants, Runnable {
     private CommandManagerInterface _commandManager;
     // An ArrayList to hold references to announce plugins we have connected
     private final ArrayList<AbstractAnnouncer> _announcers = new ArrayList<>();
+    private volatile boolean _announcersLoaded;
     private AnnounceConfig _announceConfig = null;
     private final ArrayList<String> _eventTypes = new ArrayList<>();
 
@@ -181,6 +182,8 @@ public class SiteBot implements ReplyConstants, Runnable {
 
         // Find and start announcers
         loadAnnouncers(_confDir);
+        _announcersLoaded = true;
+        notifyAnnouncersConnected();
 
         // Find all Bot Listeners
         loadListeners();
@@ -954,6 +957,7 @@ public class SiteBot implements ReplyConstants, Runnable {
 
         // Join channels
         joinChannels();
+        notifyAnnouncersConnected();
     }
 
     private void slowDown() {
@@ -1005,6 +1009,7 @@ public class SiteBot implements ReplyConstants, Runnable {
      * performs no actions and may be overridden as required.
      */
     protected void onDisconnect() {
+        notifyAnnouncersDisconnected();
         if (_outputThread != null) {
             _outputThread.interrupt();
         }
@@ -2971,6 +2976,10 @@ public class SiteBot implements ReplyConstants, Runnable {
             }
         }
         _isTerminated = true;
+        notifyAnnouncersDisconnected();
+        for (AbstractAnnouncer announcer : _announcers) {
+            announcer.stop();
+        }
         quitServer(reason);
         _pool.shutdown();
         dispose();
@@ -2978,6 +2987,24 @@ public class SiteBot implements ReplyConstants, Runnable {
 
     public void setDisconnected(boolean state) {
         _userDisconnected = state;
+    }
+
+    private void notifyAnnouncersConnected() {
+        if (!_announcersLoaded || !isConnected()) {
+            return;
+        }
+        for (AbstractAnnouncer announcer : _announcers) {
+            announcer.onBotConnected();
+        }
+    }
+
+    private void notifyAnnouncersDisconnected() {
+        if (!_announcersLoaded) {
+            return;
+        }
+        for (AbstractAnnouncer announcer : _announcers) {
+            announcer.onBotDisconnected();
+        }
     }
 
     class CommandThread implements Runnable {

@@ -46,6 +46,12 @@ public abstract class AbstractAnnouncer {
 
     protected abstract void setResourceBundle(ResourceBundle bundle);
 
+    protected void onBotConnected() {
+    }
+
+    protected void onBotDisconnected() {
+    }
+
     protected void sayOutput(String output, AnnounceWriter writer) {
         StringTokenizer st = new StringTokenizer(output, "\n");
         while (st.hasMoreTokens()) {
