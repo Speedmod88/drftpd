@@ -222,6 +222,11 @@ public class Transfer {
         return _direction == Transfer.TRANSFER_RECEIVING_UPLOAD;
     }
 
+    public boolean isReceivingUploadForPath(String path) {
+        return isReceivingUploading() && _pathForUpload != null
+                && _pathForUpload.equalsIgnoreCase(path);
+    }
+
     public boolean isSendingUploading() {
         return _direction == Transfer.TRANSFER_SENDING_DOWNLOAD;
     }

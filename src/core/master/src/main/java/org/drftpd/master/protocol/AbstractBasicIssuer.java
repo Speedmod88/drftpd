@@ -39,6 +39,8 @@ public abstract class AbstractBasicIssuer extends AbstractIssuer {
 
     public abstract String issueDeleteToSlave(RemoteSlave rslave, String sourceFile) throws SlaveUnavailableException;
 
+    public abstract String issueDeleteZeroByteToSlave(RemoteSlave rslave, String sourceFile) throws SlaveUnavailableException;
+
     public abstract String issueListenToSlave(RemoteSlave rslave, boolean isSecureTransfer,
                                               boolean useSSLClientMode, boolean useLanIP) throws SlaveUnavailableException, SSLUnavailableException;
 
