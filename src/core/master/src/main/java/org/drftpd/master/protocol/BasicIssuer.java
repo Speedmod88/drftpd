@@ -166,6 +166,16 @@ public class BasicIssuer extends AbstractBasicIssuer {
         return index;
     }
 
+    public String issueDeleteZeroByteToSlave(RemoteSlave rslave, String sourceFile) throws SlaveUnavailableException {
+        String index = rslave.fetchIndex();
+        rslave.sendCommand(new AsyncCommandArgument(index, "deletezero", sourceFile));
+
+        logger.info("Issued zero-byte cleanup command: slave={} index={} path={}",
+                rslave.getName(), index, sourceFile);
+
+        return index;
+    }
+
 
     public String issueSendToSlave(RemoteSlave rslave, String name, char c, long position,
                                    String inetAddress, TransferIndex tindex, long minSpeed, long maxSpeed) throws SlaveUnavailableException {

@@ -895,6 +895,18 @@ public class DataConnectionHandler extends CommandInterface {
                 // cannot use this FileHandle for anything but name, parent, and path
                 // it doesn't exist in the VFS yet!
                 try {
+                    if (!ts.getTransferSlave().prepareQueuedUploadRetry(fh.getPath())) {
+                        return StandardCommandManager.genericResponse(
+                                "RESPONSE_553_REQUESTED_ACTION_NOT_TAKEN_FILE_EXISTS");
+                    }
+                } catch (SlaveUnavailableException e) {
+                    return StandardCommandManager.genericResponse("RESPONSE_450_SLAVE_UNAVAILABLE");
+                } catch (IOException e) {
+                    logger.warn("Unable to prepare queued upload retry on slave {} for {}",
+                            ts.getTransferSlave().getName(), fh.getPath(), e);
+                    return StandardCommandManager.genericResponse("RESPONSE_450_SLAVE_UNAVAILABLE");
+                }
+                try {
                     ts.setTransferFile(fh.getParent().createFile(conn.getUserNull(), fh.getName(), ts.getTransferSlave()));
                     ts.setTransferFileCreated(true);
                 } catch (FileExistsException e) {
