@@ -187,6 +187,18 @@ public class RemoteSlaveTest {
         assertEquals(0L, slave.getRemergeSessionStartedAt());
     }
 
+    @Test
+    public void testRemergeCompletionMessageIncludesElapsedTime() {
+        assertEquals("Remerge queueprocess finished in 2m 10s",
+                RemoteSlave.formatRemergeCompletionMessage(1_000L, 131_000L));
+    }
+
+    @Test
+    public void testRemergeCompletionMessageWithoutStartKeepsLegacyText() {
+        assertEquals("Remerge queueprocess finished",
+                RemoteSlave.formatRemergeCompletionMessage(0L, 131_000L));
+    }
+
     public void testAddNetworkError()
             throws InterruptedException {
         DummySlaveManager sm = new DummySlaveManager();
