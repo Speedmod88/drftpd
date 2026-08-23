@@ -44,6 +44,7 @@ import org.drftpd.master.exceptions.SlaveUnavailableException;
 import org.drftpd.master.io.SafeFileOutputStream;
 import org.drftpd.master.network.RemoteTransfer;
 import org.drftpd.master.stats.ExtendedTimedStats;
+import org.drftpd.master.util.Time;
 import org.drftpd.master.usermanager.Entity;
 import org.drftpd.master.vfs.CommitManager;
 import org.drftpd.master.vfs.Commitable;
@@ -581,6 +582,13 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return _remergeSessionStartedAt;
     }
 
+    public static String formatRemergeCompletionMessage(long startedAt, long completedAt) {
+        if (startedAt <= 0L || completedAt < startedAt) {
+            return "Remerge queueprocess finished";
+        }
+        return "Remerge queueprocess finished in " + Time.formatTime(completedAt - startedAt);
+    }
+
     /**
      * @return true if CRC is to be added on remerge for files missing CRC in VFS
      */
@@ -694,6 +702,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     protected void makeAvailableAfterRemerge() {
+        long remergeStartedAt = getRemergeSessionStartedAt();
         _initRemergeCompleted = true;
         setProperty("lastConnect", Long.toString(System.currentTimeMillis()));
         if (!processQueueAfterRemerge()) {
@@ -701,7 +710,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
         if (GlobalContext.getConfig().getMainProperties().getProperty("partial.remerge.mode").equalsIgnoreCase("instant")) {
             setRemerging(false);
-            GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", "Remerge queueprocess finished", this));
+            String message = formatRemergeCompletionMessage(remergeStartedAt, System.currentTimeMillis());
+            GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, this));
         } else {
             setAvailable(true);
             setRemerging(false);
