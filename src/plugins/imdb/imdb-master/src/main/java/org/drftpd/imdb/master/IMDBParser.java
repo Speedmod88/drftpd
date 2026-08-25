@@ -17,25 +17,36 @@
  */
 package org.drftpd.imdb.master;
 
-import org.apache.commons.lang3.math.NumberUtils;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.drftpd.master.sitebot.SiteBot;
 import org.drftpd.master.util.HttpUtils;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
+ * Retrieves IMDb metadata through the Tiffara JSON API.
+ *
  * @author lh
  */
 public class IMDBParser {
     private static final Logger logger = LogManager.getLogger(IMDBParser.class);
+    private static final String IMDB_TITLE_URL = "https://www.imdb.com/title/";
+    private static final Pattern IMDB_ID_PATTERN = Pattern.compile("(tt\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final int SEARCH_LIMIT = 10;
 
-    private static final String _baseUrl = "https://imdb.com";
-    private static final String _searchUrl = "https://imdb.com/find?s=all&q=";
+    private final String _apiBaseUrl;
+    private final HttpRetriever _httpRetriever;
 
     private String _title;
     private Integer _year;
@@ -50,6 +61,15 @@ public class IMDBParser {
     private Integer _runtime;
     private String _searchString;
     private boolean _foundMovie;
+
+    public IMDBParser() {
+        this(IMDBConfig.getInstance().getTiffaraApiUrl(), HttpUtils::retrieveHttpAsString);
+    }
+
+    IMDBParser(String apiBaseUrl, HttpRetriever httpRetriever) {
+        _apiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
+        _httpRetriever = httpRetriever;
+    }
 
     public String getTitle() { return foundMovie() ? _title : "N|A"; }
 
@@ -76,85 +96,92 @@ public class IMDBParser {
     public boolean foundMovie() { return _foundMovie; }
 
     public void doSEARCH(String searchString) {
+        resetResult();
         _searchString = searchString;
+        if (searchString == null || searchString.isBlank()) {
+            return;
+        }
+
+        String searchUrl = _apiBaseUrl + "/search/titles?query=" + searchString + "&limit=" + SEARCH_LIMIT;
         try {
-            String urlString = _searchUrl + searchString;
-
-            String data = HttpUtils.retrieveHttpAsString(urlString);
-
-            if (data.indexOf("<b>No Matches.</b>") > 0) {
-                _foundMovie = false;
+            JsonObject response = retrieveJsonObject(searchUrl);
+            JsonArray titles = getArray(response, "titles");
+            if (titles == null) {
                 return;
             }
 
-            int titleIndex = data.indexOf("<a name=\"tt\">");
-            if (titleIndex > 0) {
-                int start = data.indexOf("/title/tt", titleIndex);
-                if (start > 0) {
-                    int end = data.indexOf("/", start + "/title/tt".length());
-                    _url = data.substring(start, end);
-                    _url = _baseUrl + _url;
+            for (JsonElement element : titles) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject candidate = element.getAsJsonObject();
+                if (!isMovieType(getString(candidate, "type"))) {
+                    continue;
+                }
+                String id = getString(candidate, "id");
+                if (isImdbId(id)) {
+                    _foundMovie = loadTitle(id);
+                    return;
                 }
             }
         } catch (Exception e) {
-            logger.error("", e);
-            _foundMovie = false;
-            return;
+            logLookupFailure(searchUrl, e);
         }
-        if (_url == null) {
-            _foundMovie = false;
-            return;
-        }
-        _foundMovie = getInfo();
     }
 
     public void doNFO(String url) {
-        _url = url;
-        _foundMovie = getInfo();
+        resetResult();
+        String id = extractImdbId(url);
+        if (id == null) {
+            logger.warn("Unable to extract an IMDb title ID from URL: {}", url);
+            return;
+        }
+        _foundMovie = loadTitle(id);
     }
 
-    private boolean getInfo() {
+    private boolean loadTitle(String id) {
+        id = id.toLowerCase(Locale.ROOT);
+        String titleUrl = _apiBaseUrl + "/titles/" + id;
         try {
-            String url = _url + "/reference";
-
-            String data = HttpUtils.retrieveHttpAsString(url);
-
-            if (!data.contains("<meta property='og:type' content=\"video.movie\" />")) {
-                logger.warn("Request for IMDB info for a Tv Show, this is not handled by this plugin. URL:{}", url);
+            JsonObject title = retrieveJsonObject(titleUrl);
+            String type = getString(title, "type");
+            if (!isMovieType(type)) {
+                logger.warn("Request for IMDb info for unsupported title type '{}', ID: {}", type, id);
                 return false;
             }
 
-            _title = parseData(data, "<meta property='og:title' content=\"", "(");
-            _language = parseData(data, "<td class=\"ipl-zebra-list__label\">Language</td>", "</td>").replaceAll("\\s{2,}", "|");
-            _country = parseData(data, "<td class=\"ipl-zebra-list__label\">Country</td>", "</td>").replaceAll("\\s{2,}", "|");
-            _genres = parseData(data, "<td class=\"ipl-zebra-list__label\">Genres</td>", "</td>").replaceAll("\\s{2,}", "|");
-            _director = parseData(data, "<div class=\"titlereference-overview-section\">\\n\\s+Directors?:", "</div>", false, true).replaceAll("\\s+?,\\s+?", "|");
-            String rating = parseData(data, "<span class=\"ipl-rating-star__rating\">", "</span>");
-            if (!rating.equals("N|A") && (rating.length() == 1 || rating.length() == 3) && NumberUtils.isDigits(rating.replaceAll("\\D", ""))) {
-                _rating = Integer.valueOf(rating.replaceAll("\\D", ""));
-                if (rating.length() == 1) {
-                    // Rating an even(single digit) number, multiply by 10
-                    _rating = _rating * 10;
+            _title = firstNonBlank(getString(title, "primaryTitle"), getString(title, "originalTitle"));
+            if (_title == null) {
+                logger.warn("Tiffara response did not contain a title for IMDb ID: {}", id);
+                return false;
+            }
+
+            _url = IMDB_TITLE_URL + id.toLowerCase(Locale.ROOT);
+            _year = getInteger(title, "startYear");
+            _language = joinObjectNames(getArray(title, "spokenLanguages"));
+            _country = joinObjectNames(getArray(title, "originCountries"));
+            _director = joinObjectNames(getArray(title, "directors"));
+            _genres = joinStrings(getArray(title, "genres"));
+            _plot = valueOrNotAvailable(getString(title, "plot"));
+
+            JsonObject rating = getObject(title, "rating");
+            if (rating != null) {
+                Double aggregateRating = getDouble(rating, "aggregateRating");
+                if (aggregateRating != null) {
+                    _rating = (int) Math.round(aggregateRating * 10);
                 }
-                String votes = parseData(data, "<span class=\"ipl-rating-star__total-votes\">", "</span>");
-                if (!votes.equals("N|A") && NumberUtils.isDigits(votes.replaceAll("\\D", "")))
-                    _votes = Integer.valueOf(votes.replaceAll("\\D", ""));
+                _votes = getInteger(rating, "voteCount");
             }
-            _plot = parseData(data, "<section class=\"titlereference-section-overview\">", "</div>", true, true);
-            Pattern p = Pattern.compile("<a href=\"/title/tt\\d+/releaseinfo\">\\d{2} [a-zA-Z]{3} (\\d{4})");
-            Matcher m = p.matcher(data);
-            if (m.find() && NumberUtils.isDigits(m.group(1))) {
-                _year = Integer.valueOf(m.group(1));
+
+            Integer runtimeSeconds = getInteger(title, "runtimeSeconds");
+            if (runtimeSeconds != null && runtimeSeconds > 0) {
+                _runtime = (int) Math.round(runtimeSeconds / 60.0);
             }
-            String runtime = parseData(data, "<td class=\"ipl-zebra-list__label\">Runtime</td>", "</td>");
-            if (!runtime.equals("N|A") && NumberUtils.isDigits(runtime.replaceAll("\\D", ""))) {
-                _runtime = Integer.valueOf(runtime.replaceAll("\\D", ""));
-            }
+            return true;
         } catch (Exception e) {
-            logger.error("", e);
+            logLookupFailure(titleUrl, e);
             return false;
         }
-        return true;
     }
 
     public Map<String, Object> getEnv() {
@@ -174,38 +201,155 @@ public class IMDBParser {
         return env;
     }
 
-    private String parseData(String data, String startText, String endText) {
-        return parseData(data, startText, endText, false, false);
+    private JsonObject retrieveJsonObject(String url) throws Exception {
+        JsonElement response = JsonParser.parseString(_httpRetriever.retrieve(url));
+        if (!response.isJsonObject()) {
+            throw new IllegalArgumentException("Expected a JSON object");
+        }
+        return response.getAsJsonObject();
     }
 
-    private String parseData(String data, String startText, String endText, boolean beginning, boolean regex) {
-        int start, end;
-        if (regex) {
-            Pattern p = Pattern.compile(startText);
-            Matcher m = p.matcher(data);
-            if (m.find()) {
-                start = m.start();
-                if (!beginning) {
-                    start = start + m.group().length();
+    private void resetResult() {
+        _title = null;
+        _year = null;
+        _language = null;
+        _country = null;
+        _director = null;
+        _genres = null;
+        _plot = null;
+        _rating = null;
+        _votes = null;
+        _url = null;
+        _runtime = null;
+        _searchString = null;
+        _foundMovie = false;
+    }
+
+    private void logLookupFailure(String url, Exception e) {
+        logger.warn("Tiffara IMDb lookup failed for {}: {}", url, e.getMessage());
+        logger.debug("Tiffara IMDb lookup failure", e);
+    }
+
+    private static String normalizeApiBaseUrl(String apiBaseUrl) {
+        String normalized = apiBaseUrl == null ? "" : apiBaseUrl.trim();
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("Tiffara API URL cannot be empty");
+        }
+        return normalized;
+    }
+
+    private static String extractImdbId(String value) {
+        if (value == null) {
+            return null;
+        }
+        Matcher matcher = IMDB_ID_PATTERN.matcher(value);
+        return matcher.find() ? matcher.group(1).toLowerCase(Locale.ROOT) : null;
+    }
+
+    private static boolean isImdbId(String value) {
+        return value != null && IMDB_ID_PATTERN.matcher(value).matches();
+    }
+
+    private static boolean isMovieType(String value) {
+        if (value == null) {
+            return false;
+        }
+        return switch (value.replace(" ", "").toLowerCase(Locale.ROOT)) {
+            case "movie", "tvmovie", "video", "short" -> true;
+            default -> false;
+        };
+    }
+
+    private static String joinStrings(JsonArray values) {
+        if (values == null) {
+            return "N|A";
+        }
+        List<String> result = new ArrayList<>();
+        for (JsonElement value : values) {
+            if (value != null && !value.isJsonNull() && value.isJsonPrimitive()) {
+                String text = value.getAsString();
+                if (!text.isBlank()) {
+                    result.add(text);
                 }
-                p = Pattern.compile(endText);
-                // Always start end search from end of start match even if beginning flag is set.
-                m = p.matcher(data.substring(start));
-                if (m.find()) {
-                    end = m.start() + start;
-                    return HttpUtils.htmlToString(data.substring(start, end)).trim();
-                }
-            }
-        } else {
-            start = data.indexOf(startText);
-            if (start > 0) {
-                if (!beginning) {
-                    start = start + startText.length();
-                }
-                end = data.indexOf(endText, start);
-                return HttpUtils.htmlToString(data.substring(start, end)).trim();
             }
         }
-        return "N|A";
+        return result.isEmpty() ? "N|A" : String.join("|", result);
+    }
+
+    private static String joinObjectNames(JsonArray values) {
+        if (values == null) {
+            return "N|A";
+        }
+        List<String> result = new ArrayList<>();
+        for (JsonElement value : values) {
+            if (value != null && value.isJsonObject()) {
+                String name = getString(value.getAsJsonObject(), "name");
+                if (name == null) {
+                    name = getString(value.getAsJsonObject(), "displayName");
+                }
+                if (name != null && !name.isBlank()) {
+                    result.add(name);
+                }
+            }
+        }
+        return result.isEmpty() ? "N|A" : String.join("|", result);
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        return second != null && !second.isBlank() ? second : null;
+    }
+
+    private static String valueOrNotAvailable(String value) {
+        return value == null || value.isBlank() ? "N|A" : value;
+    }
+
+    private static JsonArray getArray(JsonObject object, String name) {
+        JsonElement value = object.get(name);
+        return value != null && value.isJsonArray() ? value.getAsJsonArray() : null;
+    }
+
+    private static JsonObject getObject(JsonObject object, String name) {
+        JsonElement value = object.get(name);
+        return value != null && value.isJsonObject() ? value.getAsJsonObject() : null;
+    }
+
+    private static String getString(JsonObject object, String name) {
+        JsonElement value = object.get(name);
+        return value == null || value.isJsonNull() || !value.isJsonPrimitive() ? null : value.getAsString();
+    }
+
+    private static Integer getInteger(JsonObject object, String name) {
+        JsonElement value = object.get(name);
+        if (value == null || value.isJsonNull() || !value.isJsonPrimitive()) {
+            return null;
+        }
+        try {
+            return value.getAsInt();
+        } catch (NumberFormatException | UnsupportedOperationException e) {
+            return null;
+        }
+    }
+
+    private static Double getDouble(JsonObject object, String name) {
+        JsonElement value = object.get(name);
+        if (value == null || value.isJsonNull() || !value.isJsonPrimitive()) {
+            return null;
+        }
+        try {
+            return value.getAsDouble();
+        } catch (NumberFormatException | UnsupportedOperationException e) {
+            return null;
+        }
+    }
+
+    @FunctionalInterface
+    interface HttpRetriever {
+        String retrieve(String url) throws Exception;
     }
 }
