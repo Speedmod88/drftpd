@@ -22,6 +22,7 @@ import org.apache.logging.log4j.Logger;
 import org.drftpd.common.misc.CaseInsensitiveHashMap;
 import org.drftpd.common.util.ConfigLoader;
 import org.drftpd.master.GlobalContext;
+import org.drftpd.master.cron.TimeEventInterface;
 import org.drftpd.master.exceptions.FatalException;
 import org.drftpd.master.sections.SectionInterface;
 import org.drftpd.master.sections.SectionManagerInterface;
@@ -97,11 +98,11 @@ public class SectionManager implements SectionManagerInterface {
         _typesMap = typesMap;
     }
 
-    public void reload() {
+    public synchronized void reload() {
         initTypes();
         Properties p = ConfigLoader.loadConfig("sections.conf");
         HashMap<String, SectionInterface> sections = new HashMap<>();
-        _mkdirs = p.getProperty("make.section.dirs", "false").equals("true");
+        boolean mkdirs = p.getProperty("make.section.dirs", "false").equals("true");
 
         for (int i = 1; ; i++) {
             String name = p.getProperty(i + ".name");
@@ -120,7 +121,7 @@ public class SectionManager implements SectionManagerInterface {
                     Class<? extends ConfigurableSectionInterface> clazz = _typesMap.get(type);
                     ConfigurableSectionInterface section = clazz.getConstructor(SIG).newInstance(i, p);
                     sections.put(name, section);
-                    if (_mkdirs) {
+                    if (mkdirs) {
                         section.createSectionDir();
                     }
                 } catch (Exception e) {
@@ -132,6 +133,16 @@ public class SectionManager implements SectionManagerInterface {
                 throw new FatalException("Unknown section type: " + i + ".type = " + type);
             }
         }
+
+        List<TimeEventInterface> timedSections = new ArrayList<>();
+        for (SectionInterface section : sections.values()) {
+            if (section instanceof TimeEventInterface timedSection) {
+                timedSections.add(timedSection);
+            }
+        }
+        GlobalContext.getGlobalContext().replaceTimeEvents(ConfigurableSectionInterface.class, timedSections);
+
+        _mkdirs = mkdirs;
         _sections = sections;
     }
 

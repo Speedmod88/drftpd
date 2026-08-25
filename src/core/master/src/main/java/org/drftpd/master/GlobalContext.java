@@ -598,6 +598,11 @@ public class GlobalContext {
         _timeManager.removeTimeEvent(timeEvent);
     }
 
+    public void replaceTimeEvents(Class<?> eventType,
+                                  Collection<? extends TimeEventInterface> replacements) {
+        _timeManager.replaceTimeEvents(eventType, replacements);
+    }
+
     public PortRange getPortRange() {
         return getConfig().getPortRange();
     }

@@ -69,7 +69,6 @@ public class DatedSection extends PlainSection implements TimeEventInterface {
 
         // end rollingcalendar...
         logger.debug("Configured to roll at {}", rc.getNextCheckDate(new Date()));
-        getGlobalContext().addTimeEvent(this);
     }
 
     public DirectoryHandle getCurrentDirectory() {
