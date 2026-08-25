@@ -26,6 +26,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -113,6 +114,28 @@ public class TimeManagerTest {
         assertEquals(1313, _hoursReset);
     }
 
+    @Test
+    public void testReplaceTimeEventsRemovesStaleRegistrations() throws ParseException {
+        CountingReloadEvent staleEvent1 = new CountingReloadEvent();
+        CountingReloadEvent staleEvent2 = new CountingReloadEvent();
+        CountingReloadEvent replacement = new CountingReloadEvent();
+        CountingPersistentEvent persistentEvent = new CountingPersistentEvent();
+        _tm.addTimeEvent(staleEvent1);
+        _tm.addTimeEvent(staleEvent2);
+        _tm.addTimeEvent(persistentEvent);
+
+        _tm.replaceTimeEvents(ReloadOwnedEvent.class, List.of(replacement, replacement));
+
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(new SimpleDateFormat("MM/dd/yy HH:mm").parse("8/23/26 00:00"));
+        _tm.doReset(cal);
+
+        assertEquals(0, staleEvent1.dayResets);
+        assertEquals(0, staleEvent2.dayResets);
+        assertEquals(1, replacement.dayResets);
+        assertEquals(1, persistentEvent.dayResets);
+    }
+
     public class TimeTester implements TimeEventInterface {
 
         public void resetDay(Date d) {
@@ -159,6 +182,49 @@ public class TimeManagerTest {
         public void resetYear(Date d) {
             _yearsReset++;
             resetMonth(d);
+        }
+    }
+
+    private interface ReloadOwnedEvent extends TimeEventInterface {
+    }
+
+    private static class CountingReloadEvent implements ReloadOwnedEvent {
+        private int dayResets;
+
+        public void resetDay(Date d) {
+            dayResets++;
+        }
+
+        public void resetWeek(Date d) {
+        }
+
+        public void resetMonth(Date d) {
+        }
+
+        public void resetYear(Date d) {
+        }
+
+        public void resetHour(Date d) {
+        }
+    }
+
+    private static class CountingPersistentEvent implements TimeEventInterface {
+        private int dayResets;
+
+        public void resetDay(Date d) {
+            dayResets++;
+        }
+
+        public void resetWeek(Date d) {
+        }
+
+        public void resetMonth(Date d) {
+        }
+
+        public void resetYear(Date d) {
+        }
+
+        public void resetHour(Date d) {
         }
     }
 }
