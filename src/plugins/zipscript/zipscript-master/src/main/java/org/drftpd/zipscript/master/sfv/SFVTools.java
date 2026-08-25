@@ -102,20 +102,27 @@ public class SFVTools {
         for (FileHandle file : dir.getFilesUnchecked()) {
             if (file.isFile() && sfvEntries.containsKey(file.getName())) {
                 try {
-                    // file.isUploading() returns true if sent to additional slaves with jobmanager
-                    // The checksum control should be enough to verify successful upload
-                    //if (!file.isUploading()) {
-                    // Verify checksum of file
+                    if (!file.isAvailable()) {
+                        offline++;
+                    }
+
+                    // A completed transfer stores its checksum in VFS. An existing cached
+                    // value remains valid during jobmanager replication, but never trigger
+                    // a separate full-file read while this inode is still being written.
+                    if (file.isUploading()) {
+                        long cachedChecksum = file.getCheckSumCached();
+                        if (cachedChecksum != 0L && cachedChecksum == sfvEntries.get(file.getName())) {
+                            present++;
+                        }
+                        continue;
+                    }
+
                     try {
                         if (file.getCheckSum() == sfvEntries.get(file.getName())) {
                             present++;
                         }
                     } catch (NoAvailableSlaveException e) {
                         // Unable to get a slave for checksum, caught by check below
-                    }
-                    //}
-                    if (!file.isAvailable()) {
-                        offline++;
                     }
                 } catch (FileNotFoundException e) {
                     // Ignore, marked as missing
