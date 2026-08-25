@@ -37,12 +37,14 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 public class IMDBConfig {
     private static final Logger logger = LogManager.getLogger(IMDBConfig.class);
+    private static final String DEFAULT_TIFFARA_API_URL = "https://api.tiffara.com";
     private static IMDBConfig ourInstance;
     private final ArrayList<SectionInterface> _rSections = new ArrayList<>();
     private final ArrayList<SectionInterface> _sSDSections = new ArrayList<>();
     private final ArrayList<SectionInterface> _sHDSections = new ArrayList<>();
     private int _startDelay, _endDelay;
     private String _exclude;
+    private volatile String _tiffaraApiUrl;
     private final ArrayList<String> _filters = new ArrayList<>();
     private boolean _bar_enabled, _bar_directory, _sRelease;
 
@@ -70,6 +72,7 @@ public class IMDBConfig {
         addSectionsFromConf(cfg, "search.hd.section.", _sHDSections);
         _sRelease = cfg.getProperty("search.release", "false").equalsIgnoreCase("true");
         _exclude = cfg.getProperty("exclude", "");
+        _tiffaraApiUrl = normalizeApiUrl(cfg.getProperty("tiffara.api.url", DEFAULT_TIFFARA_API_URL));
         _startDelay = Integer.parseInt(cfg.getProperty("delay.start", "5"));
         _endDelay = Integer.parseInt(cfg.getProperty("delay.end", "10"));
         if (_startDelay >= _endDelay) {
@@ -119,6 +122,10 @@ public class IMDBConfig {
         return _exclude;
     }
 
+    public String getTiffaraApiUrl() {
+        return _tiffaraApiUrl;
+    }
+
     public int getStartDelay() {
         return _startDelay;
     }
@@ -153,6 +160,18 @@ public class IMDBConfig {
 
     public void addDirToProcessQueue(DirectoryHandle dir) {
         _parseQueue.add(dir);
+    }
+
+    private String normalizeApiUrl(String apiUrl) {
+        String normalized = apiUrl == null ? "" : apiUrl.trim();
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        if (normalized.isEmpty()) {
+            logger.warn("tiffara.api.url is empty, using default URL {}", DEFAULT_TIFFARA_API_URL);
+            return DEFAULT_TIFFARA_API_URL;
+        }
+        return normalized;
     }
 
     /**

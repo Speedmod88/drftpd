@@ -2,6 +2,11 @@
 ## IMDB Settings ##
 ####################################################################################################
 
+# Base URL for the Tiffara IMDb JSON API.
+# Change this if the service moves to another domain. Do not include a trailing slash.
+# Default: [https://api.tiffara.com]
+tiffara.api.url=https://api.tiffara.com
+
 # Sections plugin should announce IMDB info on races/pre.
 #race.section.x=SECTION
 
