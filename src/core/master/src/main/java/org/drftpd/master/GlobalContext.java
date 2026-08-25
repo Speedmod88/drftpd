@@ -35,6 +35,7 @@ import org.drftpd.master.cron.TimeEventInterface;
 import org.drftpd.master.cron.TimeManager;
 import org.drftpd.master.event.AsyncThreadSafeEventService;
 import org.drftpd.master.event.MessageEvent;
+import org.drftpd.master.event.SlaveEvent;
 import org.drftpd.master.exceptions.FatalException;
 import org.drftpd.master.exceptions.SlaveFileException;
 import org.drftpd.master.indexation.IndexEngineInterface;
@@ -247,6 +248,11 @@ public class GlobalContext {
 
     public static AsyncThreadSafeEventService getEventServiceSlowest() {
         return eventService3;
+    }
+
+    public static void publishSlaveEvent(SlaveEvent event) {
+        getEventService().publishAsync(event);
+        getEventServiceSiteBotPriority().publishAsync(event);
     }
 
     public void reloadFtpConfig() {
