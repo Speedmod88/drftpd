@@ -87,21 +87,25 @@ public class BasicAnnouncer extends AbstractAnnouncer {
         }
     }
 
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
     public void onSlaveEvent(SlaveEvent event) {
+        logger.info("Processing IRC slave event: command={}, slave={}",
+                event.getCommand(), event.getRSlave().getName());
         Map<String, Object> env = new HashMap<>(SiteBot.GLOBAL_ENV);
         env.put("slave", event.getRSlave().getName());
         env.put("message", event.getMessage());
 
         switch (event.getCommand()) {
             case "ADDSLAVE" -> {
-                SlaveStatus status;
-                try {
-                    status = event.getRSlave().getSlaveStatusAvailable();
-                } catch (SlaveUnavailableException e) {
-                    logger.warn("in ADDSLAVE event handler", e);
-
-                    return;
+                SlaveStatus status = event.getSlaveStatus();
+                if (status == null) {
+                    try {
+                        status = event.getRSlave().getSlaveStatusAvailable();
+                    } catch (SlaveUnavailableException e) {
+                        logger.warn("Unable to announce ADDSLAVE for {} because no status snapshot is available",
+                                event.getRSlave().getName(), e);
+                        return;
+                    }
                 }
                 SlaveManagement.fillEnvWithSlaveStatus(env, status);
                 outputSimpleEvent(ReplacerUtils.jprintf("addslave", env, _bundle), "addslave");

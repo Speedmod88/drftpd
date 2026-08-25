@@ -18,6 +18,7 @@
 package org.drftpd.master.event;
 
 import org.drftpd.master.slavemanagement.RemoteSlave;
+import org.drftpd.master.slavemanagement.SlaveStatus;
 
 /**
  * @author mog
@@ -25,16 +26,26 @@ import org.drftpd.master.slavemanagement.RemoteSlave;
  */
 public class SlaveEvent extends MessageEvent {
     private final RemoteSlave slave;
+    private final SlaveStatus slaveStatus;
 
     public SlaveEvent(String command, RemoteSlave rslave) {
-        this(command, null, rslave);
+        this(command, null, rslave, null);
+    }
+
+    public SlaveEvent(String command, RemoteSlave rslave, SlaveStatus slaveStatus) {
+        this(command, null, rslave, slaveStatus);
     }
 
     /**
      * @param command
      */
     public SlaveEvent(String command, String message, RemoteSlave rslave) {
-        this(command, message, rslave, System.currentTimeMillis());
+        this(command, message, rslave, null);
+    }
+
+    public SlaveEvent(String command, String message, RemoteSlave rslave,
+                      SlaveStatus slaveStatus) {
+        this(command, message, rslave, slaveStatus, System.currentTimeMillis());
     }
 
     /**
@@ -43,11 +54,21 @@ public class SlaveEvent extends MessageEvent {
      */
     public SlaveEvent(String command, String message, RemoteSlave slave,
                       long time) {
+        this(command, message, slave, null, time);
+    }
+
+    public SlaveEvent(String command, String message, RemoteSlave slave,
+                      SlaveStatus slaveStatus, long time) {
         super(command, message, time);
         this.slave = slave;
+        this.slaveStatus = slaveStatus;
     }
 
     public RemoteSlave getRSlave() {
         return this.slave;
+    }
+
+    public SlaveStatus getSlaveStatus() {
+        return slaveStatus;
     }
 }
