@@ -69,6 +69,7 @@ public class Transfer {
     private long _started = 0;
     private long _transferred = 0;
     private final TransferIndex _transferIndex;
+    private String _path = null;
     private String _pathForUpload = null;
     private long _minSpeed = 0L;
 
@@ -243,6 +244,7 @@ public class Transfer {
     public TransferStatus receiveFile(String dirname, char mode, String filename, long offset, String inetAddress)
             throws IOException, TransferDeniedException {
         _pathForUpload = dirname + separator + filename;
+        _path = _pathForUpload;
         try {
             _slave.getRoots().getFile(_pathForUpload);
             throw new FileExistsException("File " + dirname + separator + filename + " exists");
@@ -306,6 +308,7 @@ public class Transfer {
      */
     public TransferStatus sendFile(String path, char mode, long offset, String inetAddress)
             throws IOException, TransferDeniedException {
+        _path = path;
         try {
 
             _in = new FileInputStream(new PhysicalFile(_slave.getRoots().getFile(path)));
@@ -501,7 +504,7 @@ public class Transfer {
 
                 _out.flush();
             } catch (SocketException e) {
-                logger.warn("Caught SocketException, forwarding as TransferFailedException", e);
+                logTransferFailure(e);
                 logger.debug(_int);
                 throw new TransferFailedException(e, getTransferStatus());
             } catch (IOException e) {
@@ -510,7 +513,7 @@ public class Transfer {
                     // Forward as is
                     throw e;
                 }
-                logger.warn("Catched IOException, forwarding as TransferFailedException", e);
+                logTransferFailure(e);
                 throw new TransferFailedException(e, getTransferStatus());
             }
         } finally {
@@ -518,6 +521,48 @@ public class Transfer {
             _slave.removeTransfer(this); // transfers are added in setting up
             logger.debug("Transfer finalized (stats: {} bytes in {} seconds)", getTransferred(), getElapsed());
         }
+    }
+
+    private void logTransferFailure(IOException failure) {
+        Socket socket = _sock;
+        String localEndpoint = "unavailable";
+        String remoteEndpoint = "unavailable";
+        int receiveBufferSize = -1;
+        int sendBufferSize = -1;
+        boolean socketClosed = true;
+
+        if (socket != null) {
+            localEndpoint = String.valueOf(socket.getLocalSocketAddress());
+            remoteEndpoint = String.valueOf(socket.getRemoteSocketAddress());
+            socketClosed = socket.isClosed();
+            try {
+                receiveBufferSize = socket.getReceiveBufferSize();
+                sendBufferSize = socket.getSendBufferSize();
+            } catch (SocketException socketException) {
+                logger.debug("Unable to read socket buffer sizes after transfer failure", socketException);
+            }
+        }
+
+        long elapsed = Math.max(0L, getElapsed());
+        long averageBytesPerSecond = elapsed == 0L ? 0L : (getTransferred() * 1000L) / elapsed;
+        long throttleSleepMillis = _int == null ? 0L : _int.getTotalSleepTime();
+
+        logger.warn("Transfer failed: direction={} path={} local={} remote={} bytes={} elapsedMs={} "
+                        + "averageBytesPerSecond={} minBytesPerSecond={} maxBytesPerSecond={} "
+                        + "throttleSleepMs={} configuredBufferSize={} socketReceiveBuffer={} "
+                        + "socketSendBuffer={} socketClosed={} abortReason={} cause={}: {}",
+                getDirectionName(), _path, localEndpoint, remoteEndpoint, getTransferred(), elapsed,
+                averageBytesPerSecond, getMinSpeed(), getMaxSpeed(), throttleSleepMillis,
+                _slave.getBufferSize(), receiveBufferSize, sendBufferSize, socketClosed,
+                _abortReason, failure.getClass().getName(), failure.getMessage(), failure);
+    }
+
+    private String getDirectionName() {
+        return switch (_direction) {
+            case TRANSFER_RECEIVING_UPLOAD -> "upload";
+            case TRANSFER_SENDING_DOWNLOAD -> "download";
+            default -> "unknown";
+        };
     }
 
     private boolean isNotExpectedHostmask(String maskString, InetAddress connectedAddress) {
