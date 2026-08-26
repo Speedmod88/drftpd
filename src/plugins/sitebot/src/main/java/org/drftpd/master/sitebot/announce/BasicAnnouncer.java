@@ -33,11 +33,13 @@ import org.drftpd.master.sitebot.SiteBot;
 import org.drftpd.master.sitebot.config.AnnounceConfig;
 import org.drftpd.master.sitebot.config.ChannelConfig;
 import org.drftpd.master.sitebot.event.InviteEvent;
+import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.slavemanagement.SlaveStatus;
 import org.drftpd.master.util.ReplacerUtils;
 import org.drftpd.master.vfs.DirectoryHandle;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.ResourceBundle;
 
@@ -48,10 +50,20 @@ import java.util.ResourceBundle;
 public class BasicAnnouncer extends AbstractAnnouncer {
 
     private static final Logger logger = LogManager.getLogger(BasicAnnouncer.class);
+    private static final int MAX_PENDING_SLAVE_EVENTS = 1024;
 
     private AnnounceConfig _config;
 
     private ResourceBundle _bundle;
+
+    private final Object _slaveEventLock = new Object();
+
+    private final PendingSlaveEventQueue _pendingSlaveEvents =
+            new PendingSlaveEventQueue(MAX_PENDING_SLAVE_EVENTS);
+
+    private final Map<String, String> _announcedSlaveStates = new HashMap<>();
+
+    private boolean _slaveEventsReady;
 
     public void initialise(AnnounceConfig config, ResourceBundle bundle) {
         _config = config;
@@ -59,10 +71,16 @@ public class BasicAnnouncer extends AbstractAnnouncer {
 
         // Subscribe to events
         AnnotationProcessor.process(this);
+        GlobalContext.registerSiteBotSlaveEventConsumer(this::onSlaveEvent);
     }
 
     public void stop() {
+        onBotDisconnected();
         AnnotationProcessor.unprocess(this);
+        synchronized (_slaveEventLock) {
+            _pendingSlaveEvents.clear();
+            _announcedSlaveStates.clear();
+        }
     }
 
     public String[] getEventTypes() {
@@ -87,21 +105,115 @@ public class BasicAnnouncer extends AbstractAnnouncer {
         }
     }
 
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
     public void onSlaveEvent(SlaveEvent event) {
+        synchronized (_slaveEventLock) {
+            if (!_slaveEventsReady || !_config.getBot().isConnected()) {
+                _slaveEventsReady = false;
+                queueSlaveEvent(event);
+                return;
+            }
+        }
+        outputSlaveEvent(event);
+    }
+
+    @Override
+    protected void onBotConnected() {
+        int queuedEvents = 0;
+        while (_config.getBot().isConnected()) {
+            List<SlaveEvent> pending;
+            synchronized (_slaveEventLock) {
+                if (_pendingSlaveEvents.isEmpty()) {
+                    _slaveEventsReady = true;
+                    break;
+                }
+                pending = _pendingSlaveEvents.drain();
+            }
+            queuedEvents += pending.size();
+            for (SlaveEvent event : pending) {
+                outputSlaveEvent(event);
+            }
+        }
+
+        if (!_config.getBot().isConnected()) {
+            onBotDisconnected();
+            return;
+        }
+
+        int reconciledSlaves = reconcileAvailableSlaves();
+        logger.info("SiteBot {} slave announcements ready: drained={}, reconciled={}",
+                _config.getBot().getBotName(), queuedEvents, reconciledSlaves);
+    }
+
+    @Override
+    protected void onBotDisconnected() {
+        synchronized (_slaveEventLock) {
+            _slaveEventsReady = false;
+        }
+    }
+
+    private void queueSlaveEvent(SlaveEvent event) {
+        SlaveEvent dropped = _pendingSlaveEvents.add(event);
+        if (dropped != null) {
+            logger.warn("SiteBot {} slave announcement queue full; dropping oldest {} event for {}",
+                    _config.getBot().getBotName(), dropped.getCommand(),
+                    dropped.getRSlave().getName());
+        }
+        logger.debug("Queued {} event for slave {} while SiteBot {} is not ready; queue={}",
+                event.getCommand(), event.getRSlave().getName(),
+                _config.getBot().getBotName(), _pendingSlaveEvents.size());
+    }
+
+    private int reconcileAvailableSlaves() {
+        int reconciled = 0;
+        for (RemoteSlave slave : GlobalContext.getGlobalContext().getSlaveManager().getSlaves()) {
+            if (!slave.isAvailable()) {
+                continue;
+            }
+            try {
+                if (outputSlaveEvent(new SlaveEvent("ADDSLAVE", slave,
+                        slave.getSlaveStatusAvailable()))) {
+                    reconciled++;
+                }
+            } catch (SlaveUnavailableException e) {
+                logger.debug("Slave {} changed state during SiteBot reconciliation", slave.getName());
+            }
+        }
+        return reconciled;
+    }
+
+    private boolean outputSlaveEvent(SlaveEvent event) {
+        String command = event.getCommand();
+        String slaveName = event.getRSlave().getName();
+        if (PendingSlaveEventQueue.isStateEvent(event)) {
+            synchronized (_slaveEventLock) {
+                if (command.equals(_announcedSlaveStates.get(slaveName))) {
+                    logger.debug("Skipping duplicate {} announcement for slave {}", command, slaveName);
+                    return false;
+                }
+                _announcedSlaveStates.put(slaveName, command);
+            }
+        }
+
+        logger.info("Processing IRC slave event: command={}, slave={}", command, slaveName);
         Map<String, Object> env = new HashMap<>(SiteBot.GLOBAL_ENV);
-        env.put("slave", event.getRSlave().getName());
+        env.put("slave", slaveName);
         env.put("message", event.getMessage());
 
-        switch (event.getCommand()) {
+        switch (command) {
             case "ADDSLAVE" -> {
-                SlaveStatus status;
-                try {
-                    status = event.getRSlave().getSlaveStatusAvailable();
-                } catch (SlaveUnavailableException e) {
-                    logger.warn("in ADDSLAVE event handler", e);
-
-                    return;
+                SlaveStatus status = event.getSlaveStatus();
+                if (status == null) {
+                    try {
+                        status = event.getRSlave().getSlaveStatusAvailable();
+                    } catch (SlaveUnavailableException e) {
+                        logger.warn("Unable to announce ADDSLAVE for {} because no status snapshot is available",
+                                slaveName, e);
+                        synchronized (_slaveEventLock) {
+                            _announcedSlaveStates.remove(slaveName, command);
+                        }
+                        return false;
+                    }
                 }
                 SlaveManagement.fillEnvWithSlaveStatus(env, status);
                 outputSimpleEvent(ReplacerUtils.jprintf("addslave", env, _bundle), "addslave");
@@ -109,6 +221,7 @@ public class BasicAnnouncer extends AbstractAnnouncer {
             case "DELSLAVE" -> outputSimpleEvent(ReplacerUtils.jprintf("delslave", env, _bundle), "delslave");
             case "MSGSLAVE" -> outputSimpleEvent(ReplacerUtils.jprintf("msgslave", env, _bundle), "msgslave");
         }
+        return true;
     }
 
     @EventSubscriber
