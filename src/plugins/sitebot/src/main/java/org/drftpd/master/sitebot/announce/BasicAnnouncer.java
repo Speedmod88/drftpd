@@ -105,7 +105,7 @@ public class BasicAnnouncer extends AbstractAnnouncer {
         }
     }
 
-    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SITEBOT_SLAVE)
     public void onSlaveEvent(SlaveEvent event) {
         synchronized (_slaveEventLock) {
             if (!_slaveEventsReady || !_config.getBot().isConnected()) {
