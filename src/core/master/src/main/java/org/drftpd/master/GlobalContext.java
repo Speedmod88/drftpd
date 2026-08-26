@@ -83,12 +83,14 @@ public class GlobalContext {
     public static final String VERSION = "DrFTPD 4.0.12-git";
     private static final Logger logger = LogManager.getLogger(GlobalContext.class);
     public static final String SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT = "EventBusSiteBot";
+    public static final String SERVICE_NAME_EVENT_BUS_SITEBOT_SLAVE = "EventBusSiteBotSlave";
     public static final String SERVICE_NAME_EVENT_BUS_SLOWEST = "EventBusSlowest";
     protected static GlobalContext _gctx;
     private static final DirectoryHandle root = new DirectoryHandle(VirtualFileSystem.separator);
     private static final AsyncThreadSafeEventService eventService = new AsyncThreadSafeEventService();
     private static final AsyncThreadSafeEventService eventService2 = new AsyncThreadSafeEventService();
     private static final AsyncThreadSafeEventService eventService3 = new AsyncThreadSafeEventService();
+    private static final AsyncThreadSafeEventService siteBotSlaveEventService = new AsyncThreadSafeEventService();
     private static final int SITEBOT_SLAVE_EVENT_QUEUE_CAPACITY = 1024;
     private static final Object siteBotSlaveEventLock = new Object();
     private static final ArrayDeque<SlaveEvent> pendingSiteBotSlaveEvents = new ArrayDeque<>();
@@ -149,6 +151,7 @@ public class GlobalContext {
 
                 EventServiceLocator.setEventService(EventServiceLocator.SERVICE_NAME_EVENT_BUS, eventService);
                 EventServiceLocator.setEventService(SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT, eventService2);
+                EventServiceLocator.setEventService(SERVICE_NAME_EVENT_BUS_SITEBOT_SLAVE, siteBotSlaveEventService);
                 EventServiceLocator.setEventService(SERVICE_NAME_EVENT_BUS_SLOWEST, eventService3);
             } catch (EventServiceExistsException e) {
                 logger.error("Error setting event service, likely something using the event bus before GlobalContext is instantiated", e);
@@ -257,6 +260,10 @@ public class GlobalContext {
         return eventService3;
     }
 
+    public static AsyncThreadSafeEventService getSiteBotSlaveEventService() {
+        return siteBotSlaveEventService;
+    }
+
     public static void publishSlaveEvent(SlaveEvent event) {
         getEventService().publishAsync(event);
         synchronized (siteBotSlaveEventLock) {
@@ -269,7 +276,7 @@ public class GlobalContext {
                 pendingSiteBotSlaveEvents.addLast(event);
                 return;
             }
-            getEventServiceSiteBotPriority().publishAsync(event);
+            getSiteBotSlaveEventService().publishAsync(event);
         }
     }
 
@@ -747,6 +754,14 @@ public class GlobalContext {
             }
             while (GlobalContext.getEventServiceSlowest().getQueueSize() > 0) {
                 logger.info("Waiting for queued events to be processed 3 - {} remaining", GlobalContext.getEventServiceSlowest().getQueueSize());
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {
+                }
+            }
+            while (GlobalContext.getSiteBotSlaveEventService().getQueueSize() > 0) {
+                logger.info("Waiting for SiteBot slave events to be processed - {} remaining",
+                        GlobalContext.getSiteBotSlaveEventService().getQueueSize());
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException ignored) {
