@@ -24,6 +24,7 @@ import org.drftpd.master.GlobalContext;
 import org.drftpd.master.event.Event;
 import org.drftpd.master.exceptions.SlaveUnavailableException;
 import org.drftpd.master.slavemanagement.DummyRemoteSlave;
+import org.drftpd.master.slavemanagement.RemergeMessage;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.slavemanagement.SlaveManager;
 import org.drftpd.master.tests.DummySlaveManager;
@@ -233,6 +234,18 @@ public class RemoteSlaveTest {
     public void testRemergeCompletionMessageWithoutStartKeepsLegacyText() {
         assertEquals("Remerge queueprocess finished",
                 RemoteSlave.formatRemergeCompletionMessage(0L, 131_000L));
+    }
+
+    @Test
+    public void testCompletedRemergeMessageRetainsSessionStart() {
+        RemoteSlave slave = new RemoteSlave("remerge-completion");
+        slave.setRemerging(true);
+        long startedAt = slave.getRemergeSessionStartedAt();
+
+        RemergeMessage completion = new RemergeMessage(slave);
+        slave.setRemerging(false);
+
+        assertEquals(startedAt, completion.getRemergeStartedAt());
     }
 
     public void testAddNetworkError()
