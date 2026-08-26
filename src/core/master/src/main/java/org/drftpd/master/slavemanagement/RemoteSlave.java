@@ -53,6 +53,7 @@ import org.drftpd.master.vfs.PartialRemergeDirectoryException;
 import org.drftpd.master.vfs.VirtualFileSystem;
 import org.drftpd.slave.network.*;
 import org.drftpd.slave.protocol.QueuedOperation;
+import org.drftpd.slave.exceptions.FileExistsException;
 
 import java.io.*;
 import java.net.Socket;
@@ -638,6 +639,60 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         } catch (RemoteIOException e) {
             if (!(e.getCause() instanceof FileNotFoundException)) {
                 throw e.getCause();
+            }
+        }
+    }
+
+    public boolean prepareQueuedUploadRetry(String path) throws IOException, SlaveUnavailableException {
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        QueuedOperation queuedDelete = null;
+        synchronized (renameQueue) {
+            if (!isRemerging()) {
+                return true;
+            }
+            String normalizedPath = normalizeQueuedPath(path);
+            for (QueuedOperation operation : renameQueue) {
+                if (operation.getDestination() == null
+                        && normalizeQueuedPath(operation.getSource()).equalsIgnoreCase(normalizedPath)) {
+                    queuedDelete = operation;
+                    break;
+                }
+            }
+        }
+
+        if (queuedDelete == null) {
+            return true;
+        }
+
+        try {
+            deleteZeroByteUploadPath(path);
+            removeQueuedOperation(queuedDelete);
+            logger.info("Removed stale zero-byte upload and cancelled its queued delete on slave {}: {}",
+                    getName(), path);
+            return true;
+        } catch (FileExistsException e) {
+            removeQueuedOperation(queuedDelete);
+            logger.warn("Preserving non-zero incomplete upload on slave {} and cancelling its queued delete: {} ({})",
+                    getName(), path, e.getMessage());
+            return false;
+        }
+    }
+
+    protected void deleteZeroByteUploadPath(String path) throws IOException, SlaveUnavailableException {
+        try {
+            fetchResponseWithoutDisconnect(
+                    SlaveManager.getBasicIssuer().issueDeleteZeroByteToSlave(this, path), 30000);
+        } catch (RemoteIOException e) {
+            throw e.getCause();
+        }
+    }
+
+    private void removeQueuedOperation(QueuedOperation operation) {
+        ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
+        synchronized (renameQueue) {
+            if (renameQueue.removeFirstOccurrence(operation)) {
+                unindexQueuedOperation(operation);
+                scheduleQueuedOperationsCommit();
             }
         }
     }

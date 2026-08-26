@@ -534,6 +534,43 @@ public class Slave extends SslConfigurationLoader {
         }
     }
 
+    public void deleteZeroByteFile(String path) throws IOException {
+        for (Transfer transfer : getTransfersList()) {
+            if (transfer.isReceivingUploadForPath(path)) {
+                throw new FileExistsException("Refusing to replace active upload path " + path);
+            }
+        }
+
+        Collection<Root> roots;
+        try {
+            roots = new LinkedHashSet<>(_roots.getMultipleRootsForFile(path));
+        } catch (FileNotFoundException e) {
+            return;
+        }
+
+        List<PhysicalFile> zeroByteFiles = new ArrayList<>();
+        for (Root root : roots) {
+            PhysicalFile file = root.getFile(path);
+            if (!file.exists()) {
+                continue;
+            }
+            if (!file.isFile() || file.length() != 0L) {
+                throw new FileExistsException("Refusing to replace non-zero upload path " + path
+                        + " (size=" + file.length() + ")");
+            }
+            zeroByteFiles.add(file);
+        }
+
+        for (PhysicalFile file : zeroByteFiles) {
+            if (file.length() != 0L) {
+                throw new FileExistsException("Refusing to replace upload path that is no longer zero bytes "
+                        + path + " (size=" + file.length() + ")");
+            }
+            Files.deleteIfExists(file.toPath());
+            logger.info("DELETE ZERO-BYTE UPLOAD: {}", path);
+        }
+    }
+
     public int getBufferSize() {
         return _bufferSize;
     }
@@ -639,7 +676,8 @@ public class Slave extends SslConfigurationLoader {
         if ("receive".equals(commandName) || "send".equals(commandName)) {
             return CommandExecutorType.TRANSFER;
         }
-        if ("delete".equals(commandName) || "rename".equals(commandName)) {
+        if ("delete".equals(commandName) || "deletezero".equals(commandName)
+                || "rename".equals(commandName)) {
             return CommandExecutorType.FILESYSTEM;
         }
         if ("checksum".equals(commandName)) {
