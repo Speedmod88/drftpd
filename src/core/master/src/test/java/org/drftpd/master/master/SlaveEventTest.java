@@ -19,9 +19,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 public class SlaveEventTest {
+
+    @Test
+    public void testSlaveAnnouncementsUseDedicatedEventService() {
+        assertNotSame(GlobalContext.getEventServiceSiteBotPriority(),
+                GlobalContext.getSiteBotSlaveEventService());
+    }
 
     @Test
     public void testAddSlaveStatusSnapshotIsPreserved() {
