@@ -33,6 +33,8 @@ public class SlaveResponseQueueTest {
         assertEquals(Slave.CommandExecutorType.FILESYSTEM,
                 Slave.getCommandExecutorType("delete"));
         assertEquals(Slave.CommandExecutorType.FILESYSTEM,
+                Slave.getCommandExecutorType("deletezero"));
+        assertEquals(Slave.CommandExecutorType.FILESYSTEM,
                 Slave.getCommandExecutorType("rename"));
     }
 

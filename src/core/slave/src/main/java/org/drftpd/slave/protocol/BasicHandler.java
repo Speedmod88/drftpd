@@ -254,6 +254,17 @@ public class BasicHandler extends AbstractHandler {
         }
     }
 
+    // DELETEZERO
+    public AsyncResponse handleDeletezero(AsyncCommandArgument ac) {
+        try {
+            getSlaveObject().deleteZeroByteFile(ac.getArgs());
+            sendResponse(new AsyncResponseDiskStatus(getSlaveObject().getDiskStatus()));
+            return new AsyncResponse(ac.getIndex());
+        } catch (IOException e) {
+            return new AsyncResponseException(ac.getIndex(), e);
+        }
+    }
+
     private boolean performSequentialRemerge(String basePath, boolean partialRemerge,
                                              long skipAgeCutoff) throws IOException {
         RemergeDirectoryWalker walker = new RemergeDirectoryWalker(

@@ -28,6 +28,7 @@ import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.slavemanagement.SlaveManager;
 import org.drftpd.master.tests.DummySlaveManager;
 import org.drftpd.master.vfs.DirectoryHandle;
+import org.drftpd.slave.exceptions.FileExistsException;
 import org.drftpd.slave.protocol.QueuedOperation;
 import org.junit.jupiter.api.Test;
 
@@ -172,6 +173,41 @@ public class RemoteSlaveTest {
     }
 
     @Test
+    public void testQueuedUploadRetryRemovesCompletedDelete() throws Exception {
+        UploadRetryRemoteSlave slave = new UploadRetryRemoteSlave("zero-byte-retry");
+        slave.setRemerging(true);
+        slave.queueDelete("/release/file.rar");
+        slave.queueDelete("/release/other.rar");
+
+        assertTrue(slave.prepareQueuedUploadRetry("/release/file.rar"));
+        assertEquals(1, slave.getRenameQueue().size());
+        assertEquals("/release/other.rar", slave.getRenameQueue().peekFirst().getSource());
+    }
+
+    @Test
+    public void testQueuedUploadRetryPreservesNonZeroFile() throws Exception {
+        UploadRetryRemoteSlave slave = new UploadRetryRemoteSlave("non-zero-retry");
+        slave.setRemerging(true);
+        slave.queueDelete("/release/file.rar");
+        slave.setNonZero(true);
+
+        assertFalse(slave.prepareQueuedUploadRetry("/release/file.rar"));
+        assertTrue(slave.getRenameQueue().isEmpty());
+    }
+
+    @Test
+    public void testQueuedUploadRetryKeepsDeleteAfterTransientFailure() {
+        UploadRetryRemoteSlave slave = new UploadRetryRemoteSlave("failed-retry");
+        slave.setRemerging(true);
+        slave.queueDelete("/release/file.rar");
+        slave.setFailure(new IOException("temporary failure"));
+
+        assertThrows(IOException.class,
+                () -> slave.prepareQueuedUploadRetry("/release/file.rar"));
+        assertEquals(1, slave.getRenameQueue().size());
+    }
+
+    @Test
     public void testRemergeSessionTimestampLifecycle() {
         RemoteSlave slave = new RemoteSlave("remerge-session");
 
@@ -308,7 +344,7 @@ public class RemoteSlaveTest {
             super(name);
         }
 
-        private void queueDelete(String path) {
+        protected void queueDelete(String path) {
             addQueueDelete(path);
         }
 
@@ -342,6 +378,33 @@ public class RemoteSlaveTest {
         @Override
         protected void flushQueuedOperationsCommit() {
             _flushedCommits++;
+        }
+    }
+
+    private static class UploadRetryRemoteSlave extends QueueRemoteSlave {
+        private IOException _failure;
+        private boolean _nonZero;
+
+        private UploadRetryRemoteSlave(String name) {
+            super(name);
+        }
+
+        private void setFailure(IOException failure) {
+            _failure = failure;
+        }
+
+        private void setNonZero(boolean nonZero) {
+            _nonZero = nonZero;
+        }
+
+        @Override
+        protected void deleteZeroByteUploadPath(String path) throws IOException {
+            if (_failure != null) {
+                throw _failure;
+            }
+            if (_nonZero) {
+                throw new FileExistsException("non-zero");
+            }
         }
     }
 }
