@@ -243,4 +243,24 @@ public class TimeManager {
     public synchronized void removeTimeEvent(TimeEventInterface event) {
         _timedEvents.remove(event);
     }
+
+    public synchronized void replaceTimeEvents(Class<?> eventType,
+                                                Collection<? extends TimeEventInterface> replacements) {
+        Objects.requireNonNull(eventType, "eventType");
+        Objects.requireNonNull(replacements, "replacements");
+
+        LinkedHashSet<TimeEventInterface> uniqueReplacements = new LinkedHashSet<>();
+        for (TimeEventInterface replacement : replacements) {
+            if (!eventType.isInstance(replacement)) {
+                throw new IllegalArgumentException("Replacement event does not match " + eventType.getName());
+            }
+            uniqueReplacements.add(replacement);
+        }
+
+        long removed = _timedEvents.stream().filter(eventType::isInstance).count();
+        _timedEvents.removeIf(eventType::isInstance);
+        _timedEvents.addAll(uniqueReplacements);
+        logger.info("Replaced {} time event(s) matching {} with {} registration(s)",
+                removed, eventType.getName(), uniqueReplacements.size());
+    }
 }
