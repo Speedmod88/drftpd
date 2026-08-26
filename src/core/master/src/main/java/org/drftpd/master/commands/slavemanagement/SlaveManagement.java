@@ -305,6 +305,7 @@ public class SlaveManagement extends CommandInterface {
         }
 
         rslave.setRemerging(true);
+        long remergeStartedAt = rslave.getRemergeSessionStartedAt();
         try {
             rslave.fetchResponse(SlaveManager.getBasicIssuer().issueRemergeToSlave(rslave,
                     request.getCurrentDirectory().getPath(), false, 0L, 0L, false), 0);
@@ -345,7 +346,8 @@ public class SlaveManagement extends CommandInterface {
             return new CommandResponse(200, "Slave went offline while processing deferred operations");
         }
 
-        String message = ("Remerge queueprocess finished");
+        String message = RemoteSlave.formatRemergeCompletionMessage(
+                remergeStartedAt, System.currentTimeMillis());
         GlobalContext.getEventService().publishAsync(new SlaveEvent("MSGSLAVE", message, rslave));
 
         return StandardCommandManager.genericResponse("RESPONSE_200_COMMAND_OK");
