@@ -21,6 +21,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.drftpd.common.extensibility.PluginInterface;
 import org.drftpd.common.util.ConfigLoader;
+import org.drftpd.master.GlobalContext;
 
 import java.util.ArrayList;
 import java.util.Properties;
@@ -37,6 +38,7 @@ public class SiteBotWrapper implements PluginInterface {
     private final ArrayList<SiteBot> _bots = new ArrayList<>();
 
     public void startPlugin() {
+        GlobalContext.pauseSiteBotSlaveEventDelivery();
         // Load config properties
         Properties cfg = ConfigLoader.loadPluginConfig("irc.conf");
 
@@ -63,12 +65,14 @@ public class SiteBotWrapper implements PluginInterface {
             }
         }
         logger.debug("Creating {} threads for SiteBots", _bots.size());
+        GlobalContext.prepareSiteBotSlaveEventDelivery(_bots.size());
         for (SiteBot bot : _bots) {
             new Thread(bot).start();
         }
     }
 
     public void stopPlugin(String reason) {
+        GlobalContext.pauseSiteBotSlaveEventDelivery();
         for (SiteBot bot : _bots) {
             bot.terminate(reason);
         }

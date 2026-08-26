@@ -35,6 +35,7 @@ import org.drftpd.master.cron.TimeEventInterface;
 import org.drftpd.master.cron.TimeManager;
 import org.drftpd.master.event.AsyncThreadSafeEventService;
 import org.drftpd.master.event.MessageEvent;
+import org.drftpd.master.event.SlaveEvent;
 import org.drftpd.master.exceptions.FatalException;
 import org.drftpd.master.exceptions.SlaveFileException;
 import org.drftpd.master.indexation.IndexEngineInterface;
@@ -65,6 +66,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -87,6 +89,12 @@ public class GlobalContext {
     private static final AsyncThreadSafeEventService eventService = new AsyncThreadSafeEventService();
     private static final AsyncThreadSafeEventService eventService2 = new AsyncThreadSafeEventService();
     private static final AsyncThreadSafeEventService eventService3 = new AsyncThreadSafeEventService();
+    private static final int SITEBOT_SLAVE_EVENT_QUEUE_CAPACITY = 1024;
+    private static final Object siteBotSlaveEventLock = new Object();
+    private static final ArrayDeque<SlaveEvent> pendingSiteBotSlaveEvents = new ArrayDeque<>();
+    private static final List<Consumer<SlaveEvent>> siteBotSlaveEventConsumers = new ArrayList<>();
+    private static int expectedSiteBotSlaveEventConsumers = 1;
+    private static boolean siteBotSlaveEventDeliveryReady;
     private static Set<Method> hooksMethods;
     protected SectionManagerInterface _sectionManager;
     protected SlaveManager _slaveManager;
@@ -247,6 +255,71 @@ public class GlobalContext {
 
     public static AsyncThreadSafeEventService getEventServiceSlowest() {
         return eventService3;
+    }
+
+    public static void publishSlaveEvent(SlaveEvent event) {
+        getEventService().publishAsync(event);
+        synchronized (siteBotSlaveEventLock) {
+            if (!siteBotSlaveEventDeliveryReady) {
+                if (pendingSiteBotSlaveEvents.size() >= SITEBOT_SLAVE_EVENT_QUEUE_CAPACITY) {
+                    SlaveEvent dropped = pendingSiteBotSlaveEvents.removeFirst();
+                    logger.warn("SiteBot startup slave event queue full; dropping oldest {} event for {}",
+                            dropped.getCommand(), dropped.getRSlave().getName());
+                }
+                pendingSiteBotSlaveEvents.addLast(event);
+                return;
+            }
+            getEventServiceSiteBotPriority().publishAsync(event);
+        }
+    }
+
+    public static void prepareSiteBotSlaveEventDelivery(int expectedConsumers) {
+        if (expectedConsumers < 1) {
+            throw new IllegalArgumentException("expectedConsumers must be positive");
+        }
+        synchronized (siteBotSlaveEventLock) {
+            siteBotSlaveEventDeliveryReady = false;
+            expectedSiteBotSlaveEventConsumers = expectedConsumers;
+            siteBotSlaveEventConsumers.clear();
+        }
+    }
+
+    public static void registerSiteBotSlaveEventConsumer(Consumer<SlaveEvent> queuedEventConsumer) {
+        Objects.requireNonNull(queuedEventConsumer, "queuedEventConsumer");
+        synchronized (siteBotSlaveEventLock) {
+            if (siteBotSlaveEventDeliveryReady) {
+                return;
+            }
+            siteBotSlaveEventConsumers.add(queuedEventConsumer);
+            if (siteBotSlaveEventConsumers.size() < expectedSiteBotSlaveEventConsumers) {
+                logger.info("SiteBot slave event consumer registered ({}/{}); waiting before replay",
+                        siteBotSlaveEventConsumers.size(), expectedSiteBotSlaveEventConsumers);
+                return;
+            }
+            logger.info("SiteBot slave event delivery ready with {} consumer(s); replaying {} queued event(s)",
+                    siteBotSlaveEventConsumers.size(), pendingSiteBotSlaveEvents.size());
+            for (SlaveEvent event : pendingSiteBotSlaveEvents) {
+                for (Consumer<SlaveEvent> consumer : siteBotSlaveEventConsumers) {
+                    try {
+                        consumer.accept(event);
+                    } catch (RuntimeException e) {
+                        logger.error("SiteBot consumer failed while replaying {} event for {}",
+                                event.getCommand(), event.getRSlave().getName(), e);
+                    }
+                }
+            }
+            pendingSiteBotSlaveEvents.clear();
+            siteBotSlaveEventConsumers.clear();
+            siteBotSlaveEventDeliveryReady = true;
+        }
+    }
+
+    public static void pauseSiteBotSlaveEventDelivery() {
+        synchronized (siteBotSlaveEventLock) {
+            siteBotSlaveEventDeliveryReady = false;
+            expectedSiteBotSlaveEventConsumers = 1;
+            siteBotSlaveEventConsumers.clear();
+        }
     }
 
     public void reloadFtpConfig() {
