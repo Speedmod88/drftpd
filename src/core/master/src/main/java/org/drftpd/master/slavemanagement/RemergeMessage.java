@@ -31,14 +31,26 @@ public class RemergeMessage {
 
     private final AsyncResponseRemerge _response;
 
+    private final long _connectionGeneration;
+
+    private final long _remergeStartedAt;
+
     public RemergeMessage(AsyncResponseRemerge response, RemoteSlave slave) {
         _rslave = slave;
         _response = response;
+        _connectionGeneration = slave.getConnectionGeneration();
+        _remergeStartedAt = slave.getRemergeSessionStartedAt();
     }
 
     public RemergeMessage(RemoteSlave slave) {
+        this(slave, slave.getConnectionGeneration(), slave.getRemergeSessionStartedAt());
+    }
+
+    public RemergeMessage(RemoteSlave slave, long connectionGeneration, long remergeStartedAt) {
         _rslave = slave;
         _response = null;
+        _connectionGeneration = connectionGeneration;
+        _remergeStartedAt = remergeStartedAt;
     }
 
     public boolean isCompleted() {
@@ -59,5 +71,13 @@ public class RemergeMessage {
 
     public long getLastModified() {
         return _response.getLastModified();
+    }
+
+    public long getConnectionGeneration() {
+        return _connectionGeneration;
+    }
+
+    public long getRemergeStartedAt() {
+        return _remergeStartedAt;
     }
 }

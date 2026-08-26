@@ -438,7 +438,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
      *
      * @throws ProtocolException
      */
-    private void initializeSlaveAfterThreadIsRunning(long connectionGeneration) throws IOException,
+    private void initializeSlaveAfterThreadIsRunning(long connectionGeneration, long remergeStartedAt) throws IOException,
             SlaveUnavailableException, ProtocolException {
         ensureConnectionCurrent(connectionGeneration);
         String remergeMode = GlobalContext.getConfig().getMainProperties()
@@ -521,7 +521,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
 
         setCRCThreadFinished();
-        putRemergeQueue(new RemergeMessage(this));
+        putRemergeQueue(new RemergeMessage(this, connectionGeneration, remergeStartedAt));
 
         if (_remergePaused.get()) {
             String message = ("Remerge was paused on slave after completion, issuing resume so not to break manual remerges");
@@ -570,8 +570,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return _isRemerging;
     }
 
-    public void setRemerging(boolean remerging) {
-        if (remerging && !_isRemerging) {
+    public synchronized void setRemerging(boolean remerging) {
+        if (remerging && (!_isRemerging || _remergeSessionStartedAt <= 0L)) {
             _remergeSessionStartedAt = System.currentTimeMillis();
         } else if (!remerging) {
             _remergeSessionStartedAt = 0L;
@@ -580,6 +580,16 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public long getRemergeSessionStartedAt() {
+        return _remergeSessionStartedAt;
+    }
+
+    long getConnectionGeneration() {
+        return _connectionGeneration.get();
+    }
+
+    private synchronized long beginConnectionRemerge() {
+        _remergeSessionStartedAt = System.currentTimeMillis();
+        _isRemerging = true;
         return _remergeSessionStartedAt;
     }
 
@@ -756,8 +766,14 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return ret;
     }
 
-    protected void makeAvailableAfterRemerge() {
-        long remergeStartedAt = getRemergeSessionStartedAt();
+    protected void makeAvailableAfterRemerge(RemergeMessage completion) {
+        long completionGeneration = completion.getConnectionGeneration();
+        if (completionGeneration != getConnectionGeneration()) {
+            logger.info("Ignoring stale remerge completion for slave {} from connection generation {}; current generation is {}",
+                    getName(), completionGeneration, getConnectionGeneration());
+            return;
+        }
+        long remergeStartedAt = completion.getRemergeStartedAt();
         _initRemergeCompleted = true;
         setProperty("lastConnect", Long.toString(System.currentTimeMillis()));
         if (!processQueueAfterRemerge()) {
@@ -937,7 +953,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         _errors = 0;
         _lastNetworkError = System.currentTimeMillis();
         _initRemergeCompleted = false;
-        setRemerging(true);
+        long remergeStartedAt = beginConnectionRemerge();
         _lastRemergeCommandReceived = System.currentTimeMillis();
 
         try {
@@ -950,7 +966,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         class InitiateRemergeThread implements Runnable {
             public void run() {
                 try {
-                    initializeSlaveAfterThreadIsRunning(connectionGeneration);
+                    initializeSlaveAfterThreadIsRunning(connectionGeneration, remergeStartedAt);
                 } catch (Exception e) {
                     setOfflineIfCurrent(connectionGeneration, e);
                 }
@@ -1730,7 +1746,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             }
 
             setCRCThreadFinished();
-            putRemergeQueue(new RemergeMessage(this));
+            putRemergeQueue(new RemergeMessage(this, getConnectionGeneration(), getRemergeSessionStartedAt()));
 
             if (_remergePaused.get()) {
                 String message = "Remerge was paused on slave after fallback completion, issuing resume so not to break manual remerges";
@@ -1883,7 +1899,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                     }
                     if (!_initRemergeCompleted) {
                         // First remerge after slave connect
-                        msg.getRslave().makeAvailableAfterRemerge();
+                        msg.getRslave().makeAvailableAfterRemerge(msg);
                     }
                     break;
                 }
