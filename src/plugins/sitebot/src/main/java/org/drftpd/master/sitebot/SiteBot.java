@@ -84,7 +84,8 @@ public class SiteBot implements ReplyConstants, Runnable {
     // Outgoing message stuff.
     private final org.drftpd.master.sitebot.Queue _outQueue = new Queue();
     private final CaseInsensitiveConcurrentHashMap<String, OutputWriter> _writers = new CaseInsensitiveConcurrentHashMap<>();
-    private ThreadPoolExecutor _pool;
+    private ThreadPoolExecutor _fastCommandPool;
+    private ThreadPoolExecutor _heavyCommandPool;
     // A HashMap of channels that points to a selfreferential HashMap of
     // User objects (used to remember which users are in which channels).
     private CaseInsensitiveHashMap<String, HashMap<IrcUser, IrcUser>> _channels = new CaseInsensitiveHashMap<>();
@@ -163,15 +164,21 @@ public class SiteBot implements ReplyConstants, Runnable {
         _commandManager = GlobalContext.getGlobalContext().createCommandManager();
         _commandManager.initialize(_cmds, themeDir);
 
-        // Initialise the thread pool for executing commands
-        int maxCommands = _config.getCommandsMax();
+        // Keep quick commands responsive when index scans or other heavy commands are running.
+        int fastCommands = _config.getCommandsFastThreads();
+        int heavyCommands = _config.getCommandsHeavyThreads();
         if (_config.getCommandsQueue()) {
-            _pool = new ThreadPoolExecutor(maxCommands, maxCommands, 60L, TimeUnit.SECONDS, new LinkedBlockingQueue<>(), new CommandThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
+            _fastCommandPool = createCommandPool(fastCommands, new LinkedBlockingQueue<>(), "Fast");
         } else if (_config.getCommandsBlock()) {
-            _pool = new ThreadPoolExecutor(maxCommands, maxCommands, 60L, TimeUnit.SECONDS, new SynchronousQueue<>(), new CommandThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
+            _fastCommandPool = createCommandPool(fastCommands, new SynchronousQueue<>(), "Fast");
         } else {
             throw new FatalException("commands.full has an invalid value in irc.conf");
         }
+        _heavyCommandPool = createCommandPool(heavyCommands,
+                new ArrayBlockingQueue<>(_config.getCommandsHeavyQueue()), "Heavy");
+        logger.info("SiteBot command workers configured: cpus={} fast={} heavy={} heavyQueue={}",
+                Runtime.getRuntime().availableProcessors(), fastCommands, heavyCommands,
+                _config.getCommandsHeavyQueue());
 
         try {
             setEncoding(_config.getCharset());
@@ -499,7 +506,7 @@ public class SiteBot implements ReplyConstants, Runnable {
             throw new NullPointerException("Cannot send null messages to server");
         }
         if (isConnected()) {
-            _outQueue.add(line);
+            _outQueue.add(line, MessagePriority.PROTOCOL);
         }
     }
 
@@ -526,7 +533,11 @@ public class SiteBot implements ReplyConstants, Runnable {
      * @param message The message to send.
      */
     public final void sendMessage(String target, String message) {
-        _outQueue.add("PRIVMSG " + target + " :" + message);
+        sendMessage(target, message, MessagePriority.COMMAND);
+    }
+
+    public final void sendMessage(String target, String message, MessagePriority priority) {
+        _outQueue.add("PRIVMSG " + target + " :" + message, priority);
     }
 
     /**
@@ -546,7 +557,7 @@ public class SiteBot implements ReplyConstants, Runnable {
      * @param notice The notice to send.
      */
     public final void sendNotice(String target, String notice) {
-        _outQueue.add("NOTICE " + target + " :" + notice);
+        _outQueue.add("NOTICE " + target + " :" + notice, MessagePriority.PROTOCOL);
     }
 
     /**
@@ -562,7 +573,7 @@ public class SiteBot implements ReplyConstants, Runnable {
      * @since PircBot 0.9.5
      */
     public final void sendCTCPCommand(String target, String command) {
-        _outQueue.add("PRIVMSG " + target + " :\u0001" + command + "\u0001");
+        _outQueue.add("PRIVMSG " + target + " :\u0001" + command + "\u0001", MessagePriority.PROTOCOL);
     }
 
     /**
@@ -2792,11 +2803,16 @@ public class SiteBot implements ReplyConstants, Runnable {
             return;
         }
 
-        ServiceCommand service = getUserDetails(sender, ident).getCommandSession(cmdOutputs, channel);
+        boolean heavyCommand = _config.isHeavyCommand(request.getCommand());
+        MessagePriority outputPriority = heavyCommand ? MessagePriority.BULK : MessagePriority.COMMAND;
+        UserDetails commandUser = getUserDetails(sender, ident);
+        ServiceCommand service = commandUser.getCommandSession(cmdOutputs, channel, outputPriority);
         service.setCommands(_cmds);
         try {
-            _pool.execute(new CommandThread(request, service, sender, ident));
+            (heavyCommand ? _heavyCommandPool : _fastCommandPool)
+                    .execute(new CommandThread(request, service, sender, ident));
         } catch (RejectedExecutionException e) {
+            commandUser.removeCommandSession(service);
             OutputWriter rejectWriter;
             if (isPublic) {
                 rejectWriter = _writers.get(channel);
@@ -2981,8 +2997,16 @@ public class SiteBot implements ReplyConstants, Runnable {
             announcer.stop();
         }
         quitServer(reason);
-        _pool.shutdown();
+        _fastCommandPool.shutdown();
+        _heavyCommandPool.shutdown();
         dispose();
+    }
+
+    private ThreadPoolExecutor createCommandPool(int workers, BlockingQueue<Runnable> queue, String type) {
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(workers, workers, 60L, TimeUnit.SECONDS,
+                queue, new CommandThreadFactory(type), new ThreadPoolExecutor.AbortPolicy());
+        pool.allowCoreThreadTimeOut(true);
+        return pool;
     }
 
     public void setDisconnected(boolean state) {
@@ -3039,8 +3063,14 @@ public class SiteBot implements ReplyConstants, Runnable {
 
 class CommandThreadFactory implements ThreadFactory {
 
-    public static String getIdleThreadName(long threadId) {
-        return "SiteBot Command Handler-" + threadId + " - Waiting for commands";
+    private final String _type;
+
+    CommandThreadFactory(String type) {
+        _type = type;
+    }
+
+    public String getIdleThreadName(long threadId) {
+        return "SiteBot " + _type + " Command Handler-" + threadId + " - Waiting for commands";
     }
 
     @Override

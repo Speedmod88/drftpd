@@ -104,7 +104,7 @@ public class StoreAnnouncer extends AbstractAnnouncer {
                 AnnounceWriter writer = _config.getPathWriter("store", event.getTransferFile());
                 if (writer != null) {
                     fillEnvSection(env, event, writer);
-                    sayOutput(ReplacerUtils.jprintf("store", env, _bundle), writer);
+                    sayReleaseOutput(ReplacerUtils.jprintf("store", env, _bundle), writer);
                 }
             }
         }

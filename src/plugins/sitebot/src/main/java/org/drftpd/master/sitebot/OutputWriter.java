@@ -51,6 +51,10 @@ public class OutputWriter {
     }
 
     public synchronized void sendMessage(String message) {
+        sendMessage(message, MessagePriority.COMMAND);
+    }
+
+    public synchronized void sendMessage(String message, MessagePriority priority) {
         for (String line : splitLines(message)) {
             if (_blowfishEnabled) {
                 // Check if we have a valid cipher before proceeding, this is to cover
@@ -59,10 +63,10 @@ public class OutputWriter {
                 // they could've initiated the command using blowfish in a channel. If
                 // this is the case just skip the output to them.
                 if (_cipher != null) {
-                    _bot.sendMessage(_output, _cipher.encrypt(line));
+                    _bot.sendMessage(_output, _cipher.encrypt(line), priority);
                 }
             } else {
-                _bot.sendMessage(_output, line);
+                _bot.sendMessage(_output, line, priority);
             }
         }
     }
