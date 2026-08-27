@@ -4,6 +4,7 @@ status.heap=${color}15${bold}HEAP${coloroff}: ${bold}${heap.used}${bold} used / 
 status.master.uptime=${color}15${bold}UPTIME${bold}${coloroff}: Master has been online for ${uptime}.
 status.nonheap=${color}15${bold}NON-HEAP${coloroff}: ${bold}${nonheap.used}${bold} used / ${bold}${nonheap.available}${bold} available / ${bold}${nonheap.max}${bold} maximum.
 status.osinfo=${color}15${bold}OS${coloroff}: ${bold}${os.name}${bold} vers. ${bold}${os.version}${bold} (${bold}${os.arch}${bold}).
+status.loadaverage=${color}15${bold}LOAD${coloroff}: One-minute average: ${bold}${load.average}${bold} / Load per logical CPU: ${bold}${load.per.processor}${bold}.
 status.slave.notfound=${color}15${bold}${slave}${coloroff}: ${color}4${bold}NOTFOUND${bold}${coloroff}.
 status.slave.offline=${color}15${bold}${slave}${coloroff}: ${color}4${bold}OFFLINE${bold}${coloroff}.
 status.slave.uptime=${color}15${bold}UPTIME${bold}${coloroff}: ${bold}${slave}${bold} has been online for ${uptime}.
