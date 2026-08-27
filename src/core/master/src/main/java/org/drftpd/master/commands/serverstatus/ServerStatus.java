@@ -128,10 +128,17 @@ public class ServerStatus extends CommandInterface {
 
             if (arg.equals("os") || isAll) {
                 OperatingSystemMXBean omx = ManagementFactory.getOperatingSystemMXBean();
+                int availableProcessors = Runtime.getRuntime().availableProcessors();
+                double loadAverage = omx.getSystemLoadAverage();
                 env.put("os.name", omx.getName());
                 env.put("os.version", omx.getVersion());
                 env.put("os.arch", omx.getArch());
                 response.addComment(session.jprintf(_bundle, env, "status.osinfo"));
+
+                env.put("load.average", formatLoadAverage(loadAverage));
+                env.put("load.per.processor", loadAverage < 0.0D ? "unavailable"
+                        : formatLoadAverage(loadAverage / availableProcessors));
+                response.addComment(session.jprintf(_bundle, env, "status.loadaverage"));
             }
 
             if (arg.equals("vm") || isAll) {
@@ -238,4 +245,8 @@ public class ServerStatus extends CommandInterface {
 
         return response;
     }
-} 
+
+    static String formatLoadAverage(double loadAverage) {
+        return loadAverage < 0.0D ? "unavailable" : String.format(Locale.ROOT, "%.2f", loadAverage);
+    }
+}
