@@ -351,6 +351,12 @@ public class GlobalContext {
 
     public void reloadFtpConfig() {
         _config.reload();
+        configureReleaseEventWorkers();
+    }
+
+    private void configureReleaseEventWorkers() {
+        eventService2.configure(getConfig().getMainProperties(),
+                "event.release.core.threads", "event.release.max.threads");
     }
 
     private void loadSlaveSelectionManager(Properties cfg) {
@@ -713,9 +719,7 @@ public class GlobalContext {
 
     public void init() {
         _config = new ConfigManager();
-        _config.reload();
-        eventService2.configure(getConfig().getMainProperties(),
-                "event.release.core.threads", "event.release.max.threads");
+        reloadFtpConfig();
 
         CommitManager.getCommitManager().start();
         _timeManager = new TimeManager();
