@@ -67,7 +67,7 @@ public class NewRaceLeaderAnnouncer extends AbstractAnnouncer {
         _bundle = bundle;
     }
 
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
     public void onNewRaceLeaderEvent(NewRaceLeaderEvent event) {
         Map<String, Object> env = new HashMap<>(SiteBot.GLOBAL_ENV);
         AnnounceWriter writer = _config.getPathWriter("store.newraceleader", event.getDirectory());
@@ -86,7 +86,7 @@ public class NewRaceLeaderAnnouncer extends AbstractAnnouncer {
             env.put("speed", Bytes.formatBytes(event.getUploaderPosition().getXferspeed()));
             env.put("percent", event.getFiles() / event.getUploaderPosition().getFiles());
 
-            sayOutput(ReplacerUtils.jprintf("store.newraceleader", env, _bundle), writer);
+            sayReleaseOutput(ReplacerUtils.jprintf("store.newraceleader", env, _bundle), writer);
         }
     }
 }

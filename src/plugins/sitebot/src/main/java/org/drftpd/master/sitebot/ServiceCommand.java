@@ -44,7 +44,10 @@ public class ServiceCommand extends Session {
 
     private final UserDetails _runningUser;
 
-    public ServiceCommand(SiteBot bot, ArrayList<OutputWriter> outputs, UserDetails runningUser, String ident, String source) {
+    private final MessagePriority _outputPriority;
+
+    public ServiceCommand(SiteBot bot, ArrayList<OutputWriter> outputs, UserDetails runningUser,
+                          String ident, String source, MessagePriority outputPriority) {
         _bot = bot;
         _outputs = outputs;
         setObject(IRCUSER, runningUser);
@@ -53,6 +56,7 @@ public class ServiceCommand extends Session {
             setObject(SOURCE, source);
         }
         _runningUser = runningUser;
+        _outputPriority = outputPriority;
     }
 
     public void printOutput(Object o) {
@@ -68,7 +72,7 @@ public class ServiceCommand extends Session {
         while (st.hasMoreTokens()) {
             String token = st.nextToken();
             for (OutputWriter output : _outputs) {
-                output.sendMessage(token);
+                output.sendMessage(token, _outputPriority);
             }
         }
     }

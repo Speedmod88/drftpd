@@ -24,7 +24,7 @@ import org.drftpd.master.vfs.DirectoryHandle;
  * @author mog
  * @version $Id$
  */
-public class DirectoryFtpEvent extends ConnectionEvent {
+public class DirectoryFtpEvent extends ConnectionEvent implements KeyedEvent {
     private final DirectoryHandle directory;
 
     public DirectoryFtpEvent(User user, String command,
@@ -40,6 +40,11 @@ public class DirectoryFtpEvent extends ConnectionEvent {
 
     public DirectoryHandle getDirectory() {
         return directory;
+    }
+
+    @Override
+    public String getEventKey() {
+        return directory.getPath();
     }
 
     public String toString() {

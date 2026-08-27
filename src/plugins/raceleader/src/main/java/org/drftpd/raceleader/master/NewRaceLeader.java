@@ -73,7 +73,8 @@ public class NewRaceLeader {
             // Ignore on halfway as we already announce leader during this point
             int halfway = (int) Math.floor((double) files / 2);
             if (missing != halfway) {
-                GlobalContext.getEventService().publishAsync(new NewRaceLeaderEvent(user, _winner, getDir(), uploaderposition, missing));
+                GlobalContext.getEventServiceSiteBotPriority().publishAsync(
+                        new NewRaceLeaderEvent(user, _winner, getDir(), uploaderposition, missing));
             }
 
             _winner = user;

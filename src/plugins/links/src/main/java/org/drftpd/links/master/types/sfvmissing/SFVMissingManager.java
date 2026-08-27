@@ -96,7 +96,7 @@ public class SFVMissingManager implements PluginInterface {
      * could cause a problem if the .nfo file was uploaded first, and the asyncevent
      * for the .sfv was before vfs event.
      */
-    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SITEBOT_FUNCTIONAL)
     public void onDirectoryFtpEvent(DirectoryFtpEvent direvent) {
         if ("MKD".equals(direvent.getCommand())) {
             for (LinkType link : _linkmanager.getLinks()) {

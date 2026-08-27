@@ -22,8 +22,12 @@ import org.drftpd.master.sitebot.PartialTrustManager;
 
 import javax.net.ssl.X509TrustManager;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedList;
+import java.util.Locale;
 import java.util.Properties;
+import java.util.Set;
+import java.util.StringTokenizer;
 
 /**
  * @author djb61
@@ -56,6 +60,14 @@ public class SiteBotConfig {
     private boolean _commandsBlock = false;
 
     private int _commandsMax = 1;
+
+    private int _commandsFastThreads;
+
+    private int _commandsHeavyThreads;
+
+    private int _commandsHeavyQueue;
+
+    private final Set<String> _commandsHeavy = new HashSet<>();
 
     private boolean _commandsQueue = false;
 
@@ -180,7 +192,18 @@ public class SiteBotConfig {
         _blowfishPunishReason = cfg.getProperty("blowfish.unencrypted.reason");
         _localBindHost = cfg.getProperty("bind.host");
         _botName = cfg.getProperty("bot.name");
-        _commandsMax = Integer.parseInt(cfg.getProperty("commands.max"));
+        _commandsMax = Integer.parseInt(cfg.getProperty("commands.max", "5"));
+        int cpus = Runtime.getRuntime().availableProcessors();
+        _commandsFastThreads = parseThreadCount(cfg.getProperty("commands.fast.threads", "auto"),
+                clamp(cpus / 4, 4, 8));
+        _commandsHeavyThreads = parseThreadCount(cfg.getProperty("commands.heavy.threads", "auto"),
+                clamp(cpus / 16, 1, 3));
+        _commandsHeavyQueue = Integer.parseInt(cfg.getProperty("commands.heavy.queue", "20"));
+        StringTokenizer heavyCommands = new StringTokenizer(
+                cfg.getProperty("commands.heavy", "find dupe2 search rescan index"));
+        while (heavyCommands.hasMoreTokens()) {
+            _commandsHeavy.add(heavyCommands.nextToken().toLowerCase(Locale.ROOT));
+        }
         if (cfg.getProperty("commands.full").equalsIgnoreCase("block")) {
             _commandsBlock = true;
         } else if (cfg.getProperty("commands.full").equalsIgnoreCase("queue")) {
@@ -338,5 +361,29 @@ public class SiteBotConfig {
 
     public boolean getCommandsQueue() {
         return _commandsQueue;
+    }
+
+    public int getCommandsFastThreads() {
+        return _commandsFastThreads;
+    }
+
+    public int getCommandsHeavyThreads() {
+        return _commandsHeavyThreads;
+    }
+
+    public int getCommandsHeavyQueue() {
+        return _commandsHeavyQueue;
+    }
+
+    public boolean isHeavyCommand(String command) {
+        return _commandsHeavy.contains(command.toLowerCase(Locale.ROOT));
+    }
+
+    private static int parseThreadCount(String configured, int automatic) {
+        return "auto".equalsIgnoreCase(configured) ? automatic : Integer.parseInt(configured);
+    }
+
+    private static int clamp(int value, int minimum, int maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
     }
 }

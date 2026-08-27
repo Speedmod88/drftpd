@@ -117,7 +117,7 @@ public class SFVAnnouncer extends AbstractAnnouncer {
                         env.put("files", Integer.toString(sfvEvent.getSFVInfo().getSize()));
                         env.put("expectedsize", (Bytes.formatBytes(
                                 SFVTools.getSFVLargestFileBytes(dir, sfvEvent.getSFVData()) * sfvEvent.getSFVInfo().getSize())));
-                        sayOutput(ReplacerUtils.jprintf("sfv.store.first", env, _bundle), writer);
+                        sayReleaseOutput(ReplacerUtils.jprintf("sfv.store.first", env, _bundle), writer);
                     }
                     return;
                 }
@@ -140,7 +140,7 @@ public class SFVAnnouncer extends AbstractAnnouncer {
                             env.put("filesleft",
                                     Integer.toString(sfvStatus.getMissing()));
                             env.put("percentdone", (sfvStatus.getPresent() * 100) / sfvEvent.getSFVInfo().getSize() + "%");
-                            sayOutput(ReplacerUtils.jprintf("sfv.store.race", env, _bundle), writer);
+                            sayReleaseOutput(ReplacerUtils.jprintf("sfv.store.race", env, _bundle), writer);
                         }
                     }
                 }
@@ -182,7 +182,7 @@ public class SFVAnnouncer extends AbstractAnnouncer {
                         env.put("leaduser", leaduser != null ? leaduser.getName() : stat.getUsername());
                         env.put("leadgroup", leaduser != null ? leaduser.getGroup() : "");
                         fillEnvSection(env, sfvEvent, writer, false);
-                        sayOutput(ReplacerUtils.jprintf("sfv.store.halfway", env, _bundle), writer);
+                        sayReleaseOutput(ReplacerUtils.jprintf("sfv.store.halfway", env, _bundle), writer);
                     }
                     return;
                 }
@@ -221,7 +221,7 @@ public class SFVAnnouncer extends AbstractAnnouncer {
                         env.put("files", Integer.toString(sfvEvent.getSFVInfo().getSize()));
                         env.put("size", Bytes.formatBytes(SFVTools.getSFVTotalBytes(dir, sfvEvent.getSFVData())));
                         env.put("speed", Bytes.formatBytes(SFVTools.getXferspeed(dir, sfvEvent.getSFVData())) + "/s");
-                        sayOutput(ReplacerUtils.jprintf("sfv.store.complete", env, _bundle), writer);
+                        sayReleaseOutput(ReplacerUtils.jprintf("sfv.store.complete", env, _bundle), writer);
 
                         // Find max users/groups to announce
                         int maxUsers;
@@ -291,7 +291,7 @@ public class SFVAnnouncer extends AbstractAnnouncer {
                             raceenv.put("daydn",
                                     UserTransferStats.getStatsPlace("DAYDN", raceuser,
                                             GlobalContext.getGlobalContext().getUserManager()));
-                            sayOutput(ReplacerUtils.jprintf("sfv.store.complete.racer", raceenv, _bundle), writer);
+                            sayReleaseOutput(ReplacerUtils.jprintf("sfv.store.complete.racer", raceenv, _bundle), writer);
 
                             position++;
                             if (position > maxUsers) {
@@ -302,7 +302,7 @@ public class SFVAnnouncer extends AbstractAnnouncer {
                         //add groups stats
                         position = 1;
 
-                        sayOutput(ReplacerUtils.jprintf("sfv.store.complete.group.header", env, _bundle), writer);
+                        sayReleaseOutput(ReplacerUtils.jprintf("sfv.store.complete.group.header", env, _bundle), writer);
                         for (GroupPosition stat : groups) {
                             Map<String, Object> raceenv = new HashMap<>(env);
 
@@ -315,7 +315,7 @@ public class SFVAnnouncer extends AbstractAnnouncer {
                             raceenv.put("speed",
                                     Bytes.formatBytes(stat.getXferspeed()) + "/s");
 
-                            sayOutput(ReplacerUtils.jprintf("sfv.store.complete.group", raceenv, _bundle), writer);
+                            sayReleaseOutput(ReplacerUtils.jprintf("sfv.store.complete.group", raceenv, _bundle), writer);
 
                             position++;
                             if (position > maxGroups) {

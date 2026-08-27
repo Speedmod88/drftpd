@@ -42,7 +42,7 @@ import java.util.concurrent.atomic.LongAdder;
  * @author djb61
  * @version $Id$
  */
-public final class AsyncThreadSafeEventService extends ThreadSafeEventService {
+public class AsyncThreadSafeEventService extends ThreadSafeEventService {
 
     private static final Logger logger = LogManager.getLogger(AsyncThreadSafeEventService.class);
     private static final String REMERGE_THREAD_PREFIX = "RemergeThread - ";

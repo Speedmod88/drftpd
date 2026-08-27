@@ -175,14 +175,13 @@ public class Dir extends CommandInterface {
             return StandardCommandManager.genericResponse("RESPONSE_530_ACCESS_DENIED");
         }
         if (victim.isFile() || victim.isLink()) { // link or file
-            GlobalContext.getEventServiceSiteBotPriority().publishAsync(
+            GlobalContext.publishSiteBotPriorityEvent(
                     new DirectoryFtpEvent(request.getSession().getUserNull(
                             request.getUser()), "DELE", victim.getParent()));
             // strange that we're sending the parent directory of the file being
             // deleted without mentioning the file that was deleted...
         } else { // if (requestedFile.isDirectory()) {
-            GlobalContext.getEventServiceSiteBotPriority()
-                    .publishAsync(
+            GlobalContext.publishSiteBotPriorityEvent(
                             new DirectoryFtpEvent(request.getSession()
                                     .getUserNull(request.getUser()), "RMD",
                                     (DirectoryHandle) victim));
@@ -283,7 +282,7 @@ public class Dir extends CommandInterface {
 
             DirectoryFtpEvent event = new DirectoryFtpEvent(
                     session.getUserNull(request.getUser()), "MKD", newDir);
-            GlobalContext.getEventServiceSiteBotPriority().publishAsync(event);
+            GlobalContext.publishSiteBotPriorityEvent(event);
 
             return new CommandResponse(257, "\"" + newDir.getPath() +
                     "\" created.");
@@ -687,7 +686,7 @@ public class Dir extends CommandInterface {
 
             wipeFile.delete(request.getSession().getUserNull(request.getUser()));
             if (wipeFile.isDirectory()) {
-                GlobalContext.getEventServiceSiteBotPriority().publishAsync(
+                GlobalContext.publishSiteBotPriorityEvent(
                         new DirectoryFtpEvent(request.getSession().getUserNull(request.getUser()), "WIPE", (DirectoryHandle) wipeFile));
             }
         } catch (FileNotFoundException e) {
