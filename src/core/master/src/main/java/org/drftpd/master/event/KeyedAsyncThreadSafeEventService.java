@@ -132,6 +132,13 @@ public final class KeyedAsyncThreadSafeEventService extends AsyncThreadSafeEvent
         return _workers.getActiveCount();
     }
 
+    public WorkerPoolStatus getWorkerPoolStatus(String name) {
+        int activeEvents = _activeEvents.get();
+        return new WorkerPoolStatus(name, _workers.getCorePoolSize(), _workers.getMaximumPoolSize(),
+                _workers.getPoolSize(), _workers.getActiveCount(),
+                Math.max(0, _outstandingEvents.get() - activeEvents));
+    }
+
     private void enqueue(QueuedEvent event) {
         String key = event.event() instanceof KeyedEvent
                 ? normalizeKey(((KeyedEvent) event.event()).getEventKey()) : GLOBAL_KEY;

@@ -37,6 +37,7 @@ import org.drftpd.master.event.AsyncThreadSafeEventService;
 import org.drftpd.master.event.KeyedAsyncThreadSafeEventService;
 import org.drftpd.master.event.MessageEvent;
 import org.drftpd.master.event.SlaveEvent;
+import org.drftpd.master.event.WorkerPoolStatus;
 import org.drftpd.master.exceptions.FatalException;
 import org.drftpd.master.exceptions.SlaveFileException;
 import org.drftpd.master.indexation.IndexEngineInterface;
@@ -68,6 +69,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -102,6 +104,8 @@ public class GlobalContext {
     private static final List<Consumer<SlaveEvent>> siteBotSlaveEventConsumers = new ArrayList<>();
     private static int expectedSiteBotSlaveEventConsumers = 1;
     private static boolean siteBotSlaveEventDeliveryReady;
+    private static final Map<String, Supplier<WorkerPoolStatus>> workerPoolStatusProviders =
+            new ConcurrentHashMap<>();
     private static Set<Method> hooksMethods;
     protected SectionManagerInterface _sectionManager;
     protected SlaveManager _slaveManager;
@@ -278,6 +282,35 @@ public class GlobalContext {
 
     public static AsyncThreadSafeEventService getEventServiceSlowest() {
         return eventService3;
+    }
+
+    public static void registerWorkerPoolStatus(String id, Supplier<WorkerPoolStatus> provider) {
+        workerPoolStatusProviders.put(Objects.requireNonNull(id, "id"),
+                Objects.requireNonNull(provider, "provider"));
+    }
+
+    public static void unregisterWorkerPoolStatus(String id) {
+        if (id != null) {
+            workerPoolStatusProviders.remove(id);
+        }
+    }
+
+    public static List<WorkerPoolStatus> getWorkerPoolStatuses() {
+        List<WorkerPoolStatus> statuses = new ArrayList<>();
+        statuses.add(eventService2.getWorkerPoolStatus("Release events"));
+        workerPoolStatusProviders.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> {
+                    try {
+                        WorkerPoolStatus status = entry.getValue().get();
+                        if (status != null) {
+                            statuses.add(status);
+                        }
+                    } catch (RuntimeException e) {
+                        logger.warn("Unable to read worker pool status for {}", entry.getKey(), e);
+                    }
+                });
+        return statuses;
     }
 
     public static AsyncThreadSafeEventService getSiteBotSlaveEventService() {
