@@ -41,7 +41,8 @@ public final class KeyedAsyncThreadSafeEventService extends AsyncThreadSafeEvent
     private final ConcurrentMap<String, EventLane> _lanes = new ConcurrentHashMap<>();
     private final BlockingQueue<EventLane> _readyLanes = new LinkedBlockingQueue<>();
     private final ConcurrentMap<String, DurationStats> _durationStats = new ConcurrentHashMap<>();
-    private final AtomicInteger _queuedEvents = new AtomicInteger();
+    private final AtomicInteger _outstandingEvents = new AtomicInteger();
+    private final AtomicInteger _activeEvents = new AtomicInteger();
     private final AtomicLong _sequence = new AtomicLong();
     private final ThreadPoolExecutor _workers;
 
@@ -103,14 +104,15 @@ public final class KeyedAsyncThreadSafeEventService extends AsyncThreadSafeEvent
 
     @Override
     public int getQueueSize() {
-        return _queuedEvents.get();
+        return _outstandingEvents.get();
     }
 
     @Override
     public String getQueueSummary() {
         StringBuilder builder = new StringBuilder();
-        builder.append("FIFO PROCESSING STATS - KEYED RELEASE QUEUE=")
-                .append(getQueueSize()).append(" ACTIVE LANES=")
+        builder.append("FIFO PROCESSING STATS - KEYED RELEASE OUTSTANDING=")
+                .append(getQueueSize()).append(" ACTIVE EVENTS=")
+                .append(_activeEvents.get()).append(" ACTIVE LANES=")
                 .append(_lanes.size()).append(" WORKERS=")
                 .append(_workers.getActiveCount()).append('/')
                 .append(_workers.getPoolSize()).append('/')
@@ -133,7 +135,7 @@ public final class KeyedAsyncThreadSafeEventService extends AsyncThreadSafeEvent
     private void enqueue(QueuedEvent event) {
         String key = event.event() instanceof KeyedEvent
                 ? normalizeKey(((KeyedEvent) event.event()).getEventKey()) : GLOBAL_KEY;
-        _queuedEvents.incrementAndGet();
+        _outstandingEvents.incrementAndGet();
         _lanes.compute(key, (ignored, lane) -> {
             EventLane target = lane == null ? new EventLane(key) : lane;
             if (target.add(event)) {
@@ -172,8 +174,9 @@ public final class KeyedAsyncThreadSafeEventService extends AsyncThreadSafeEvent
             return;
         }
 
-        _queuedEvents.decrementAndGet();
+        _activeEvents.incrementAndGet();
         long started = System.currentTimeMillis();
+        boolean wasEventHandler = enterEventHandlerThread();
         try {
             if (queuedEvent.topic() != null) {
                 publish(queuedEvent.topic(), queuedEvent.event());
@@ -186,8 +189,11 @@ public final class KeyedAsyncThreadSafeEventService extends AsyncThreadSafeEvent
             logger.error("FATAL ERROR keyed event handler. ({}, {}, {})",
                     queuedEvent.topic(), queuedEvent.genericType(), queuedEvent.event(), t);
         } finally {
+            leaveEventHandlerThread(wasEventHandler);
             _durationStats.computeIfAbsent(queuedEvent.event().getClass().getName(),
                     ignored -> new DurationStats()).record(System.currentTimeMillis() - started);
+            _activeEvents.decrementAndGet();
+            _outstandingEvents.decrementAndGet();
             finishLane(lane);
         }
     }

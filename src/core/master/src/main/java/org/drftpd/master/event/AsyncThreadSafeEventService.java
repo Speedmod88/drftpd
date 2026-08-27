@@ -53,6 +53,7 @@ public class AsyncThreadSafeEventService extends ThreadSafeEventService {
     private final PriorityBlockingQueue<QueuedAsyncEvent> _eventQueue = new PriorityBlockingQueue<>();
     private final ConcurrentMap<String, QueuedAsyncEvent> _coalescedRemergeUpdates = new ConcurrentHashMap<>();
     private final AtomicInteger _effectiveQueueSize = new AtomicInteger();
+    private final AtomicInteger _activeEvents = new AtomicInteger();
     private final EventHandler eventHandler = new EventHandler();
 
     public AsyncThreadSafeEventService() {
@@ -72,6 +73,20 @@ public class AsyncThreadSafeEventService extends ThreadSafeEventService {
         return EVENT_HANDLER_THREAD.get();
     }
 
+    static boolean enterEventHandlerThread() {
+        boolean wasEventHandler = EVENT_HANDLER_THREAD.get();
+        EVENT_HANDLER_THREAD.set(Boolean.TRUE);
+        return wasEventHandler;
+    }
+
+    static void leaveEventHandlerThread(boolean wasEventHandler) {
+        if (wasEventHandler) {
+            EVENT_HANDLER_THREAD.set(Boolean.TRUE);
+        } else {
+            EVENT_HANDLER_THREAD.remove();
+        }
+    }
+
     public void publishAsync(Object event) {
         enqueue(new QueuedAsyncEvent(event));
     }
@@ -85,7 +100,7 @@ public class AsyncThreadSafeEventService extends ThreadSafeEventService {
     }
 
     public int getQueueSize() {
-        return _effectiveQueueSize.get();
+        return _effectiveQueueSize.get() + _activeEvents.get();
     }
 
     private void enqueue(QueuedAsyncEvent queuedEvent) {
@@ -145,6 +160,7 @@ public class AsyncThreadSafeEventService extends ThreadSafeEventService {
             }
             if (queuedEvent.claim()) {
                 _effectiveQueueSize.decrementAndGet();
+                _activeEvents.incrementAndGet();
                 return queuedEvent;
             }
         }
@@ -424,7 +440,7 @@ public class AsyncThreadSafeEventService extends ThreadSafeEventService {
 
         @Override
         public void run() {
-            EVENT_HANDLER_THREAD.set(Boolean.TRUE);
+            boolean wasEventHandler = enterEventHandlerThread();
             try {
                 while (true) {
                     QueuedAsyncEvent queuedEvent = null;
@@ -458,12 +474,15 @@ public class AsyncThreadSafeEventService extends ThreadSafeEventService {
                             recordDuration(currentSourceThreadName, currentEventName,
                                     System.currentTimeMillis() - lastTake);
                         }
+                        if (queuedEvent != null) {
+                            _activeEvents.decrementAndGet();
+                        }
                         currentSourceThreadName = null;
                         currentEventName = null;
                     }
                 }
             } finally {
-                EVENT_HANDLER_THREAD.remove();
+                leaveEventHandlerThread(wasEventHandler);
             }
         }
 

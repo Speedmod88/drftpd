@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -65,6 +66,43 @@ class KeyedAsyncThreadSafeEventServiceTest {
         assertTrue(started.await(2, TimeUnit.SECONDS));
         release.countDown();
         assertTrue(completed.await(2, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void countsActiveEventsUntilTheirHandlersFinish() throws Exception {
+        KeyedAsyncThreadSafeEventService service =
+                new KeyedAsyncThreadSafeEventService("KeyedTest", 1, 1);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicBoolean eventHandlerThread = new AtomicBoolean();
+
+        service.subscribeStrongly(TestEvent.class, event -> {
+            eventHandlerThread.set(AsyncThreadSafeEventService.isEventHandlerThread());
+            started.countDown();
+            await(release);
+            completed.countDown();
+        });
+
+        service.publishAsync(new TestEvent("release", 1));
+        try {
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            assertEquals(1, service.getQueueSize());
+            assertTrue(eventHandlerThread.get());
+        } finally {
+            release.countDown();
+        }
+        assertTrue(completed.await(2, TimeUnit.SECONDS));
+        assertTrue(waitForQueueToDrain(service));
+    }
+
+    private static boolean waitForQueueToDrain(KeyedAsyncThreadSafeEventService service)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (service.getQueueSize() != 0 && System.nanoTime() < deadline) {
+            Thread.sleep(5L);
+        }
+        return service.getQueueSize() == 0;
     }
 
     private static void await(CountDownLatch latch) {
