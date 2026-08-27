@@ -21,6 +21,7 @@ import org.drftpd.common.dynamicdata.Key;
 import org.drftpd.common.util.Bytes;
 import org.drftpd.master.GlobalContext;
 import org.drftpd.master.commands.*;
+import org.drftpd.master.event.WorkerPoolStatus;
 import org.drftpd.master.network.Session;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.util.Time;
@@ -169,6 +170,9 @@ public class ServerStatus extends CommandInterface {
                 env.put("max.threads", tmx.getPeakThreadCount());
                 env.put("total.threads", tmx.getTotalStartedThreadCount());
                 response.addComment(session.jprintf(_bundle, env, "status.threads"));
+
+                env.put("available.processors", Runtime.getRuntime().availableProcessors());
+                response.addComment(session.jprintf(_bundle, env, "status.processors"));
             }
 
             if (arg.equals("gc") || isAll) {
@@ -197,6 +201,16 @@ public class ServerStatus extends CommandInterface {
             }
 
             if (isAll) {
+                for (WorkerPoolStatus status : GlobalContext.getWorkerPoolStatuses()) {
+                    env.put("worker.name", status.name());
+                    env.put("worker.core", status.coreThreads());
+                    env.put("worker.max", status.maxThreads());
+                    env.put("worker.current", status.currentThreads());
+                    env.put("worker.active", status.activeThreads());
+                    env.put("worker.queued", status.queuedTasks());
+                    response.addComment(session.jprintf(_bundle, env, "status.worker"));
+                }
+
                 env.put("fifo.size", GlobalContext.getEventService().getQueueSize());
                 response.addComment(session.jprintf(_bundle, env, "status.fifo"));
 

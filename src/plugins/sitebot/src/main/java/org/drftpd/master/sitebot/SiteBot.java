@@ -29,6 +29,7 @@ import org.drftpd.master.commands.CommandManagerInterface;
 import org.drftpd.master.commands.CommandRequestInterface;
 import org.drftpd.master.commands.CommandResponseInterface;
 import org.drftpd.master.event.ReloadEvent;
+import org.drftpd.master.event.WorkerPoolStatus;
 import org.drftpd.master.exceptions.FatalException;
 import org.drftpd.master.sitebot.config.AnnounceConfig;
 import org.drftpd.master.sitebot.config.ChannelConfig;
@@ -85,6 +86,8 @@ public class SiteBot implements ReplyConstants, Runnable {
     private final org.drftpd.master.sitebot.Queue _outQueue = new Queue();
     private final CaseInsensitiveConcurrentHashMap<String, OutputWriter> _writers = new CaseInsensitiveConcurrentHashMap<>();
     private volatile CommandPools _commandPools;
+    private String _fastWorkerStatusId;
+    private String _heavyWorkerStatusId;
     // A HashMap of channels that points to a selfreferential HashMap of
     // User objects (used to remember which users are in which channels).
     private CaseInsensitiveHashMap<String, HashMap<IrcUser, IrcUser>> _channels = new CaseInsensitiveHashMap<>();
@@ -164,6 +167,7 @@ public class SiteBot implements ReplyConstants, Runnable {
         _commandManager.initialize(_cmds, themeDir);
 
         _commandPools = createCommandPools(_config);
+        registerCommandPoolStatus();
 
         try {
             setEncoding(_config.getCharset());
@@ -2995,6 +2999,7 @@ public class SiteBot implements ReplyConstants, Runnable {
         }
         quitServer(reason);
         CommandPools commandPools = _commandPools;
+        unregisterCommandPoolStatus();
         if (commandPools != null) {
             commandPools.shutdown();
         }
@@ -3025,6 +3030,31 @@ public class SiteBot implements ReplyConstants, Runnable {
                 queue, new CommandThreadFactory(type), new ThreadPoolExecutor.AbortPolicy());
         pool.allowCoreThreadTimeOut(true);
         return pool;
+    }
+
+    private void registerCommandPoolStatus() {
+        String prefix = "sitebot." + _name.toLowerCase(Locale.ROOT);
+        _fastWorkerStatusId = prefix + ".fast";
+        _heavyWorkerStatusId = prefix + ".heavy";
+        GlobalContext.registerWorkerPoolStatus(_fastWorkerStatusId,
+                () -> commandPoolStatus("SiteBot " + _name + " fast", false));
+        GlobalContext.registerWorkerPoolStatus(_heavyWorkerStatusId,
+                () -> commandPoolStatus("SiteBot " + _name + " heavy", true));
+    }
+
+    private void unregisterCommandPoolStatus() {
+        GlobalContext.unregisterWorkerPoolStatus(_fastWorkerStatusId);
+        GlobalContext.unregisterWorkerPoolStatus(_heavyWorkerStatusId);
+    }
+
+    private WorkerPoolStatus commandPoolStatus(String name, boolean heavy) {
+        CommandPools commandPools = _commandPools;
+        if (commandPools == null) {
+            return null;
+        }
+        ThreadPoolExecutor pool = heavy ? commandPools.heavy() : commandPools.fast();
+        return new WorkerPoolStatus(name, pool.getCorePoolSize(), pool.getMaximumPoolSize(),
+                pool.getPoolSize(), pool.getActiveCount(), pool.getQueue().size());
     }
 
     private record CommandPools(ThreadPoolExecutor fast, ThreadPoolExecutor heavy) {

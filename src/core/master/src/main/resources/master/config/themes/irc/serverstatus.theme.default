@@ -8,5 +8,7 @@ status.slave.notfound=${color}15${bold}${slave}${coloroff}: ${color}4${bold}NOTF
 status.slave.offline=${color}15${bold}${slave}${coloroff}: ${color}4${bold}OFFLINE${bold}${coloroff}.
 status.slave.uptime=${color}15${bold}UPTIME${bold}${coloroff}: ${bold}${slave}${bold} has been online for ${uptime}.
 status.threads=${color}15${bold}THREADS${coloroff}: ${bold}${current.threads}${bold} running (peak: ${bold}${max.threads}${bold}) / Created threads since the startup: ${bold}${total.threads}${bold}.
+status.processors=${color}15${bold}ADAPTIVE CPU${coloroff}: ${bold}${available.processors}${bold} logical CPU(s) available for worker sizing.
+status.worker=${color}15${bold}WORKER${coloroff}: ${bold}${worker.name}${bold} core=${bold}${worker.core}${bold} max=${bold}${worker.max}${bold} current=${bold}${worker.current}${bold} active=${bold}${worker.active}${bold} queued=${bold}${worker.queued}${bold}.
 status.vminfo=${color}15${bold}JVM${coloroff}: ${bold}${vm.name}${bold} vers. ${bold}${vm.version}${bold} by ${bold}${vm.vendor}.
 status.cminfo=${color}15${bold}CM${coloroff}: Queue size: ${bold}${cm.queue}${bold}. Thread state: ${bold}${cm.state}${bold}.

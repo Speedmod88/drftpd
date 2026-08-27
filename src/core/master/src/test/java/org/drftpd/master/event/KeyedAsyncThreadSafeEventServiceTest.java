@@ -89,6 +89,12 @@ class KeyedAsyncThreadSafeEventServiceTest {
             assertTrue(started.await(2, TimeUnit.SECONDS));
             assertEquals(1, service.getQueueSize());
             assertTrue(eventHandlerThread.get());
+            WorkerPoolStatus status = service.getWorkerPoolStatus("test");
+            assertEquals(1, status.coreThreads());
+            assertEquals(1, status.maxThreads());
+            assertEquals(1, status.currentThreads());
+            assertEquals(1, status.activeThreads());
+            assertEquals(0, status.queuedTasks());
         } finally {
             release.countDown();
         }
