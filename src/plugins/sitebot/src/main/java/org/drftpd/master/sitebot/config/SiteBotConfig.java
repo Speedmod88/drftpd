@@ -17,6 +17,8 @@
  */
 package org.drftpd.master.sitebot.config;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.drftpd.master.network.BlindTrustManager;
 import org.drftpd.master.sitebot.PartialTrustManager;
 
@@ -34,6 +36,8 @@ import java.util.StringTokenizer;
  * @version $Id$
  */
 public class SiteBotConfig {
+
+    private static final Logger logger = LogManager.getLogger(SiteBotConfig.class);
 
     private boolean _autoNick;
 
@@ -198,7 +202,8 @@ public class SiteBotConfig {
                 clamp(cpus / 4, 4, 8));
         _commandsHeavyThreads = parseThreadCount(cfg.getProperty("commands.heavy.threads", "auto"),
                 clamp(cpus / 16, 1, 3));
-        _commandsHeavyQueue = Integer.parseInt(cfg.getProperty("commands.heavy.queue", "20"));
+        _commandsHeavyQueue = parsePositiveInteger(
+                cfg.getProperty("commands.heavy.queue", "20"), 20, "commands.heavy.queue");
         StringTokenizer heavyCommands = new StringTokenizer(
                 cfg.getProperty("commands.heavy", "find dupe2 search rescan index"));
         while (heavyCommands.hasMoreTokens()) {
@@ -379,8 +384,24 @@ public class SiteBotConfig {
         return _commandsHeavy.contains(command.toLowerCase(Locale.ROOT));
     }
 
-    private static int parseThreadCount(String configured, int automatic) {
-        return "auto".equalsIgnoreCase(configured) ? automatic : Integer.parseInt(configured);
+    static int parseThreadCount(String configured, int automatic) {
+        if (configured == null || "auto".equalsIgnoreCase(configured)) {
+            return automatic;
+        }
+        return parsePositiveInteger(configured, automatic, "command worker count");
+    }
+
+    static int parsePositiveInteger(String configured, int fallback, String property) {
+        try {
+            int parsed = Integer.parseInt(configured);
+            if (parsed < 1) {
+                throw new NumberFormatException("must be positive");
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid {} value [{}]; using {}", property, configured, fallback);
+            return fallback;
+        }
     }
 
     private static int clamp(int value, int minimum, int maximum) {

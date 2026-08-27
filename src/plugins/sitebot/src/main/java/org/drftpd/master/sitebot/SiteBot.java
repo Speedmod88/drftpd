@@ -70,7 +70,7 @@ public class SiteBot implements ReplyConstants, Runnable {
 
     // Configuration
     private final String _confDir;
-    private SiteBotConfig _config = null;
+    private volatile SiteBotConfig _config = null;
     private String _name;
     // Connection stuff.
     private InputThread _inputThread = null;
@@ -84,8 +84,7 @@ public class SiteBot implements ReplyConstants, Runnable {
     // Outgoing message stuff.
     private final org.drftpd.master.sitebot.Queue _outQueue = new Queue();
     private final CaseInsensitiveConcurrentHashMap<String, OutputWriter> _writers = new CaseInsensitiveConcurrentHashMap<>();
-    private ThreadPoolExecutor _fastCommandPool;
-    private ThreadPoolExecutor _heavyCommandPool;
+    private volatile CommandPools _commandPools;
     // A HashMap of channels that points to a selfreferential HashMap of
     // User objects (used to remember which users are in which channels).
     private CaseInsensitiveHashMap<String, HashMap<IrcUser, IrcUser>> _channels = new CaseInsensitiveHashMap<>();
@@ -164,21 +163,7 @@ public class SiteBot implements ReplyConstants, Runnable {
         _commandManager = GlobalContext.getGlobalContext().createCommandManager();
         _commandManager.initialize(_cmds, themeDir);
 
-        // Keep quick commands responsive when index scans or other heavy commands are running.
-        int fastCommands = _config.getCommandsFastThreads();
-        int heavyCommands = _config.getCommandsHeavyThreads();
-        if (_config.getCommandsQueue()) {
-            _fastCommandPool = createCommandPool(fastCommands, new LinkedBlockingQueue<>(), "Fast");
-        } else if (_config.getCommandsBlock()) {
-            _fastCommandPool = createCommandPool(fastCommands, new SynchronousQueue<>(), "Fast");
-        } else {
-            throw new FatalException("commands.full has an invalid value in irc.conf");
-        }
-        _heavyCommandPool = createCommandPool(heavyCommands,
-                new ArrayBlockingQueue<>(_config.getCommandsHeavyQueue()), "Heavy");
-        logger.info("SiteBot command workers configured: cpus={} fast={} heavy={} heavyQueue={}",
-                Runtime.getRuntime().availableProcessors(), fastCommands, heavyCommands,
-                _config.getCommandsHeavyQueue());
+        _commandPools = createCommandPools(_config);
 
         try {
             setEncoding(_config.getCharset());
@@ -2803,13 +2788,18 @@ public class SiteBot implements ReplyConstants, Runnable {
             return;
         }
 
-        boolean heavyCommand = _config.isHeavyCommand(request.getCommand());
+        boolean heavyCommand;
+        CommandPools commandPools;
+        synchronized (this) {
+            heavyCommand = _config.isHeavyCommand(request.getCommand());
+            commandPools = _commandPools;
+        }
         MessagePriority outputPriority = heavyCommand ? MessagePriority.BULK : MessagePriority.COMMAND;
         UserDetails commandUser = getUserDetails(sender, ident);
         ServiceCommand service = commandUser.getCommandSession(cmdOutputs, channel, outputPriority);
         service.setCommands(_cmds);
         try {
-            (heavyCommand ? _heavyCommandPool : _fastCommandPool)
+            (heavyCommand ? commandPools.heavy() : commandPools.fast())
                     .execute(new CommandThread(request, service, sender, ident));
         } catch (RejectedExecutionException e) {
             commandUser.removeCommandSession(service);
@@ -2938,12 +2928,19 @@ public class SiteBot implements ReplyConstants, Runnable {
     }
 
     @EventSubscriber
-    public void onReloadEvent(ReloadEvent event) {
+    public synchronized void onReloadEvent(ReloadEvent event) {
         logger.info("Reloading config/commands/irc");
         loadCommands();
         _commandManager.initialize(getCommands(), themeDir);
         Properties cfg = ConfigLoader.loadPluginConfig(_confDir + "irc.conf");
-        _config = new SiteBotConfig(cfg);
+        SiteBotConfig reloadedConfig = new SiteBotConfig(cfg);
+        CommandPools reloadedPools = createCommandPools(reloadedConfig);
+        CommandPools previousPools = _commandPools;
+        _commandPools = reloadedPools;
+        _config = reloadedConfig;
+        if (previousPools != null) {
+            previousPools.shutdown();
+        }
         // Just call joinChannels() , this will join us to any new channels and update details
         // held on any existing ones
         joinChannels();
@@ -2997,9 +2994,30 @@ public class SiteBot implements ReplyConstants, Runnable {
             announcer.stop();
         }
         quitServer(reason);
-        _fastCommandPool.shutdown();
-        _heavyCommandPool.shutdown();
+        CommandPools commandPools = _commandPools;
+        if (commandPools != null) {
+            commandPools.shutdown();
+        }
         dispose();
+    }
+
+    private CommandPools createCommandPools(SiteBotConfig config) {
+        int fastCommands = config.getCommandsFastThreads();
+        int heavyCommands = config.getCommandsHeavyThreads();
+        ThreadPoolExecutor fastPool;
+        if (config.getCommandsQueue()) {
+            fastPool = createCommandPool(fastCommands, new LinkedBlockingQueue<>(), "Fast");
+        } else if (config.getCommandsBlock()) {
+            fastPool = createCommandPool(fastCommands, new SynchronousQueue<>(), "Fast");
+        } else {
+            throw new FatalException("commands.full has an invalid value in irc.conf");
+        }
+        ThreadPoolExecutor heavyPool = createCommandPool(heavyCommands,
+                new ArrayBlockingQueue<>(config.getCommandsHeavyQueue()), "Heavy");
+        logger.info("SiteBot command workers configured: cpus={} fast={} heavy={} heavyQueue={}",
+                Runtime.getRuntime().availableProcessors(), fastCommands, heavyCommands,
+                config.getCommandsHeavyQueue());
+        return new CommandPools(fastPool, heavyPool);
     }
 
     private ThreadPoolExecutor createCommandPool(int workers, BlockingQueue<Runnable> queue, String type) {
@@ -3007,6 +3025,13 @@ public class SiteBot implements ReplyConstants, Runnable {
                 queue, new CommandThreadFactory(type), new ThreadPoolExecutor.AbortPolicy());
         pool.allowCoreThreadTimeOut(true);
         return pool;
+    }
+
+    private record CommandPools(ThreadPoolExecutor fast, ThreadPoolExecutor heavy) {
+        private void shutdown() {
+            fast.shutdown();
+            heavy.shutdown();
+        }
     }
 
     public void setDisconnected(boolean state) {

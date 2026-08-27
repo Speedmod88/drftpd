@@ -93,7 +93,7 @@ public class NFOMissingManager implements PluginInterface {
      * could cause a problem if the .nfo file was uploaded first, and the asyncevent
      * for the .nfo was before vfs event.
      */
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SITEBOT_FUNCTIONAL)
     public void onDirectoryFtpEvent(DirectoryFtpEvent direvent) {
         if ("MKD".equals(direvent.getCommand())) {
             for (LinkType link : _linkmanager.getLinks()) {
