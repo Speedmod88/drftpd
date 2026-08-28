@@ -4,7 +4,7 @@ status.heap=Heap Memory: ${heap.used} used / ${heap.available} available / ${hea
 status.master.uptime=Master has been online for ${uptime}.
 status.nonheap=Non-Heap Memory: ${nonheap.used} used / ${nonheap.available} available / ${nonheap.max} maximum.
 status.osinfo=Operational System: ${os.name} vers. ${os.version} (${os.arch})
-status.loadaverage=System load: One-minute average: ${load.average} / Load per logical CPU: ${load.per.processor}.
+status.loadaverage=System load average: 1m=${load.one} / 5m=${load.five} / 15m=${load.fifteen}.
 status.slave.notfound=${slave}: NOTFOUND.
 status.slave.offline=${slave}: OFFLINE.
 status.slave.uptime=${slave} has been online for ${uptime}.

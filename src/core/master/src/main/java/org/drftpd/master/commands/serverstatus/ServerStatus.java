@@ -28,7 +28,10 @@ import org.drftpd.master.util.Time;
 import org.drftpd.master.vfs.CommitManager;
 import org.drftpd.slave.exceptions.ObjectNotFoundException;
 
+import java.io.IOException;
 import java.lang.management.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 /**
@@ -37,6 +40,7 @@ import java.util.*;
  */
 public class ServerStatus extends CommandInterface {
     protected static final Key<Long> CONNECTTIME = new Key<>(ServerStatus.class, "connecttime");
+    private static final Path PROC_LOAD_AVERAGE = Path.of("/proc/loadavg");
 
     private ResourceBundle _bundle;
 
@@ -128,16 +132,15 @@ public class ServerStatus extends CommandInterface {
 
             if (arg.equals("os") || isAll) {
                 OperatingSystemMXBean omx = ManagementFactory.getOperatingSystemMXBean();
-                int availableProcessors = Runtime.getRuntime().availableProcessors();
-                double loadAverage = omx.getSystemLoadAverage();
+                LoadAverages loadAverages = readLoadAverages(omx);
                 env.put("os.name", omx.getName());
                 env.put("os.version", omx.getVersion());
                 env.put("os.arch", omx.getArch());
                 response.addComment(session.jprintf(_bundle, env, "status.osinfo"));
 
-                env.put("load.average", formatLoadAverage(loadAverage));
-                env.put("load.per.processor", loadAverage < 0.0D ? "unavailable"
-                        : formatLoadAverage(loadAverage / availableProcessors));
+                env.put("load.one", formatLoadAverage(loadAverages.oneMinute()));
+                env.put("load.five", formatLoadAverage(loadAverages.fiveMinutes()));
+                env.put("load.fifteen", formatLoadAverage(loadAverages.fifteenMinutes()));
                 response.addComment(session.jprintf(_bundle, env, "status.loadaverage"));
             }
 
@@ -248,5 +251,25 @@ public class ServerStatus extends CommandInterface {
 
     static String formatLoadAverage(double loadAverage) {
         return loadAverage < 0.0D ? "unavailable" : String.format(Locale.ROOT, "%.2f", loadAverage);
+    }
+
+    private static LoadAverages readLoadAverages(OperatingSystemMXBean operatingSystem) {
+        try {
+            return parseLoadAverages(Files.readString(PROC_LOAD_AVERAGE));
+        } catch (IOException | IllegalArgumentException | SecurityException ignored) {
+            return new LoadAverages(operatingSystem.getSystemLoadAverage(), -1.0D, -1.0D);
+        }
+    }
+
+    static LoadAverages parseLoadAverages(String value) {
+        String[] fields = value.trim().split("\\s+");
+        if (fields.length < 3) {
+            throw new IllegalArgumentException("Invalid /proc/loadavg value");
+        }
+        return new LoadAverages(Double.parseDouble(fields[0]), Double.parseDouble(fields[1]),
+                Double.parseDouble(fields[2]));
+    }
+
+    record LoadAverages(double oneMinute, double fiveMinutes, double fifteenMinutes) {
     }
 }
