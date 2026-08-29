@@ -51,6 +51,7 @@ import org.drftpd.slave.vfs.RootCollection;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
 import java.io.*;
 import java.net.InetAddress;
@@ -76,6 +77,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 import java.util.zip.CRC32;
 import java.util.zip.CheckedInputStream;
 
@@ -273,6 +276,7 @@ public class Slave extends SslConfigurationLoader {
         }
 
         _ignorePartialRemerge = p.getProperty("ignore.partialremerge", "false").equalsIgnoreCase("true");
+        configureTransferTls();
         logger.info("Slave {} connecting to master at {}. Configuration: Conccurrent Root Iteration: {}",
                 slaveName, masterIsa, _concurrentRootIteration);
 
@@ -1030,6 +1034,119 @@ public class Slave extends SslConfigurationLoader {
             return null;
         }
         return _sslProtocols;
+    }
+
+    private void configureTransferTls() {
+        try {
+            SSLParameters supportedParameters = SSLContext.getDefault().getSupportedSSLParameters();
+            _cipherSuites = selectCipherSuites(_cfg, supportedParameters.getCipherSuites());
+            _sslProtocols = selectSSLProtocols(_cfg, supportedParameters.getProtocols());
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Unable to read JVM SSL/TLS capabilities", e);
+        }
+
+        logger.info("Data transfer SSL/TLS configuration: protocols={}, cipherSuites={}",
+                configuredValues(_sslProtocols), configuredValues(_cipherSuites));
+    }
+
+    static String[] selectSSLProtocols(Properties config, String[] supportedProtocols) {
+        List<IndexedSetting> configuredProtocols = indexedSettings(config, "protocol.");
+        if (configuredProtocols.stream().allMatch(setting -> setting.value().trim().isEmpty())) {
+            return null;
+        }
+
+        Set<String> supported = new HashSet<>(Arrays.asList(supportedProtocols));
+        LinkedHashSet<String> selected = new LinkedHashSet<>();
+        for (IndexedSetting setting : configuredProtocols) {
+            String protocol = setting.value().trim();
+            if (protocol.isEmpty()) {
+                continue;
+            }
+            if (!supported.contains(protocol)) {
+                throw new IllegalArgumentException("Unsupported data transfer SSL/TLS protocol in "
+                        + setting.key() + ": " + protocol);
+            }
+            selected.add(protocol);
+        }
+
+        return selected.toArray(new String[0]);
+    }
+
+    static String[] selectCipherSuites(Properties config, String[] supportedCipherSuites) {
+        List<IndexedSetting> whitelist = nonBlankSettings(indexedSettings(config, "cipher.whitelist."));
+        List<IndexedSetting> blacklist = nonBlankSettings(indexedSettings(config, "cipher.blacklist."));
+        if (whitelist.isEmpty() && blacklist.isEmpty()) {
+            return null;
+        }
+
+        LinkedHashSet<String> selected = new LinkedHashSet<>();
+        if (whitelist.isEmpty()) {
+            selected.addAll(Arrays.asList(supportedCipherSuites));
+        } else {
+            for (IndexedSetting setting : whitelist) {
+                Pattern pattern = compileSettingPattern(setting);
+                for (String cipherSuite : supportedCipherSuites) {
+                    if (pattern.matcher(cipherSuite).matches()) {
+                        selected.add(cipherSuite);
+                    }
+                }
+            }
+            if (selected.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Data transfer cipher whitelist did not match any JVM-supported cipher suites");
+            }
+        }
+
+        for (IndexedSetting setting : blacklist) {
+            Pattern pattern = compileSettingPattern(setting);
+            selected.removeIf(cipherSuite -> pattern.matcher(cipherSuite).matches());
+        }
+        if (selected.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Data transfer cipher configuration disabled every supported cipher suite");
+        }
+
+        return selected.toArray(new String[0]);
+    }
+
+    private static List<IndexedSetting> indexedSettings(Properties config, String prefix) {
+        Pattern keyPattern = Pattern.compile("^" + Pattern.quote(prefix) + "([1-9]\\d*)$");
+        List<IndexedSetting> settings = new ArrayList<>();
+        for (String key : config.stringPropertyNames()) {
+            java.util.regex.Matcher matcher = keyPattern.matcher(key);
+            if (matcher.matches()) {
+                settings.add(new IndexedSetting(Integer.parseInt(matcher.group(1)), key,
+                        config.getProperty(key, "")));
+            }
+        }
+        settings.sort(Comparator.comparingInt(IndexedSetting::index));
+        return settings;
+    }
+
+    private static List<IndexedSetting> nonBlankSettings(List<IndexedSetting> settings) {
+        List<IndexedSetting> nonBlank = new ArrayList<>();
+        for (IndexedSetting setting : settings) {
+            if (!setting.value().trim().isEmpty()) {
+                nonBlank.add(setting);
+            }
+        }
+        return nonBlank;
+    }
+
+    private static Pattern compileSettingPattern(IndexedSetting setting) {
+        try {
+            return Pattern.compile(setting.value());
+        } catch (PatternSyntaxException e) {
+            throw new IllegalArgumentException("Invalid regular expression in " + setting.key()
+                    + ": " + setting.value(), e);
+        }
+    }
+
+    private static String configuredValues(String[] values) {
+        return values == null ? "JVM defaults" : Arrays.toString(values);
+    }
+
+    private record IndexedSetting(int index, String key, String value) {
     }
 
     public Map<TransferIndex, Transfer> getTransferMap() {
