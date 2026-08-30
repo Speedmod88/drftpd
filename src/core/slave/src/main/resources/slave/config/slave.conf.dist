@@ -55,9 +55,9 @@ slave.timeout=60000
 # Default: [org.drftpd.slave.diskselection.filter.DiskSelectionFilter]
 diskselection=org.drftpd.slave.diskselection.filter.DiskSelectionFilter
 
-# Enabled cipher suites.
+# Enabled cipher suites for encrypted FTP data transfers (PROT P).
 # If left empty, default set will be used.
-# Use whitelist to add specific chiphers to use.
+# Use whitelist to add specific ciphers to use.
 # All supported ciphers not included in whitelist will be removed.
 # Use blacklist to exclude ciphers.
 # Blacklist can be combined with whitelist, if no whitelist rule(s) are
@@ -67,10 +67,12 @@ diskselection=org.drftpd.slave.diskselection.filter.DiskSelectionFilter
 # Multiple whitelist/blacklist rules are supported.
 cipher.whitelist.1=.*_(POLY1305_SHA256|GCM_SHA384|GCM_SHA256).*
 
-# Enabled protocols.
+# Enabled protocols for encrypted FTP data transfers (PROT P).
 # If left empty, default set will be used.
+# Restart the slave after changing protocols or cipher rules.
 protocol.1=TLSv1.2
-protocol.2=TLSv1.3
+# Enable TLSv1.3 only after verifying compatibility with your FTP clients.
+#protocol.2=TLSv1.3
 
 # Setting this to true will make this slave perform
 #  a full remerge when connecting to a master irrespective
