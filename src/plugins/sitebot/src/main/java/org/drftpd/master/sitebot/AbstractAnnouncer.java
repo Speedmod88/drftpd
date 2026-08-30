@@ -53,11 +53,19 @@ public abstract class AbstractAnnouncer {
     }
 
     protected void sayOutput(String output, AnnounceWriter writer) {
+        sayOutput(output, writer, MessagePriority.ANNOUNCEMENT);
+    }
+
+    protected void sayReleaseOutput(String output, AnnounceWriter writer) {
+        sayOutput(output, writer, MessagePriority.RELEASE);
+    }
+
+    protected void sayOutput(String output, AnnounceWriter writer, MessagePriority priority) {
         StringTokenizer st = new StringTokenizer(output, "\n");
         while (st.hasMoreTokens()) {
             String token = st.nextToken();
             for (OutputWriter oWriter : writer.getOutputWriters()) {
-                oWriter.sendMessage(token);
+                oWriter.sendMessage(token, priority);
             }
         }
     }

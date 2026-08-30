@@ -17,19 +17,27 @@
  */
 package org.drftpd.master.sitebot.config;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.drftpd.master.network.BlindTrustManager;
 import org.drftpd.master.sitebot.PartialTrustManager;
 
 import javax.net.ssl.X509TrustManager;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedList;
+import java.util.Locale;
 import java.util.Properties;
+import java.util.Set;
+import java.util.StringTokenizer;
 
 /**
  * @author djb61
  * @version $Id$
  */
 public class SiteBotConfig {
+
+    private static final Logger logger = LogManager.getLogger(SiteBotConfig.class);
 
     private boolean _autoNick;
 
@@ -56,6 +64,14 @@ public class SiteBotConfig {
     private boolean _commandsBlock = false;
 
     private int _commandsMax = 1;
+
+    private int _commandsFastThreads;
+
+    private int _commandsHeavyThreads;
+
+    private int _commandsHeavyQueue;
+
+    private final Set<String> _commandsHeavy = new HashSet<>();
 
     private boolean _commandsQueue = false;
 
@@ -180,7 +196,19 @@ public class SiteBotConfig {
         _blowfishPunishReason = cfg.getProperty("blowfish.unencrypted.reason");
         _localBindHost = cfg.getProperty("bind.host");
         _botName = cfg.getProperty("bot.name");
-        _commandsMax = Integer.parseInt(cfg.getProperty("commands.max"));
+        _commandsMax = Integer.parseInt(cfg.getProperty("commands.max", "5"));
+        int cpus = Runtime.getRuntime().availableProcessors();
+        _commandsFastThreads = parseThreadCount(cfg.getProperty("commands.fast.threads", "auto"),
+                clamp(cpus / 4, 4, 8));
+        _commandsHeavyThreads = parseThreadCount(cfg.getProperty("commands.heavy.threads", "auto"),
+                clamp(cpus / 16, 1, 3));
+        _commandsHeavyQueue = parsePositiveInteger(
+                cfg.getProperty("commands.heavy.queue", "20"), 20, "commands.heavy.queue");
+        StringTokenizer heavyCommands = new StringTokenizer(
+                cfg.getProperty("commands.heavy", "find dupe2 search rescan index"));
+        while (heavyCommands.hasMoreTokens()) {
+            _commandsHeavy.add(heavyCommands.nextToken().toLowerCase(Locale.ROOT));
+        }
         if (cfg.getProperty("commands.full").equalsIgnoreCase("block")) {
             _commandsBlock = true;
         } else if (cfg.getProperty("commands.full").equalsIgnoreCase("queue")) {
@@ -338,5 +366,45 @@ public class SiteBotConfig {
 
     public boolean getCommandsQueue() {
         return _commandsQueue;
+    }
+
+    public int getCommandsFastThreads() {
+        return _commandsFastThreads;
+    }
+
+    public int getCommandsHeavyThreads() {
+        return _commandsHeavyThreads;
+    }
+
+    public int getCommandsHeavyQueue() {
+        return _commandsHeavyQueue;
+    }
+
+    public boolean isHeavyCommand(String command) {
+        return _commandsHeavy.contains(command.toLowerCase(Locale.ROOT));
+    }
+
+    static int parseThreadCount(String configured, int automatic) {
+        if (configured == null || "auto".equalsIgnoreCase(configured)) {
+            return automatic;
+        }
+        return parsePositiveInteger(configured, automatic, "command worker count");
+    }
+
+    static int parsePositiveInteger(String configured, int fallback, String property) {
+        try {
+            int parsed = Integer.parseInt(configured);
+            if (parsed < 1) {
+                throw new NumberFormatException("must be positive");
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid {} value [{}]; using {}", property, configured, fallback);
+            return fallback;
+        }
+    }
+
+    private static int clamp(int value, int minimum, int maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
     }
 }

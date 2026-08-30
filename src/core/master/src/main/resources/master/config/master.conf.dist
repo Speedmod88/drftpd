@@ -24,6 +24,14 @@ delete.collision.files=false
 # Advanced settings. #
 # Do not touch it if you don't know what you are doing. #
 
+# Release announcement event workers. "auto" scales from the CPUs available
+# to the master JVM. Events for one release remain ordered while separate
+# releases can be processed concurrently.
+# Auto core: CPU / 8, minimum 2, maximum 8
+# Auto max:  CPU / 4, minimum 4, maximum 16
+event.release.core.threads=auto
+event.release.max.threads=auto
+
 # The name of the UserManager's plugin.
 # Default: [org.drftpd.master.usermanager.encryptedjavabeans.EncryptedBeanUserManager]
 usermanager=org.drftpd.master.usermanager.encryptedjavabeans.EncryptedBeanUserManager

@@ -147,18 +147,28 @@ channel.autojoin=true
 #  do not change anything in this section unless you are sure of what it does
 #  and what the consequences may be.
 
-# Allow more than one command to be executed at once, this controls the maximum
-#  number of commands that can be running at any given time. If you want the aborting
-#  of commands to work then this must be greater than 1 and ideally quite a bit more.
-# Default: [5]
+# Legacy command limit retained for compatibility with external SiteBot plugins.
+# Built-in command scheduling uses the fast/heavy worker settings below.
 commands.max=5
 
 # Behaviour when max commands are running, there are 2 options for this setting,
-#  these are "block" and "queue", in queue mode commands will be queued and executed
-#  when other commands are finished, in block mode a command will be rejected when
-#  the max commands are already running.
+#  these are "block" and "queue". This controls the fast-command pool; heavy
+#  commands always use their own bounded queue.
 # Default: [queue]
 commands.full=queue
+
+# Fast command workers. "auto" uses CPU / 4, minimum 4, maximum 8.
+# Quick commands remain responsive while heavy index scans are running.
+commands.fast.threads=auto
+
+# Heavy command workers. "auto" uses CPU / 16, minimum 1, maximum 3.
+commands.heavy.threads=auto
+
+# Maximum number of heavy commands waiting after all heavy workers are busy.
+commands.heavy.queue=20
+
+# Commands isolated in the heavy worker pool. Separate names with spaces.
+commands.heavy=find dupe2 search rescan index
 
 # Local bind address to use on machines with multiple IPs. This can be set to
 #  either a hostname or an IP address, using a hostname is not advised if the

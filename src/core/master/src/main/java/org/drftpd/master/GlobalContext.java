@@ -34,8 +34,10 @@ import org.drftpd.master.config.ConfigManager;
 import org.drftpd.master.cron.TimeEventInterface;
 import org.drftpd.master.cron.TimeManager;
 import org.drftpd.master.event.AsyncThreadSafeEventService;
+import org.drftpd.master.event.KeyedAsyncThreadSafeEventService;
 import org.drftpd.master.event.MessageEvent;
 import org.drftpd.master.event.SlaveEvent;
+import org.drftpd.master.event.WorkerPoolStatus;
 import org.drftpd.master.exceptions.FatalException;
 import org.drftpd.master.exceptions.SlaveFileException;
 import org.drftpd.master.indexation.IndexEngineInterface;
@@ -67,6 +69,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -83,12 +86,16 @@ public class GlobalContext {
     public static final String VERSION = "DrFTPD 4.0.12-git";
     private static final Logger logger = LogManager.getLogger(GlobalContext.class);
     public static final String SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT = "EventBusSiteBot";
+    public static final String SERVICE_NAME_EVENT_BUS_SITEBOT_FUNCTIONAL = "EventBusSiteBotFunctional";
     public static final String SERVICE_NAME_EVENT_BUS_SITEBOT_SLAVE = "EventBusSiteBotSlave";
     public static final String SERVICE_NAME_EVENT_BUS_SLOWEST = "EventBusSlowest";
     protected static GlobalContext _gctx;
     private static final DirectoryHandle root = new DirectoryHandle(VirtualFileSystem.separator);
     private static final AsyncThreadSafeEventService eventService = new AsyncThreadSafeEventService();
-    private static final AsyncThreadSafeEventService eventService2 = new AsyncThreadSafeEventService();
+    private static final KeyedAsyncThreadSafeEventService eventService2 =
+            new KeyedAsyncThreadSafeEventService("ReleaseEvent");
+    private static final AsyncThreadSafeEventService siteBotFunctionalEventService =
+            new AsyncThreadSafeEventService();
     private static final AsyncThreadSafeEventService eventService3 = new AsyncThreadSafeEventService();
     private static final AsyncThreadSafeEventService siteBotSlaveEventService = new AsyncThreadSafeEventService();
     private static final int SITEBOT_SLAVE_EVENT_QUEUE_CAPACITY = 1024;
@@ -97,6 +104,8 @@ public class GlobalContext {
     private static final List<Consumer<SlaveEvent>> siteBotSlaveEventConsumers = new ArrayList<>();
     private static int expectedSiteBotSlaveEventConsumers = 1;
     private static boolean siteBotSlaveEventDeliveryReady;
+    private static final Map<String, Supplier<WorkerPoolStatus>> workerPoolStatusProviders =
+            new ConcurrentHashMap<>();
     private static Set<Method> hooksMethods;
     protected SectionManagerInterface _sectionManager;
     protected SlaveManager _slaveManager;
@@ -151,6 +160,8 @@ public class GlobalContext {
 
                 EventServiceLocator.setEventService(EventServiceLocator.SERVICE_NAME_EVENT_BUS, eventService);
                 EventServiceLocator.setEventService(SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT, eventService2);
+                EventServiceLocator.setEventService(SERVICE_NAME_EVENT_BUS_SITEBOT_FUNCTIONAL,
+                        siteBotFunctionalEventService);
                 EventServiceLocator.setEventService(SERVICE_NAME_EVENT_BUS_SITEBOT_SLAVE, siteBotSlaveEventService);
                 EventServiceLocator.setEventService(SERVICE_NAME_EVENT_BUS_SLOWEST, eventService3);
             } catch (EventServiceExistsException e) {
@@ -256,8 +267,50 @@ public class GlobalContext {
         return eventService2;
     }
 
+    public static AsyncThreadSafeEventService getEventServiceSiteBotFunctional() {
+        return siteBotFunctionalEventService;
+    }
+
+    /**
+     * Publishes release events to the concurrent announcement bus and to the
+     * serial functional bus used by link-maintenance plugins.
+     */
+    public static void publishSiteBotPriorityEvent(Object event) {
+        getEventServiceSiteBotPriority().publishAsync(event);
+        getEventServiceSiteBotFunctional().publishAsync(event);
+    }
+
     public static AsyncThreadSafeEventService getEventServiceSlowest() {
         return eventService3;
+    }
+
+    public static void registerWorkerPoolStatus(String id, Supplier<WorkerPoolStatus> provider) {
+        workerPoolStatusProviders.put(Objects.requireNonNull(id, "id"),
+                Objects.requireNonNull(provider, "provider"));
+    }
+
+    public static void unregisterWorkerPoolStatus(String id) {
+        if (id != null) {
+            workerPoolStatusProviders.remove(id);
+        }
+    }
+
+    public static List<WorkerPoolStatus> getWorkerPoolStatuses() {
+        List<WorkerPoolStatus> statuses = new ArrayList<>();
+        statuses.add(eventService2.getWorkerPoolStatus("Release events"));
+        workerPoolStatusProviders.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> {
+                    try {
+                        WorkerPoolStatus status = entry.getValue().get();
+                        if (status != null) {
+                            statuses.add(status);
+                        }
+                    } catch (RuntimeException e) {
+                        logger.warn("Unable to read worker pool status for {}", entry.getKey(), e);
+                    }
+                });
+        return statuses;
     }
 
     public static AsyncThreadSafeEventService getSiteBotSlaveEventService() {
@@ -331,6 +384,12 @@ public class GlobalContext {
 
     public void reloadFtpConfig() {
         _config.reload();
+        configureReleaseEventWorkers();
+    }
+
+    private void configureReleaseEventWorkers() {
+        eventService2.configure(getConfig().getMainProperties(),
+                "event.release.core.threads", "event.release.max.threads");
     }
 
     private void loadSlaveSelectionManager(Properties cfg) {
@@ -693,7 +752,7 @@ public class GlobalContext {
 
     public void init() {
         _config = new ConfigManager();
-        _config.reload();
+        reloadFtpConfig();
 
         CommitManager.getCommitManager().start();
         _timeManager = new TimeManager();
@@ -747,6 +806,14 @@ public class GlobalContext {
             }
             while (GlobalContext.getEventServiceSiteBotPriority().getQueueSize() > 0) {
                 logger.info("Waiting for queued events to be processed 2 - {} remaining", GlobalContext.getEventServiceSiteBotPriority().getQueueSize());
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {
+                }
+            }
+            while (GlobalContext.getEventServiceSiteBotFunctional().getQueueSize() > 0) {
+                logger.info("Waiting for functional SiteBot events to be processed - {} remaining",
+                        GlobalContext.getEventServiceSiteBotFunctional().getQueueSize());
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException ignored) {

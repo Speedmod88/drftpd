@@ -109,7 +109,7 @@ public class ZipscriptZipPostHook extends ZipTools {
                                     InetAddress transferSlaveInetAddr = response.getObject(DataConnectionHandler.TRANSFER_SLAVE_INET_ADDRESS);
                                     char transferType = response.getObject(DataConnectionHandler.TRANSFER_TYPE);
                                     ZipscriptVFSDataZip zipData = new ZipscriptVFSDataZip(request.getCurrentDirectory());
-                                    GlobalContext.getEventService().publishAsync(new ZipTransferEvent(conn, "STOR",
+                                    GlobalContext.getEventServiceSiteBotPriority().publishAsync(new ZipTransferEvent(conn, "STOR",
                                             transferFile, conn.getClientAddress(), transferSlave, transferSlaveInetAddr,
                                             transferType, zipData, zipData.getDizInfo(), zipData.getDizStatus()));
                                 } catch (KeyNotFoundException e1) {

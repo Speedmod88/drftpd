@@ -98,7 +98,7 @@ public class LatestDirManager implements PluginInterface {
     /*
      * Handle the MKD command to make links
      */
-    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SITEBOT_FUNCTIONAL)
     public void onDirectoryFtpEvent(DirectoryFtpEvent event) {
         if (!event.getCommand().equalsIgnoreCase("MKD"))
             return;
