@@ -30,6 +30,9 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 
 /**
  * @author zubov
@@ -37,6 +40,9 @@ import java.util.Set;
  */
 public class FileHandle extends InodeHandle implements FileHandleInterface {
     protected static final Logger logger = LogManager.getLogger(FileHandle.class.getName());
+
+    private static final ConcurrentHashMap<ChecksumRequestKey, CompletableFuture<Long>> ACTIVE_CHECKSUMS =
+            new ConcurrentHashMap<>();
 
     public FileHandle(String path) {
         super(path);
@@ -162,7 +168,8 @@ public class FileHandle extends InodeHandle implements FileHandleInterface {
      */
     public long getCheckSumFromSlave() throws NoAvailableSlaveException,
             FileNotFoundException {
-        if (getSize() == 0L) {
+        long size = getSize();
+        if (size == 0L) {
             return 0L;
         }
         if (AsyncThreadSafeEventService.isEventHandlerThread()) {
@@ -170,6 +177,30 @@ public class FileHandle extends InodeHandle implements FileHandleInterface {
                     "Remote checksum lookup deferred from an asynchronous event handler");
         }
 
+        ChecksumRequestKey requestKey = new ChecksumRequestKey(getPath(), size, lastModified());
+        CompletableFuture<Long> checksum = new CompletableFuture<>();
+        CompletableFuture<Long> activeChecksum = ACTIVE_CHECKSUMS.putIfAbsent(requestKey, checksum);
+        if (activeChecksum != null) {
+            logger.debug("Joining active checksum scan for {}", getPath());
+            return awaitChecksum(requestKey, activeChecksum);
+        }
+
+        try {
+            long checksumValue = fetchFreshChecksum();
+            checksum.complete(checksumValue);
+            return checksumValue;
+        } catch (FileNotFoundException | NoAvailableSlaveException e) {
+            checksum.completeExceptionally(e);
+            throw e;
+        } catch (RuntimeException | Error e) {
+            checksum.completeExceptionally(e);
+            throw e;
+        } finally {
+            ACTIVE_CHECKSUMS.remove(requestKey, checksum);
+        }
+    }
+
+    private long fetchFreshChecksum() throws NoAvailableSlaveException, FileNotFoundException {
         synchronized (getInode()) {
             Exception lastFailure = null;
             for (RemoteSlave rslave : getAvailableSlaves()) {
@@ -189,6 +220,36 @@ public class FileHandle extends InodeHandle implements FileHandleInterface {
             throw new NoAvailableSlaveException(
                     "Unable to fetch checksum for " + getPath() + failureMessage);
         }
+    }
+
+    private long awaitChecksum(ChecksumRequestKey requestKey, CompletableFuture<Long> checksum)
+            throws NoAvailableSlaveException, FileNotFoundException {
+        try {
+            return checksum.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new NoAvailableSlaveException(
+                    "Interrupted while waiting for checksum of " + requestKey.path());
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof FileNotFoundException) {
+                throw (FileNotFoundException) cause;
+            }
+            if (cause instanceof NoAvailableSlaveException) {
+                throw (NoAvailableSlaveException) cause;
+            }
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            if (cause instanceof Error) {
+                throw (Error) cause;
+            }
+            throw new NoAvailableSlaveException(
+                    "Unable to fetch checksum for " + requestKey.path() + ": " + cause.getMessage());
+        }
+    }
+
+    private record ChecksumRequestKey(String path, long size, long lastModified) {
     }
 
     /**
