@@ -29,6 +29,7 @@ import org.drftpd.master.event.SlaveEvent;
 import org.drftpd.master.exceptions.SlaveUnavailableException;
 import org.drftpd.master.sitebot.AbstractAnnouncer;
 import org.drftpd.master.sitebot.AnnounceWriter;
+import org.drftpd.master.sitebot.MessagePriority;
 import org.drftpd.master.sitebot.SiteBot;
 import org.drftpd.master.sitebot.config.AnnounceConfig;
 import org.drftpd.master.sitebot.config.ChannelConfig;
@@ -216,10 +217,10 @@ public class BasicAnnouncer extends AbstractAnnouncer {
                     }
                 }
                 SlaveManagement.fillEnvWithSlaveStatus(env, status);
-                outputSimpleEvent(ReplacerUtils.jprintf("addslave", env, _bundle), "addslave");
+                outputSimpleEvent(ReplacerUtils.jprintf("addslave", env, _bundle), "addslave", MessagePriority.SLAVE);
             }
-            case "DELSLAVE" -> outputSimpleEvent(ReplacerUtils.jprintf("delslave", env, _bundle), "delslave");
-            case "MSGSLAVE" -> outputSimpleEvent(ReplacerUtils.jprintf("msgslave", env, _bundle), "msgslave");
+            case "DELSLAVE" -> outputSimpleEvent(ReplacerUtils.jprintf("delslave", env, _bundle), "delslave", MessagePriority.SLAVE);
+            case "MSGSLAVE" -> outputSimpleEvent(ReplacerUtils.jprintf("msgslave", env, _bundle), "msgslave", MessagePriority.SLAVE);
         }
         return true;
     }
@@ -258,15 +259,23 @@ public class BasicAnnouncer extends AbstractAnnouncer {
         if (writer != null) {
             Map<String, Object> env = new HashMap<>(SiteBot.GLOBAL_ENV);
             fillEnvSection(env, direvent, writer);
-            sayOutput(ReplacerUtils.jprintf(type, env, _bundle), writer);
+            if ("mkdir".equals(type)) {
+                sayReleaseOutput(ReplacerUtils.jprintf(type, env, _bundle), writer);
+            } else {
+                sayOutput(ReplacerUtils.jprintf(type, env, _bundle), writer);
+            }
         }
     }
 
     private void outputSimpleEvent(String output, String type) {
+        outputSimpleEvent(output, type, MessagePriority.ANNOUNCEMENT);
+    }
+
+    private void outputSimpleEvent(String output, String type, MessagePriority priority) {
         AnnounceWriter writer = _config.getSimpleWriter(type);
         // Check we got a writer back, if it is null do nothing and ignore the event
         if (writer != null) {
-            sayOutput(output, writer);
+            sayOutput(output, writer, priority);
         }
     }
 

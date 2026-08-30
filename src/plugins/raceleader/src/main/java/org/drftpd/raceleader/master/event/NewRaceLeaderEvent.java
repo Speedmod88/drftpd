@@ -17,6 +17,7 @@
  */
 package org.drftpd.raceleader.master.event;
 
+import org.drftpd.master.event.KeyedEvent;
 import org.drftpd.master.util.UploaderPosition;
 import org.drftpd.master.vfs.DirectoryHandle;
 
@@ -24,7 +25,7 @@ import org.drftpd.master.vfs.DirectoryHandle;
  * @author CyBeR
  * @version $Id: NewRaceLeaderEvent.java 1925 2009-06-15 21:46:05Z CyBeR $
  */
-public class NewRaceLeaderEvent {
+public class NewRaceLeaderEvent implements KeyedEvent {
 
     private final String _user;
     private final String _prevuser;
@@ -58,5 +59,10 @@ public class NewRaceLeaderEvent {
 
     public int getFiles() {
         return _files;
+    }
+
+    @Override
+    public String getEventKey() {
+        return _dir.getPath();
     }
 }

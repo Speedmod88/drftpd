@@ -87,7 +87,7 @@ public class ZipAnnouncer extends AbstractAnnouncer {
         }
     }
 
-    @EventSubscriber
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
     public void onZipTransferEvent(ZipTransferEvent zipEvent) {
         outputZipSTOR(zipEvent);
     }
@@ -118,7 +118,7 @@ public class ZipAnnouncer extends AbstractAnnouncer {
                     env.put("files", Integer.toString(zipEvent.getDizInfo().getTotal()));
                     env.put("expectedsize", (Bytes.formatBytes(
                             ZipTools.getZipLargestFileBytes(dir) * zipEvent.getDizInfo().getTotal())));
-                    sayOutput(ReplacerUtils.jprintf("zip.store.first", env, _bundle), writer);
+                    sayReleaseOutput(ReplacerUtils.jprintf("zip.store.first", env, _bundle), writer);
                 }
                 return;
             }
@@ -138,7 +138,7 @@ public class ZipAnnouncer extends AbstractAnnouncer {
                             fillEnvSection(env, zipEvent, writer, true);
                             env.put("filesleft",
                                     Integer.toString(zipEvent.getDizStatus().getMissing()));
-                            sayOutput(ReplacerUtils.jprintf("zip.store.race", env, _bundle), writer);
+                            sayReleaseOutput(ReplacerUtils.jprintf("zip.store.race", env, _bundle), writer);
                         }
                     }
                 }
@@ -159,7 +159,7 @@ public class ZipAnnouncer extends AbstractAnnouncer {
                     env.put("files", Integer.toString(zipEvent.getDizInfo().getTotal()));
                     env.put("size", Bytes.formatBytes(ZipTools.getZipTotalBytes(dir)));
                     env.put("speed", Bytes.formatBytes(ZipTools.getXferspeed(dir)) + "/s");
-                    sayOutput(ReplacerUtils.jprintf("zip.store.complete", env, _bundle), writer);
+                    sayReleaseOutput(ReplacerUtils.jprintf("zip.store.complete", env, _bundle), writer);
 
                     // Find max users/groups to announce
                     int maxUsers;
@@ -230,7 +230,7 @@ public class ZipAnnouncer extends AbstractAnnouncer {
                         raceenv.put("daydn",
                                 UserTransferStats.getStatsPlace("DAYDN",
                                         raceuser, GlobalContext.getGlobalContext().getUserManager()));
-                        sayOutput(ReplacerUtils.jprintf("zip.store.complete.racer", raceenv, _bundle), writer);
+                        sayReleaseOutput(ReplacerUtils.jprintf("zip.store.complete.racer", raceenv, _bundle), writer);
 
                         position++;
                         if (position > maxUsers) {
@@ -241,7 +241,7 @@ public class ZipAnnouncer extends AbstractAnnouncer {
                     //add groups stats
                     position = 1;
 
-                    sayOutput(ReplacerUtils.jprintf("zip.store.complete.group.header", env, _bundle), writer);
+                    sayReleaseOutput(ReplacerUtils.jprintf("zip.store.complete.group.header", env, _bundle), writer);
                     for (GroupPosition stat : groups) {
                         Map<String, Object> raceenv = new HashMap<>(env);
 
@@ -254,7 +254,7 @@ public class ZipAnnouncer extends AbstractAnnouncer {
                         raceenv.put("speed",
                                 Bytes.formatBytes(stat.getXferspeed()) + "/s");
 
-                        sayOutput(ReplacerUtils.jprintf("zip.store.complete.group", raceenv, _bundle), writer);
+                        sayReleaseOutput(ReplacerUtils.jprintf("zip.store.complete.group", raceenv, _bundle), writer);
 
                         position++;
                         if (position > maxGroups) {
@@ -293,7 +293,7 @@ public class ZipAnnouncer extends AbstractAnnouncer {
                     env.put("leaduser", leaduser != null ? leaduser.getName() : stat.getUsername());
                     env.put("leadgroup", leaduser != null ? leaduser.getGroup() : "");
                     fillEnvSection(env, zipEvent, writer, false);
-                    sayOutput(ReplacerUtils.jprintf("zip.store.halfway", env, _bundle), writer);
+                    sayReleaseOutput(ReplacerUtils.jprintf("zip.store.halfway", env, _bundle), writer);
                 }
             }
         } catch (FileNotFoundException e) {

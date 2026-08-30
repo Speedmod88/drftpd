@@ -71,7 +71,7 @@ public class SFVIncompleteManager implements PluginInterface {
         _linkmanager = LinkManager.getLinkManager();
     }
 
-    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_PRIORITY_SITEBOT)
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SITEBOT_FUNCTIONAL)
     public void onSFVMemberTransferEvent(SFVMemberTransferEvent event) {
         if (!event.getCommand().equals("STOR") || !event.getSFVStatus().isFinished()) {
             return;

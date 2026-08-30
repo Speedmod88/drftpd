@@ -17,7 +17,8 @@
  */
 package org.drftpd.master.sitebot;
 
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * @author Modified from PircBot by Paul James Mutton, http://www.jibble.org/
@@ -26,13 +27,14 @@ import java.util.concurrent.LinkedBlockingQueue;
  */
 public class Queue {
 
-    private final LinkedBlockingQueue<String> _queue;
+    private final PriorityBlockingQueue<QueuedMessage> _queue;
+    private final AtomicLong _sequence = new AtomicLong();
 
     /**
      * Constructs a Queue object of Integer.MAX_VALUE size.
      */
     public Queue() {
-        _queue = new LinkedBlockingQueue<>();
+        _queue = new PriorityBlockingQueue<>();
     }
 
     /**
@@ -41,7 +43,11 @@ public class Queue {
      * @param s The String to be added to the Queue.
      */
     public void add(String s) {
-        _queue.add(s);
+        add(s, MessagePriority.COMMAND);
+    }
+
+    public void add(String message, MessagePriority priority) {
+        _queue.add(new QueuedMessage(message, priority, _sequence.getAndIncrement()));
     }
 
     /**
@@ -56,7 +62,7 @@ public class Queue {
 
         String next = null;
         try {
-            next = _queue.take();
+            next = _queue.take().message();
         } catch (InterruptedException e) {
             // do nothing
         }
@@ -80,5 +86,15 @@ public class Queue {
      */
     public void clear() {
         _queue.clear();
+    }
+
+    private record QueuedMessage(String message, MessagePriority priority, long sequence)
+            implements Comparable<QueuedMessage> {
+
+        @Override
+        public int compareTo(QueuedMessage other) {
+            int priorityOrder = Integer.compare(priority.getOrder(), other.priority.getOrder());
+            return priorityOrder != 0 ? priorityOrder : Long.compare(sequence, other.sequence);
+        }
     }
 }
