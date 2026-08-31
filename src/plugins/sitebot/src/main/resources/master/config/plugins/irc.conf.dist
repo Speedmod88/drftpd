@@ -97,6 +97,14 @@ services.chanserv.invite.1=#channel
 #  ie NOT mIRC etc format.
 #connected.command.1=OPER drftpd somepass
 
+# When an OPER command is configured above, wait for the server's successful
+# OPER response and then delay channel joins by X milliseconds. This gives the
+# IRCd time to apply the operator vhost before the bot joins channels.
+# If no OPER response arrives, SiteBot joins after a 15 second safety timeout.
+# Use 0 to disable this behavior.
+# Default: [1000]
+connected.oper.delayafter=1000
+
 # Blowfish encryption and related settings.
 # Enable blowfish encryption for channels and private messages.
 # Default: [true]

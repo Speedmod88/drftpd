@@ -81,6 +81,8 @@ public class SiteBotConfig {
 
     private long _connectDelay;
 
+    private long _delayAfterOper;
+
     private String _ctcpFinger;
 
     private String _ctcpVersion;
@@ -154,6 +156,8 @@ public class SiteBotConfig {
             }
             _connectCommands.add(connectCommand);
         }
+        _delayAfterOper = parseNonNegativeLong(
+                cfg.getProperty("connected.oper.delayafter", "1000"), 1000L, "connected.oper.delayafter");
         _nickservEnabled = cfg.getProperty("services.nickserv.enable").equalsIgnoreCase("true");
         _nickservJoinGroup = cfg.getProperty("services.nickserv.register.joingroup").equalsIgnoreCase("true");
         _nickservRegEmail = cfg.getProperty("services.nickserv.register.email");
@@ -255,6 +259,14 @@ public class SiteBotConfig {
 
     public ArrayList<String> getConnectCommands() {
         return _connectCommands;
+    }
+
+    public long getDelayAfterOper() {
+        return _delayAfterOper;
+    }
+
+    public boolean hasOperConnectCommand() {
+        return _connectCommands.stream().anyMatch(SiteBotConfig::isOperCommand);
     }
 
     public String getCommandTrigger() {
@@ -402,6 +414,29 @@ public class SiteBotConfig {
             logger.warn("Invalid {} value [{}]; using {}", property, configured, fallback);
             return fallback;
         }
+    }
+
+    static long parseNonNegativeLong(String configured, long fallback, String property) {
+        try {
+            long parsed = Long.parseLong(configured);
+            if (parsed < 0) {
+                throw new NumberFormatException("must not be negative");
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid {} value [{}]; using {}", property, configured, fallback);
+            return fallback;
+        }
+    }
+
+    static boolean isOperCommand(String command) {
+        if (command == null) {
+            return false;
+        }
+        String trimmed = command.trim();
+        return trimmed.length() > 4
+                && trimmed.regionMatches(true, 0, "OPER", 0, 4)
+                && Character.isWhitespace(trimmed.charAt(4));
     }
 
     private static int clamp(int value, int minimum, int maximum) {

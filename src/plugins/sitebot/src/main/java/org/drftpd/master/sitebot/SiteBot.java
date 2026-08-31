@@ -61,6 +61,7 @@ public class SiteBot implements ReplyConstants, Runnable {
     private static final Logger logger = LogManager.getLogger(SiteBot.class);
     private static final String themeDir = "config/themes/irc";
     private static final Object CHANNELS_LOCK = new Object();
+    private static final long OPER_RESPONSE_TIMEOUT_MS = 15_000L;
 
     static {
         GLOBAL_ENV.put("bold", "\u0002");
@@ -112,6 +113,9 @@ public class SiteBot implements ReplyConstants, Runnable {
     private volatile boolean _announcersLoaded;
     private AnnounceConfig _announceConfig = null;
     private final ArrayList<String> _eventTypes = new ArrayList<>();
+    private final Object _channelJoinLock = new Object();
+    private long _channelJoinGeneration;
+    private volatile boolean _channelJoinPending;
 
     // ArrayList to hold Listeners
     private List<ListenerInterface> _listeners = new ArrayList<>();
@@ -933,6 +937,11 @@ public class SiteBot implements ReplyConstants, Runnable {
      * @since PircBot 0.9.6
      */
     protected void onConnect() {
+        boolean deferChannelJoin = _config.getDelayAfterOper() > 0 && _config.hasOperConnectCommand();
+        if (deferChannelJoin) {
+            beginDeferredChannelJoin();
+        }
+
         // Do any commands requested on connect
         for (String command : _config.getConnectCommands()) {
             sendRawLine(command);
@@ -950,14 +959,69 @@ public class SiteBot implements ReplyConstants, Runnable {
 
         slowDown();
 
-        // Check if chanserv is wanted
+        if (!deferChannelJoin) {
+            finishChannelJoin("connection setup completed");
+        }
+    }
+
+    private void beginDeferredChannelJoin() {
+        final long generation;
+        synchronized (_channelJoinLock) {
+            generation = ++_channelJoinGeneration;
+            _channelJoinPending = true;
+        }
+        logger.info("Deferring channel joins until OPER succeeds, then waiting {} ms",
+                _config.getDelayAfterOper());
+        CompletableFuture.delayedExecutor(OPER_RESPONSE_TIMEOUT_MS, TimeUnit.MILLISECONDS).execute(() -> {
+            if (finishDeferredChannelJoin(generation, "OPER response timeout")) {
+                logger.warn("OPER confirmation was not received within {} ms; joined channels anyway",
+                        OPER_RESPONSE_TIMEOUT_MS);
+            }
+        });
+    }
+
+    private void onOperAccepted() {
+        final long generation;
+        synchronized (_channelJoinLock) {
+            if (!_channelJoinPending) {
+                return;
+            }
+            generation = _channelJoinGeneration;
+        }
+        long delay = _config.getDelayAfterOper();
+        logger.info("OPER accepted; joining channels after {} ms", delay);
+        CompletableFuture.delayedExecutor(delay, TimeUnit.MILLISECONDS).execute(
+                () -> finishDeferredChannelJoin(generation, "OPER accepted"));
+    }
+
+    private boolean finishDeferredChannelJoin(long generation, String reason) {
+        synchronized (_channelJoinLock) {
+            if (!_channelJoinPending || generation != _channelJoinGeneration) {
+                return false;
+            }
+            _channelJoinPending = false;
+        }
+        if (!isConnected()) {
+            return false;
+        }
+        finishChannelJoin(reason);
+        return true;
+    }
+
+    private void finishChannelJoin(String reason) {
+        logger.info("Joining configured channels: {}", reason);
         if (_config.getChanservEnabled()) {
             doChanservInvites();
         }
-
-        // Join channels
         joinChannels();
         notifyAnnouncersConnected();
+    }
+
+    private void cancelDeferredChannelJoin() {
+        synchronized (_channelJoinLock) {
+            _channelJoinPending = false;
+            _channelJoinGeneration++;
+        }
     }
 
     private void slowDown() {
@@ -1009,6 +1073,7 @@ public class SiteBot implements ReplyConstants, Runnable {
      * performs no actions and may be overridden as required.
      */
     protected void onDisconnect() {
+        cancelDeferredChannelJoin();
         notifyAnnouncersDisconnected();
         if (_outputThread != null) {
             _outputThread.interrupt();
@@ -1161,7 +1226,9 @@ public class SiteBot implements ReplyConstants, Runnable {
      * @see ReplyConstants
      */
     protected void onServerResponse(int code, String response) {
-        if (code == RPL_WHOISUSER) {
+        if (code == RPL_YOUREOPER) {
+            onOperAccepted();
+        } else if (code == RPL_WHOISUSER) {
             //parse the whois for registering user
             String[] reply = response.split(" ");
             String nick = reply[1];
@@ -2993,6 +3060,7 @@ public class SiteBot implements ReplyConstants, Runnable {
             }
         }
         _isTerminated = true;
+        cancelDeferredChannelJoin();
         notifyAnnouncersDisconnected();
         for (AbstractAnnouncer announcer : _announcers) {
             announcer.stop();
@@ -3069,7 +3137,7 @@ public class SiteBot implements ReplyConstants, Runnable {
     }
 
     private void notifyAnnouncersConnected() {
-        if (!_announcersLoaded || !isConnected()) {
+        if (!_announcersLoaded || _channelJoinPending || !isConnected()) {
             return;
         }
         for (AbstractAnnouncer announcer : _announcers) {
