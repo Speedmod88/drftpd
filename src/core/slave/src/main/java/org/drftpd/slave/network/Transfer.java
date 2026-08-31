@@ -73,6 +73,8 @@ public class Transfer {
     private String _pathForUpload = null;
     private long _minSpeed = 0L;
 
+    private long _minSpeedGrace = 0L;
+
     private long _maxSpeed = 0L;
 
     /**
@@ -209,6 +211,14 @@ public class Transfer {
 
     public void setMinSpeed(long minSpeed) {
         _minSpeed = minSpeed;
+    }
+
+    public long getMinSpeedGrace() {
+        return _minSpeedGrace;
+    }
+
+    public void setMinSpeedGrace(long minSpeedGrace) {
+        _minSpeedGrace = Math.max(0L, minSpeedGrace);
     }
 
     public long getMaxSpeed() {
@@ -482,7 +492,7 @@ public class Transfer {
                     }
 
                     // Min Speed Check
-                    if (_minSpeed > 0) {
+                    if (_minSpeed > 0 && getElapsed() >= _minSpeedGrace) {
                         if (lastCheck == 0) {
                             lastCheck = System.currentTimeMillis();
                         }
@@ -553,11 +563,11 @@ public class Transfer {
         long throttleSleepMillis = _int == null ? 0L : _int.getTotalSleepTime();
 
         logger.warn("Transfer failed: direction={} path={} local={} remote={} bytes={} elapsedMs={} "
-                        + "averageBytesPerSecond={} minBytesPerSecond={} maxBytesPerSecond={} "
+                        + "averageBytesPerSecond={} minBytesPerSecond={} minSpeedGraceMs={} maxBytesPerSecond={} "
                         + "throttleSleepMs={} configuredBufferSize={} socketReceiveBuffer={} "
                         + "socketSendBuffer={} socketClosed={} abortReason={} cause={}: {}",
                 getDirectionName(), _path, localEndpoint, remoteEndpoint, getTransferred(), elapsed,
-                averageBytesPerSecond, getMinSpeed(), getMaxSpeed(), throttleSleepMillis,
+                averageBytesPerSecond, getMinSpeed(), getMinSpeedGrace(), getMaxSpeed(), throttleSleepMillis,
                 _slave.getBufferSize(), receiveBufferSize, sendBufferSize, socketClosed,
                 _abortReason, failure.getClass().getName(), failure.getMessage(), failure);
     }
