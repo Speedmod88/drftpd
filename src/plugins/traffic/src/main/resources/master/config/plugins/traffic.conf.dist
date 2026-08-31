@@ -12,6 +12,7 @@
 # x.type = Traffic Type to use.                                                                    #
 # x.name = Name of this type.                                                                      #
 # x.minspeed = Min speed allowed for this type (In KB/s) (0 for Disable).                          #
+# x.minspeed.grace = Seconds before minimum speed enforcement begins (Default 0).                  #
 # x.maxspeed = Max speed allowed for this type (In KB/s) (0 for Disable).                          #
 # x.include = Regex format to Include Paths for this Type (All = *).                               #
 # x.exclude = Regex format to Include Paths for this Type.                                         #

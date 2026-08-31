@@ -42,6 +42,7 @@ public abstract class TrafficType {
     private final String _name;
     private final long _maxspeed;
     private final long _minspeed;
+    private final long _minspeedGrace;
     private String _include;
     private final String _exclude;
     private final Permission _perms;
@@ -68,6 +69,16 @@ public abstract class TrafficType {
             _minspeed = Integer.parseInt(p.getProperty(confnum + ".minspeed", "0").trim()) * 1000;
         } catch (NumberFormatException e) {
             throw new RuntimeException("Invalid MinSpeed for " + confnum + ".minspeed - Skipping Config");
+        }
+
+        try {
+            long graceSeconds = Long.parseLong(p.getProperty(confnum + ".minspeed.grace", "0").trim());
+            if (graceSeconds < 0) {
+                throw new NumberFormatException("negative grace period");
+            }
+            _minspeedGrace = Math.multiplyExact(graceSeconds, 1000L);
+        } catch (ArithmeticException | NumberFormatException e) {
+            throw new RuntimeException("Invalid MinSpeed grace for " + confnum + ".minspeed.grace - Skipping Config");
         }
 
         _perms = new Permission(p.getProperty(confnum + ".perms", "").trim());
@@ -115,6 +126,10 @@ public abstract class TrafficType {
 
     protected long getMinSpeed() {
         return _minspeed;
+    }
+
+    protected long getMinSpeedGrace() {
+        return _minspeedGrace;
     }
 
     protected boolean checkInclude(String text) {

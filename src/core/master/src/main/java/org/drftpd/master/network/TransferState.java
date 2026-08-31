@@ -360,12 +360,24 @@ public class TransferState {
 
     public synchronized void sendFile(String path, char type, long resumePosition, String address, long minSpeed, long maxSpeed)
             throws IOException, SlaveUnavailableException {
-        getTransfer().sendFile(path, type, resumePosition, address, minSpeed, maxSpeed);
+        sendFile(path, type, resumePosition, address, minSpeed, maxSpeed, 0L);
+    }
+
+    public synchronized void sendFile(String path, char type, long resumePosition, String address, long minSpeed,
+                                      long maxSpeed, long minSpeedGrace)
+            throws IOException, SlaveUnavailableException {
+        getTransfer().sendFile(path, type, resumePosition, address, minSpeed, maxSpeed, minSpeedGrace);
     }
 
     public synchronized void receiveFile(String path, char type, long resumePosition, String address, long minSpeed, long maxSpeed)
             throws IOException, SlaveUnavailableException {
-        getTransfer().receiveFile(path, type, resumePosition, address, minSpeed, maxSpeed);
+        receiveFile(path, type, resumePosition, address, minSpeed, maxSpeed, 0L);
+    }
+
+    public synchronized void receiveFile(String path, char type, long resumePosition, String address, long minSpeed,
+                                         long maxSpeed, long minSpeedGrace)
+            throws IOException, SlaveUnavailableException {
+        getTransfer().receiveFile(path, type, resumePosition, address, minSpeed, maxSpeed, minSpeedGrace);
     }
 
     public synchronized long getElapsed() {

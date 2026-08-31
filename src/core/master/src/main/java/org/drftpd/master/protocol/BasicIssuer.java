@@ -119,10 +119,18 @@ public class BasicIssuer extends AbstractBasicIssuer {
 
     public String issueReceiveToSlave(RemoteSlave rslave, String name, char c, long position,
                                       String inetAddress, TransferIndex tindex, long minSpeed, long maxSpeed) throws SlaveUnavailableException {
+        return issueReceiveToSlave(rslave, name, c, position, inetAddress, tindex, minSpeed, maxSpeed, 0L);
+    }
+
+    @Override
+    public String issueReceiveToSlave(RemoteSlave rslave, String name, char c, long position,
+                                      String inetAddress, TransferIndex tindex, long minSpeed, long maxSpeed,
+                                      long minSpeedGrace) throws SlaveUnavailableException {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommandArgument(index, "receive",
                 new String[]{String.valueOf(c), String.valueOf(position),
-                        tindex.toString(), inetAddress, name, String.valueOf(minSpeed), String.valueOf(maxSpeed)}));
+                        tindex.toString(), inetAddress, name, String.valueOf(minSpeed), String.valueOf(maxSpeed),
+                        String.valueOf(minSpeedGrace)}));
 
         logger.info("!! issueReceiveToSlave done with cmd index '{}'", index);
 
@@ -179,10 +187,18 @@ public class BasicIssuer extends AbstractBasicIssuer {
 
     public String issueSendToSlave(RemoteSlave rslave, String name, char c, long position,
                                    String inetAddress, TransferIndex tindex, long minSpeed, long maxSpeed) throws SlaveUnavailableException {
+        return issueSendToSlave(rslave, name, c, position, inetAddress, tindex, minSpeed, maxSpeed, 0L);
+    }
+
+    @Override
+    public String issueSendToSlave(RemoteSlave rslave, String name, char c, long position,
+                                   String inetAddress, TransferIndex tindex, long minSpeed, long maxSpeed,
+                                   long minSpeedGrace) throws SlaveUnavailableException {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommandArgument(index, "send",
                 new String[]{String.valueOf(c), String.valueOf(position), tindex.toString(),
-                        inetAddress, name, String.valueOf(minSpeed), String.valueOf(maxSpeed)}));
+                        inetAddress, name, String.valueOf(minSpeed), String.valueOf(maxSpeed),
+                        String.valueOf(minSpeedGrace)}));
 
         logger.info("!! issueSendToSlave done with cmd index '{}'", index);
 

@@ -75,6 +75,7 @@ public class DataConnectionHandler extends CommandInterface {
     public static final Key<String> INET_ADDRESS = new Key<>(DataConnectionHandler.class, "inetAddress");
     public static final Key<TransferStatus> XFER_STATUS = new Key<>(DataConnectionHandler.class, "transferStatus");
     public static final Key<Long> MIN_XFER_SPEED = new Key<>(DataConnectionHandler.class, "minTransferSpeed");
+    public static final Key<Long> MIN_XFER_SPEED_GRACE = new Key<>(DataConnectionHandler.class, "minTransferSpeedGrace");
     public static final Key<Long> MAX_XFER_SPEED = new Key<>(DataConnectionHandler.class, "maxTransferSpeed");
     private static final Logger logger = LogManager.getLogger(DataConnectionHandler.class);
     private ResourceBundle _bundle;
@@ -966,7 +967,8 @@ public class DataConnectionHandler extends CommandInterface {
                     ts.sendFile(ts.getTransferFile().getPath(), ts.getType(),
                             ts.getResumePosition(), address,
                             request.getObjectLong(MIN_XFER_SPEED),
-                            request.getObjectLong(MAX_XFER_SPEED));
+                            request.getObjectLong(MAX_XFER_SPEED),
+                            request.getObjectLong(MIN_XFER_SPEED_GRACE));
 
                     while (true) {
                         synchronized (ts) {
@@ -984,7 +986,8 @@ public class DataConnectionHandler extends CommandInterface {
                     ts.receiveFile(ts.getTransferFile().getPath(), ts.getType(),
                             ts.getResumePosition(), address,
                             request.getObjectLong(MIN_XFER_SPEED),
-                            request.getObjectLong(MAX_XFER_SPEED));
+                            request.getObjectLong(MAX_XFER_SPEED),
+                            request.getObjectLong(MIN_XFER_SPEED_GRACE));
 
                     while (true) {
                         synchronized (ts) {

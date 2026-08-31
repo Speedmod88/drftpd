@@ -162,12 +162,14 @@ public class BasicHandler extends AbstractHandler {
         String dirName = path.substring(0, path.lastIndexOf("/"));
         long minSpeed = Long.parseLong(ac.getArgsArray()[5]);
         long maxSpeed = Long.parseLong(ac.getArgsArray()[6]);
+        long minSpeedGrace = ac.getArgsArray().length > 7 ? Long.parseLong(ac.getArgsArray()[7]) : 0L;
         Transfer t = getSlaveObject().getTransfer(transferIndex);
         if (t == null) {
             return missingTransferResponse(ac, transferIndex, "receive");
         }
         t.setMinSpeed(minSpeed);
         t.setMaxSpeed(maxSpeed);
+        t.setMinSpeedGrace(minSpeedGrace);
         getSlaveObject().sendResponse(new AsyncResponse(ac.getIndex())); // return calling thread on master
         try {
             return new AsyncResponseTransferStatus(t.receiveFile(dirName, type, fileName, position, inetAddress));
@@ -372,12 +374,14 @@ public class BasicHandler extends AbstractHandler {
         String path = ac.getArgsArray()[4];
         long minSpeed = Long.parseLong(ac.getArgsArray()[5]);
         long maxSpeed = Long.parseLong(ac.getArgsArray()[6]);
+        long minSpeedGrace = ac.getArgsArray().length > 7 ? Long.parseLong(ac.getArgsArray()[7]) : 0L;
         Transfer t = getSlaveObject().getTransfer(transferIndex);
         if (t == null) {
             return missingTransferResponse(ac, transferIndex, "send");
         }
         t.setMinSpeed(minSpeed);
         t.setMaxSpeed(maxSpeed);
+        t.setMinSpeedGrace(minSpeedGrace);
         sendResponse(new AsyncResponse(ac.getIndex()));
 
         // calling thread on master

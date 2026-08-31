@@ -40,6 +40,7 @@ public class TrafficManagerHooks {
                     if ((trafficType.checkInclude(request.getCurrentDirectory().getPath())) && (!trafficType.checkExclude(request.getCurrentDirectory().getPath())) && (trafficType.getPerms().check(request.getUserObject()))) {
                         request.setObject(DataConnectionHandler.MAX_XFER_SPEED, trafficType.getMaxSpeed());
                         request.setObject(DataConnectionHandler.MIN_XFER_SPEED, trafficType.getMinSpeed());
+                        request.setObject(DataConnectionHandler.MIN_XFER_SPEED_GRACE, trafficType.getMinSpeedGrace());
                         break;
                     }
                 }
@@ -63,6 +64,7 @@ public class TrafficManagerHooks {
                     if ((trafficType.checkInclude(request.getCurrentDirectory().getPath())) && (!trafficType.checkExclude(request.getCurrentDirectory().getPath())) && (trafficType.getPerms().check(request.getUserObject()))) {
                         request.setObject(DataConnectionHandler.MAX_XFER_SPEED, trafficType.getMaxSpeed());
                         request.setObject(DataConnectionHandler.MIN_XFER_SPEED, trafficType.getMinSpeed());
+                        request.setObject(DataConnectionHandler.MIN_XFER_SPEED_GRACE, trafficType.getMinSpeedGrace());
                         break;
                     }
                 }
