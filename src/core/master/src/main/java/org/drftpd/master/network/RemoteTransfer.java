@@ -189,10 +189,19 @@ public class RemoteTransfer {
 
     public void receiveFile(String path, char type, long position, String inetAddress, long minSpeed, long maxSpeed,
                             long minSpeedGrace) throws IOException, SlaveUnavailableException {
+        receiveFile(path, type, position, inetAddress, minSpeed, maxSpeed,
+                minSpeedGrace, null, null, null, null);
+    }
+
+    public void receiveFile(String path, char type, long position, String inetAddress, long minSpeed, long maxSpeed,
+                            long minSpeedGrace, String username, String raceGroup,
+                            String directoryUsername, String directoryRaceGroup)
+            throws IOException, SlaveUnavailableException {
         _path = path;
 
         String index = SlaveManager.getBasicIssuer().issueReceiveToSlave(
-                _rslave, path, type, position, inetAddress, getTransferIndex(), minSpeed, maxSpeed, minSpeedGrace);
+                _rslave, path, type, position, inetAddress, getTransferIndex(), minSpeed, maxSpeed,
+                minSpeedGrace, username, raceGroup, directoryUsername, directoryRaceGroup);
 
         _transferDirection = Transfer.TRANSFER_RECEIVING_UPLOAD;
         try {

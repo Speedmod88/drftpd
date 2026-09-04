@@ -24,6 +24,7 @@ import org.drftpd.common.dynamicdata.KeyNotFoundException;
 import org.drftpd.common.io.PermissionDeniedException;
 import org.drftpd.common.vfs.InodeHandleInterface;
 import org.drftpd.master.GlobalContext;
+import org.drftpd.master.exceptions.SlaveUnavailableException;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.slavemanagement.SlaveManager;
 import org.drftpd.master.usermanager.User;
@@ -32,6 +33,8 @@ import org.drftpd.slave.exceptions.FileExistsException;
 import org.drftpd.slave.exceptions.ObjectNotFoundException;
 
 import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
@@ -259,6 +262,40 @@ public abstract class InodeHandle implements InodeHandleInterface, Comparable<In
      */
     public void setUsername(String owner) throws FileNotFoundException {
         getInode().setUsername(owner);
+    }
+
+    /**
+     * Synchronizes the current VFS owner and race group to capable physical
+     * slaves. Legacy and offline slaves retain the normal VFS-only behavior.
+     */
+    public void persistInodeIdentity() throws FileNotFoundException {
+        if (!VirtualFileSystemFile.isSlaveGroupEnabled()) {
+            return;
+        }
+        VirtualFileSystemInode inode = getInode();
+        Set<String> slaveNames = new HashSet<>();
+        String raceGroup;
+        if (inode instanceof VirtualFileSystemFile) {
+            VirtualFileSystemFile file = (VirtualFileSystemFile) inode;
+            slaveNames.addAll(file.getSlaves());
+            raceGroup = file.getRaceGroup();
+        } else if (inode instanceof VirtualFileSystemDirectory) {
+            slaveNames.addAll(((VirtualFileSystemDirectory) inode).getSlaveRefCounts().keySet());
+            raceGroup = inode.getGroup();
+        } else {
+            return;
+        }
+
+        for (String slaveName : slaveNames) {
+            try {
+                RemoteSlave slave = GlobalContext.getGlobalContext().getSlaveManager()
+                        .getRemoteSlave(slaveName);
+                slave.persistInodeIdentity(getPath(), inode.getUsername(), raceGroup);
+            } catch (ObjectNotFoundException | IOException | SlaveUnavailableException e) {
+                logger.warn("Unable to persist ownership for {} on slave {}: {}",
+                        getPath(), slaveName, e.getMessage());
+            }
+        }
     }
 
     /*

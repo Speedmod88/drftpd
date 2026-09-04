@@ -983,11 +983,23 @@ public class DataConnectionHandler extends CommandInterface {
                         } catch (InterruptedException ignored) {}
                     }
                 } else if (isStor) {
+                    String identityUsername = null;
+                    String identityRaceGroup = null;
+                    String directoryIdentityUsername = null;
+                    String directoryIdentityRaceGroup = null;
+                    if (ts.getTransferSlave().usePersistentInodeIdentity()) {
+                        identityUsername = ts.getTransferFile().getUsername();
+                        identityRaceGroup = ts.getTransferFile().getRaceGroup();
+                        directoryIdentityUsername = ts.getTransferFile().getParent().getUsername();
+                        directoryIdentityRaceGroup = ts.getTransferFile().getParent().getGroup();
+                    }
                     ts.receiveFile(ts.getTransferFile().getPath(), ts.getType(),
                             ts.getResumePosition(), address,
                             request.getObjectLong(MIN_XFER_SPEED),
                             request.getObjectLong(MAX_XFER_SPEED),
-                            request.getObjectLong(MIN_XFER_SPEED_GRACE));
+                            request.getObjectLong(MIN_XFER_SPEED_GRACE),
+                            identityUsername, identityRaceGroup,
+                            directoryIdentityUsername, directoryIdentityRaceGroup);
 
                     while (true) {
                         synchronized (ts) {

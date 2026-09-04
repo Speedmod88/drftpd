@@ -30,6 +30,7 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.function.BooleanSupplier;
 
@@ -43,15 +44,22 @@ public final class RemergeDirectoryWalker {
     private final List<Root> roots;
     private final int readAttempts;
     private final long retryDelayMillis;
+    private final boolean persistentIdentity;
 
     public RemergeDirectoryWalker(Collection<Root> roots) {
-        this(roots, 3, 5000L);
+        this(roots, 3, 5000L, false);
     }
 
     public RemergeDirectoryWalker(Collection<Root> roots, int readAttempts, long retryDelayMillis) {
+        this(roots, readAttempts, retryDelayMillis, false);
+    }
+
+    public RemergeDirectoryWalker(Collection<Root> roots, int readAttempts, long retryDelayMillis,
+                                  boolean persistentIdentity) {
         this.roots = List.copyOf(roots);
         this.readAttempts = Math.max(1, readAttempts);
         this.retryDelayMillis = Math.max(0L, retryDelayMillis);
+        this.persistentIdentity = persistentIdentity;
     }
 
     public boolean walk(String basePath, BooleanSupplier cancelled, DirectoryConsumer consumer)
@@ -152,7 +160,7 @@ public final class RemergeDirectoryWalker {
     private DirectorySnapshot readDirectoryOnce(String relativePath, Collection<Path> physicalDirectories,
                                                  BooleanSupplier cancelled) throws IOException {
         BasicFileAttributes directoryAttributes = null;
-        Map<String, BasicFileAttributes> entries = new TreeMap<>();
+        Map<String, EntrySnapshot> entries = new TreeMap<>();
         Map<String, List<Path>> childDirectories = new TreeMap<>();
 
         for (Path physicalDirectory : physicalDirectories) {
@@ -210,11 +218,16 @@ public final class RemergeDirectoryWalker {
         }
 
         List<LightRemoteInode> inodes = new ArrayList<>(entries.size());
-        entries.forEach((name, attributes) -> {
+        entries.forEach((name, entry) -> {
+            BasicFileAttributes attributes = entry.attributes;
+            Optional<PersistentInodeIdentity.Identity> identity = persistentIdentity
+                    ? PersistentInodeIdentity.read(entry.path) : Optional.empty();
             inodes.add(new LightRemoteInode(
                     name,
-                    "drftpd",
-                    "drftpd",
+                    identity.map(PersistentInodeIdentity.Identity::username)
+                            .orElse(persistentIdentity ? "" : "drftpd"),
+                    identity.map(PersistentInodeIdentity.Identity::raceGroup)
+                            .orElse(persistentIdentity ? "" : "drftpd"),
                     attributes.isDirectory(),
                     attributes.lastModifiedTime().toMillis(),
                     attributes.size()
@@ -243,18 +256,19 @@ public final class RemergeDirectoryWalker {
                 directoryAttributes.lastModifiedTime().toMillis());
     }
 
-    private void mergeEntry(Map<String, BasicFileAttributes> entries, String name,
+    private void mergeEntry(Map<String, EntrySnapshot> entries, String name,
                             BasicFileAttributes attributes, Path physicalEntry) {
-        BasicFileAttributes existing = entries.get(name);
+        EntrySnapshot existingEntry = entries.get(name);
+        BasicFileAttributes existing = existingEntry == null ? null : existingEntry.attributes;
         if (existing == null) {
-            entries.put(name, attributes);
+            entries.put(name, new EntrySnapshot(attributes, physicalEntry));
             return;
         }
 
         if (attributes.isDirectory()) {
             if (!existing.isDirectory()
                     || attributes.lastModifiedTime().compareTo(existing.lastModifiedTime()) > 0) {
-                entries.put(name, attributes);
+                entries.put(name, new EntrySnapshot(attributes, physicalEntry));
             }
             return;
         }
@@ -267,7 +281,7 @@ public final class RemergeDirectoryWalker {
             logger.warn("Duplicate file detected on slave roots while remerging: {}", physicalEntry);
         }
         // Preserve the existing root-order behavior for duplicate regular files.
-        entries.put(name, attributes);
+        entries.put(name, new EntrySnapshot(attributes, physicalEntry));
     }
 
     private static String normalizePath(String path) throws IOException {
@@ -342,6 +356,16 @@ public final class RemergeDirectoryWalker {
         private DirectoryFrame(DirectorySnapshot snapshot) {
             this.snapshot = snapshot;
             children = snapshot.childDirectories.entrySet().iterator();
+        }
+    }
+
+    private static final class EntrySnapshot {
+        private final BasicFileAttributes attributes;
+        private final Path path;
+
+        private EntrySnapshot(BasicFileAttributes attributes, Path path) {
+            this.attributes = attributes;
+            this.path = path;
         }
     }
 }

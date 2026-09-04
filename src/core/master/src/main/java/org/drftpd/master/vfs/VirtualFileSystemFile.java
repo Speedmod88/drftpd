@@ -27,6 +27,7 @@ import org.drftpd.slave.exceptions.ObjectNotFoundException;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 /**
  * Lowest representation of a File object.
@@ -63,6 +64,58 @@ public class VirtualFileSystemFile extends VirtualFileSystemInode implements Sta
     public Set<String> getSlaves() {
         synchronized (_slavesLock) {
             return new HashSet<>(_slaves);
+        }
+    }
+
+    /**
+     * Returns the FTP group credited for this file, independently of how the
+     * VFS group is displayed.
+     */
+    public String getRaceGroup() {
+        return super.getGroup();
+    }
+
+    @Override
+    public String getGroup() {
+        String raceGroup = getRaceGroup();
+        if (!isSlaveGroupEnabled()) {
+            return raceGroup;
+        }
+        try {
+            return resolveGroup(raceGroup, getSlaves(), true, slaveName -> {
+                try {
+                    return GlobalContext.getGlobalContext().getSlaveManager()
+                            .getRemoteSlave(slaveName).supportsPersistentInodeIdentity();
+                } catch (ObjectNotFoundException e) {
+                    return false;
+                }
+            });
+        } catch (RuntimeException e) {
+            return raceGroup;
+        }
+    }
+
+    static String resolveGroup(String raceGroup, Collection<String> slaves, boolean slaveGroupEnabled,
+                               Predicate<String> supportsPersistentIdentity) {
+        if (!slaveGroupEnabled || slaves == null || slaves.isEmpty()) {
+            return raceGroup;
+        }
+        SortedSet<String> slaveNames = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        slaveNames.addAll(slaves);
+        for (String slaveName : slaveNames) {
+            if (!supportsPersistentIdentity.test(slaveName)) {
+                return raceGroup;
+            }
+        }
+        return String.join("+", slaveNames);
+    }
+
+    public static boolean isSlaveGroupEnabled() {
+        try {
+            return Boolean.parseBoolean(GlobalContext.getConfig().getMainProperties()
+                    .getProperty("vfs.file.group.slave", "false"));
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 
