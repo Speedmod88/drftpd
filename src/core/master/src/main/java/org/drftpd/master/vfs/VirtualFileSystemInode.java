@@ -111,7 +111,7 @@ public abstract class VirtualFileSystemInode implements Commitable {
         _group = group;
         if (isInodeLoaded()) {
             commit();
-            getVFS().notifyOwnershipChanged(this, getUsername(), _group);
+            getVFS().notifyOwnershipChanged(this, getUsername(), getGroup());
         }
     }
 

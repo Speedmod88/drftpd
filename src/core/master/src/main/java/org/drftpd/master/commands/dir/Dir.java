@@ -548,6 +548,7 @@ public class Dir extends CommandInterface {
                 if (group != null) {
                     file.setGroup(group);
                 }
+                file.persistInodeIdentity();
 
                 if (file.isDirectory() && recursive) {
                     recursiveCHOWN((DirectoryHandle) file, owner, group, user, response);
@@ -569,6 +570,7 @@ public class Dir extends CommandInterface {
                 if (group != null) {
                     inode.setGroup(group);
                 }
+                inode.persistInodeIdentity();
                 if (inode.isDirectory()) {
                     recursiveCHOWN((DirectoryHandle) inode, owner, group, user, response);
                 }

@@ -380,6 +380,14 @@ public class TransferState {
         getTransfer().receiveFile(path, type, resumePosition, address, minSpeed, maxSpeed, minSpeedGrace);
     }
 
+    public synchronized void receiveFile(String path, char type, long resumePosition, String address, long minSpeed,
+                                         long maxSpeed, long minSpeedGrace, String username, String raceGroup,
+                                         String directoryUsername, String directoryRaceGroup)
+            throws IOException, SlaveUnavailableException {
+        getTransfer().receiveFile(path, type, resumePosition, address, minSpeed, maxSpeed, minSpeedGrace,
+                username, raceGroup, directoryUsername, directoryRaceGroup);
+    }
+
     public synchronized long getElapsed() {
         return getTransfer().getElapsed();
     }

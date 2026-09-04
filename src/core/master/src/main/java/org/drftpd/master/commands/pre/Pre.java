@@ -54,6 +54,7 @@ public class Pre extends CommandInterface {
         try {
             dir.setUsername(GlobalContext.getConfig().getDefaultPreUser());
             dir.setGroup(GlobalContext.getConfig().getDefaultPreGroup());
+            dir.persistInodeIdentity();
             dir.setLastModified(lastModified);
             // Make sure the directories appear to have just been created. This helps the autofreespace plugin as well as makes it look OK
             dir.getInode().setCreationTime(lastModified);
@@ -65,6 +66,7 @@ public class Pre extends CommandInterface {
                     try {
                         file.setUsername(GlobalContext.getConfig().getDefaultPreUser());
                         file.setGroup(GlobalContext.getConfig().getDefaultPreGroup());
+                        file.persistInodeIdentity();
                         file.setLastModified(lastModified);
                     } catch (FileNotFoundException e) {
                         logger.warn("FileNotFoundException on recursiveRemoveOwnership()", e);

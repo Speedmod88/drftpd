@@ -36,6 +36,7 @@ import org.drftpd.master.slavemanagement.RemoteSlave;
 public class BasicIssuer extends AbstractBasicIssuer {
 
 	private static final Logger logger = LogManager.getLogger(BasicIssuer.class);
+    private static final String IDENTITY_CAPABILITY_REQUEST = "persistent-inode-identity-v1";
 
     @Override
     public String getProtocolName() {
@@ -126,11 +127,22 @@ public class BasicIssuer extends AbstractBasicIssuer {
     public String issueReceiveToSlave(RemoteSlave rslave, String name, char c, long position,
                                       String inetAddress, TransferIndex tindex, long minSpeed, long maxSpeed,
                                       long minSpeedGrace) throws SlaveUnavailableException {
+        return issueReceiveToSlave(rslave, name, c, position, inetAddress, tindex,
+                minSpeed, maxSpeed, minSpeedGrace, null, null, null, null);
+    }
+
+    @Override
+    public String issueReceiveToSlave(RemoteSlave rslave, String name, char c, long position,
+                                      String inetAddress, TransferIndex tindex, long minSpeed, long maxSpeed,
+                                      long minSpeedGrace, String username, String raceGroup,
+                                      String directoryUsername, String directoryRaceGroup)
+            throws SlaveUnavailableException {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommandArgument(index, "receive",
                 new String[]{String.valueOf(c), String.valueOf(position),
                         tindex.toString(), inetAddress, name, String.valueOf(minSpeed), String.valueOf(maxSpeed),
-                        String.valueOf(minSpeedGrace)}));
+                        String.valueOf(minSpeedGrace), optional(username), optional(raceGroup),
+                        optional(directoryUsername), optional(directoryRaceGroup)}));
 
         logger.info("!! issueReceiveToSlave done with cmd index '{}'", index);
 
@@ -207,9 +219,18 @@ public class BasicIssuer extends AbstractBasicIssuer {
 
     public String issueRemergeToSlave(RemoteSlave rslave, String path, boolean partialRemerge, long skipAgeCutoff, long masterTime, boolean instantOnline)
             throws SlaveUnavailableException {
+        return issueRemergeToSlave(
+                rslave, path, partialRemerge, skipAgeCutoff, masterTime, instantOnline, false);
+    }
+
+    @Override
+    public String issueRemergeToSlave(RemoteSlave rslave, String path, boolean partialRemerge,
+                                      long skipAgeCutoff, long masterTime, boolean instantOnline,
+                                      boolean persistentIdentity) throws SlaveUnavailableException {
         String index = rslave.fetchIndex();
         rslave.sendCommand(new AsyncCommandArgument(index, "remerge", new String[]{path,
-                Boolean.toString(partialRemerge), Long.toString(skipAgeCutoff), Long.toString(masterTime), Boolean.toString(instantOnline)}));
+                Boolean.toString(partialRemerge), Long.toString(skipAgeCutoff), Long.toString(masterTime),
+                Boolean.toString(instantOnline), Boolean.toString(persistentIdentity)}));
 
         logger.info("!! issueRemergeToSlave done with cmd index '{}'", index);
 
@@ -238,5 +259,33 @@ public class BasicIssuer extends AbstractBasicIssuer {
         logger.info("!! issueCheckSSL done with cmd index '{}'", index);
 
         return index;
+    }
+
+    @Override
+    public String issueSetPersistentIdentity(RemoteSlave rslave, String path,
+                                             String username, String raceGroup)
+            throws SlaveUnavailableException {
+        String index = rslave.fetchIndex();
+        rslave.sendCommand(new AsyncCommandArgument(index, "setPersistentIdentity",
+                new String[]{path, username, raceGroup}));
+
+        logger.debug("Issued persistent inode identity update: slave={} index={} path={}",
+                rslave.getName(), index, path);
+        return index;
+    }
+
+    @Override
+    public String issuePersistentIdentityCheck(RemoteSlave rslave) throws SlaveUnavailableException {
+        String index = rslave.fetchIndex();
+        rslave.sendCommand(new AsyncCommandArgument(
+                index, "maxpath", IDENTITY_CAPABILITY_REQUEST));
+
+        logger.info("Issued persistent inode identity capability check: slave={} index={}",
+                rslave.getName(), index);
+        return index;
+    }
+
+    private static String optional(String value) {
+        return value == null ? "" : value;
     }
 }

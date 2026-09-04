@@ -70,6 +70,14 @@ public class FileHandle extends InodeHandle implements FileHandleInterface {
     }
 
     /**
+     * Returns the FTP group credited for this file even when the visible VFS
+     * group is configured to show its storage slave.
+     */
+    public String getRaceGroup() throws FileNotFoundException {
+        return getInode().getRaceGroup();
+    }
+
+    /**
      * @return a Set containing the slaves that contain the File.
      * @throws FileNotFoundException
      */

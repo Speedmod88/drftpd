@@ -143,7 +143,13 @@ public class SlaveTransfer {
 
         // Start received on the destination
         try {
-            _destTransfer.receiveFile(_file.getPath(), 'I', 0, "*@*", 0L, 0L);
+            if (_destSlave.usePersistentInodeIdentity()) {
+                _destTransfer.receiveFile(_file.getPath(), 'I', 0, "*@*", 0L, 0L, 0L,
+                        _file.getUsername(), _file.getRaceGroup(),
+                        _file.getParent().getUsername(), _file.getParent().getGroup());
+            } else {
+                _destTransfer.receiveFile(_file.getPath(), 'I', 0, "*@*", 0L, 0L);
+            }
         } catch (IOException e1) {
             logger.debug("IOException received, throwing DestinationSlaveException");
             throw new DestinationSlaveException(e1);

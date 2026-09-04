@@ -32,6 +32,7 @@ import org.drftpd.common.util.HostMask;
 import org.drftpd.slave.Slave;
 import org.drftpd.slave.exceptions.FileExistsException;
 import org.drftpd.slave.exceptions.ObjectNotFoundException;
+import org.drftpd.slave.vfs.PersistentInodeIdentity;
 
 import javax.net.ssl.SSLSocket;
 import java.io.*;
@@ -258,6 +259,13 @@ public class Transfer {
      */
     public TransferStatus receiveFile(String dirname, char mode, String filename, long offset, String inetAddress)
             throws IOException, TransferDeniedException {
+        return receiveFile(dirname, mode, filename, offset, inetAddress, null, null, null, null);
+    }
+
+    public TransferStatus receiveFile(String dirname, char mode, String filename, long offset, String inetAddress,
+                                      String username, String raceGroup,
+                                      String directoryUsername, String directoryRaceGroup)
+            throws IOException, TransferDeniedException {
         _pathForUpload = dirname + separator + filename;
         _path = _pathForUpload;
         try {
@@ -265,10 +273,28 @@ public class Transfer {
             throw new FileExistsException("File " + dirname + separator + filename + " exists");
         } catch (FileNotFoundException ignored) {} // This is expected
 
-        String root = _slave.getRoots().getARootFileDir(dirname).getPath();
+        File directory = _slave.getRoots().getARootFileDir(dirname);
+        String root = directory.getPath();
 
         try {
-            _out = new FileOutputStream(new File(root + separator + filename));
+            if (directoryUsername != null && directoryRaceGroup != null) {
+                try {
+                    PersistentInodeIdentity.writeIfAbsent(
+                            directory.toPath(), directoryUsername, directoryRaceGroup);
+                } catch (IOException e) {
+                    logger.warn("Unable to persist directory identity for {}: {}", directory, e.getMessage());
+                }
+            }
+
+            File destination = new File(root + separator + filename);
+            _out = new FileOutputStream(destination);
+            if (username != null && raceGroup != null) {
+                try {
+                    PersistentInodeIdentity.write(destination.toPath(), username, raceGroup);
+                } catch (IOException e) {
+                    logger.warn("Unable to persist file identity for {}: {}", destination, e.getMessage());
+                }
+            }
 
             if (_slave.getUploadChecksums()) {
                 _checksum = new CRC32();
