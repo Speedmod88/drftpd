@@ -28,12 +28,16 @@ import org.drftpd.common.slave.ConnectInfo;
 import org.drftpd.common.slave.TransferIndex;
 import org.drftpd.common.slave.TransferStatus;
 import org.drftpd.slave.network.*;
+import org.drftpd.slave.vfs.PersistentInodeIdentity;
 import org.drftpd.slave.vfs.RemergeDirectoryWalker;
 
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -47,6 +51,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class BasicHandler extends AbstractHandler {
     private static final Logger logger = LogManager.getLogger(BasicHandler.class);
+    private static final String IDENTITY_CAPABILITY_REQUEST = "persistent-inode-identity-v1";
+    private static final int IDENTITY_CAPABILITY_SUPPORTED = -1;
+    private static final int IDENTITY_CAPABILITY_UNAVAILABLE = -2;
 
     // The following variables are static as they are used to signal between
     // remerging and the pause/resume functions, due to the way the handler
@@ -142,6 +149,12 @@ public class BasicHandler extends AbstractHandler {
 
     // MAXPATH
     public AsyncResponse handleMaxpath(AsyncCommandArgument ac) {
+        if (IDENTITY_CAPABILITY_REQUEST.equals(ac.getArgs())) {
+            boolean supported = PersistentInodeIdentity.isSupported(
+                    getSlaveObject().getRoots().getRootList());
+            return new AsyncResponseMaxPath(ac.getIndex(), supported
+                    ? IDENTITY_CAPABILITY_SUPPORTED : IDENTITY_CAPABILITY_UNAVAILABLE);
+        }
         int maxPathLength = getSlaveObject().getMaxPathLength();
         return new AsyncResponseMaxPath(ac.getIndex(), maxPathLength);
     }
@@ -163,6 +176,10 @@ public class BasicHandler extends AbstractHandler {
         long minSpeed = Long.parseLong(ac.getArgsArray()[5]);
         long maxSpeed = Long.parseLong(ac.getArgsArray()[6]);
         long minSpeedGrace = ac.getArgsArray().length > 7 ? Long.parseLong(ac.getArgsArray()[7]) : 0L;
+        String username = optionalArgument(ac, 8);
+        String raceGroup = optionalArgument(ac, 9);
+        String directoryUsername = optionalArgument(ac, 10);
+        String directoryRaceGroup = optionalArgument(ac, 11);
         Transfer t = getSlaveObject().getTransfer(transferIndex);
         if (t == null) {
             return missingTransferResponse(ac, transferIndex, "receive");
@@ -172,7 +189,9 @@ public class BasicHandler extends AbstractHandler {
         t.setMinSpeedGrace(minSpeedGrace);
         getSlaveObject().sendResponse(new AsyncResponse(ac.getIndex())); // return calling thread on master
         try {
-            return new AsyncResponseTransferStatus(t.receiveFile(dirName, type, fileName, position, inetAddress));
+            return new AsyncResponseTransferStatus(t.receiveFile(
+                    dirName, type, fileName, position, inetAddress,
+                    username, raceGroup, directoryUsername, directoryRaceGroup));
         } catch (IOException | TransferDeniedException e) {
             return new AsyncResponseTransferStatus(new TransferStatus(transferIndex, e));
         }
@@ -214,6 +233,7 @@ public class BasicHandler extends AbstractHandler {
             String[] argsArray = ac.getArgsArray();
             String basePath = argsArray[0];
             boolean instantOnline = Boolean.parseBoolean(argsArray[4]);
+            boolean persistentIdentity = argsArray.length > 5 && Boolean.parseBoolean(argsArray[5]);
             boolean partialRemerge = Boolean.parseBoolean(argsArray[1]) && !getSlaveObject().ignorePartialRemerge();// && !instantOnline;
             long skipAgeCutoff = 0L; // We only care for the value the master gave us if we are partial remerging (see below)
             long masterTime = Long.parseLong(argsArray[3]);
@@ -238,7 +258,7 @@ public class BasicHandler extends AbstractHandler {
             sendResponse(new AsyncResponseSiteBotMessage(remergeDecision));
 
             logger.debug("Remerging started");
-            if (!performSequentialRemerge(basePath, partialRemerge, skipAgeCutoff)) {
+            if (!performSequentialRemerge(basePath, partialRemerge, skipAgeCutoff, persistentIdentity)) {
                 return null;
             }
 
@@ -268,11 +288,12 @@ public class BasicHandler extends AbstractHandler {
     }
 
     private boolean performSequentialRemerge(String basePath, boolean partialRemerge,
-                                             long skipAgeCutoff) throws IOException {
+                                              long skipAgeCutoff, boolean persistentIdentity) throws IOException {
         RemergeDirectoryWalker walker = new RemergeDirectoryWalker(
                 getSlaveObject().getRoots().getRootList(),
                 getPositiveIntConfig("remerge.read.attempts", 3),
-                getPositiveLongConfig("remerge.read.retry.delay", 5000L));
+                getPositiveLongConfig("remerge.read.retry.delay", 5000L),
+                persistentIdentity);
         long startedAt = System.currentTimeMillis();
         long[] counts = new long[3];
         long progressInterval = getPositiveLongConfig("remerge.progress.interval", 30000L);
@@ -314,6 +335,13 @@ public class BasicHandler extends AbstractHandler {
                 completed ? "completed" : "cancelled", counts[0], counts[1], counts[2],
                 System.currentTimeMillis() - startedAt);
         return completed;
+    }
+
+    private String optionalArgument(AsyncCommandArgument command, int index) {
+        if (command.getArgsArray().length <= index || command.getArgsArray()[index].isBlank()) {
+            return null;
+        }
+        return command.getArgsArray()[index];
     }
 
     private int getPositiveIntConfig(String name, int defaultValue) {
@@ -359,6 +387,30 @@ public class BasicHandler extends AbstractHandler {
 
         try {
             getSlaveObject().rename(from, toDir, toFile);
+            return new AsyncResponse(ac.getIndex());
+        } catch (IOException e) {
+            return new AsyncResponseException(ac.getIndex(), e);
+        }
+    }
+
+    // SET PERSISTENT IDENTITY
+    public AsyncResponse handleSetPersistentIdentity(AsyncCommandArgument ac) {
+        String path = ac.getArgsArray()[0];
+        String username = ac.getArgsArray()[1];
+        String raceGroup = ac.getArgsArray()[2];
+        boolean found = false;
+        try {
+            for (org.drftpd.slave.vfs.Root root : getSlaveObject().getRoots().getRootList()) {
+                Path physicalPath = root.getFile(path).toPath();
+                if (!Files.exists(physicalPath, LinkOption.NOFOLLOW_LINKS)) {
+                    continue;
+                }
+                PersistentInodeIdentity.write(physicalPath, username, raceGroup);
+                found = true;
+            }
+            if (!found) {
+                throw new IOException("Unable to find inode for persistent identity: " + path);
+            }
             return new AsyncResponse(ac.getIndex());
         } catch (IOException e) {
             return new AsyncResponseException(ac.getIndex(), e);

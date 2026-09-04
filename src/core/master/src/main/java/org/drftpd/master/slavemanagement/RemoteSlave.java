@@ -52,6 +52,7 @@ import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.master.vfs.FileHandle;
 import org.drftpd.master.vfs.PartialRemergeDirectoryException;
 import org.drftpd.master.vfs.VirtualFileSystem;
+import org.drftpd.master.vfs.VirtualFileSystemFile;
 import org.drftpd.slave.network.*;
 import org.drftpd.slave.protocol.QueuedOperation;
 import org.drftpd.slave.exceptions.FileExistsException;
@@ -74,6 +75,8 @@ import java.util.regex.PatternSyntaxException;
 public class RemoteSlave extends ExtendedTimedStats implements Runnable, Comparable<RemoteSlave>, Entity, Commitable {
 
     public static final Key<Boolean> SSL = new Key<>(RemoteSlave.class, "ssl");
+    private static final String PERSISTENT_IDENTITY_PROPERTY = "persistent.inode.identity.supported";
+    private static final int IDENTITY_CAPABILITY_SUPPORTED = -1;
     private static final Logger logger = LogManager.getLogger(RemoteSlave.class);
     public transient AtomicBoolean _remergePaused;
     protected transient int _errors;
@@ -462,6 +465,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         String checkSSLIndex = SlaveManager.getBasicIssuer().issueCheckSSL(this);
         getTransientKeyedMap().setObject(SSL, fetchCheckSSLFromIndex(checkSSLIndex));
         ensureConnectionCurrent(connectionGeneration);
+        detectPersistentInodeIdentitySupport();
+        ensureConnectionCurrent(connectionGeneration);
 
         long skipAgeCutoff = 0L;
 
@@ -498,11 +503,14 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         ensureConnectionCurrent(connectionGeneration);
         String remergeIndex;
         if (partialRemerge) {
-            remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", true, skipAgeCutoff, System.currentTimeMillis(), false);
+            remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", true, skipAgeCutoff,
+                    System.currentTimeMillis(), false, usePersistentInodeIdentity());
         } else if (instantOnline) {
-            remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", true, skipAgeCutoff, System.currentTimeMillis(), true);
+            remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", true, skipAgeCutoff,
+                    System.currentTimeMillis(), true, usePersistentInodeIdentity());
         } else {
-            remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", false, 0L, 0L, false);
+            remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", false, 0L, 0L,
+                    false, usePersistentInodeIdentity());
         }
 
         try {
@@ -1026,6 +1034,49 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             return ((AsyncResponseSSLCheck) fetchResponse(sslIndex)).isSSLReady();
         } catch (RemoteIOException e) {
             throw new FatalException("Slave had an error processing the ssl check");
+        }
+    }
+
+    private void detectPersistentInodeIdentitySupport() throws SlaveUnavailableException {
+        String index = SlaveManager.getBasicIssuer().issuePersistentIdentityCheck(this);
+        boolean supported;
+        try {
+            AsyncResponse response = fetchResponse(index);
+            supported = response instanceof AsyncResponseMaxPath
+                    && ((AsyncResponseMaxPath) response).getMaxPath() == IDENTITY_CAPABILITY_SUPPORTED;
+        } catch (RemoteIOException e) {
+            supported = false;
+            logger.info("Slave {} does not support persistent inode identity: {}",
+                    getName(), e.getMessage());
+        }
+
+        String value = Boolean.toString(supported);
+        if (!value.equalsIgnoreCase(getProperty(PERSISTENT_IDENTITY_PROPERTY, "false"))) {
+            setProperty(PERSISTENT_IDENTITY_PROPERTY, value);
+        }
+        logger.info("Slave {} persistent inode identity: {}", getName(),
+                supported ? "supported" : "legacy fallback");
+    }
+
+    public boolean supportsPersistentInodeIdentity() {
+        return Boolean.parseBoolean(getProperty(PERSISTENT_IDENTITY_PROPERTY, "false"));
+    }
+
+    public boolean usePersistentInodeIdentity() {
+        return VirtualFileSystemFile.isSlaveGroupEnabled() && supportsPersistentInodeIdentity();
+    }
+
+    public void persistInodeIdentity(String path, String username, String raceGroup)
+            throws IOException, SlaveUnavailableException {
+        if (!isOnline() || !usePersistentInodeIdentity()) {
+            return;
+        }
+        String index = SlaveManager.getBasicIssuer().issueSetPersistentIdentity(
+                this, path, username, raceGroup);
+        try {
+            fetchResponse(index);
+        } catch (RemoteIOException e) {
+            throw e.getCause();
         }
     }
 
@@ -1735,7 +1786,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             _lastRemergeCommandReceived = 0L;
             _discardRemergeMessages.set(false);
 
-            String remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(this, "/", false, 0L, 0L, true);
+            String remergeIndex = SlaveManager.getBasicIssuer().issueRemergeToSlave(
+                    this, "/", false, 0L, 0L, true, usePersistentInodeIdentity());
             try {
                 _remergeCommandRunning.set(true);
                 fetchResponse(remergeIndex, 0);

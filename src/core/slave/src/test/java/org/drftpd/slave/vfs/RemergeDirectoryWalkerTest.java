@@ -10,6 +10,7 @@ package org.drftpd.slave.vfs;
 
 import org.drftpd.common.slave.LightRemoteInode;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -129,6 +130,56 @@ public class RemergeDirectoryWalkerTest {
 
         assertEquals(List.of("/", "/a", "/a/leaf"), scanned);
         assertEquals(List.of("/a/leaf", "/a", "/"), emitted);
+    }
+
+    @Test
+    public void testReadsPersistentIdentityWhenEnabled() throws IOException {
+        Path root = Files.createDirectories(temporaryDirectory.resolve("identity"));
+        Path release = Files.createDirectories(root.resolve("section/release"));
+        Path file = Files.writeString(release.resolve("file.rar"), "data");
+        Root slaveRoot = new Root(root.toString());
+        Assumptions.assumeTrue(PersistentInodeIdentity.isSupported(List.of(slaveRoot)));
+        PersistentInodeIdentity.write(file, "uploader", "RACERS");
+
+        RemergeDirectoryWalker walker = new RemergeDirectoryWalker(
+                List.of(slaveRoot), 1, 0L, true);
+        List<RemergeDirectoryWalker.DirectorySnapshot> snapshots = new ArrayList<>();
+
+        assertTrue(walker.walk("/", () -> false, snapshot -> {
+            snapshots.add(snapshot);
+            return true;
+        }));
+
+        LightRemoteInode inode = snapshot(snapshots, "/section/release").getInodes().stream()
+                .filter(candidate -> candidate.getName().equals("file.rar"))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("uploader", inode.getUsername());
+        assertEquals("RACERS", inode.getGroup());
+    }
+
+    @Test
+    public void testMarksMissingPersistentIdentityWithoutLegacyDefaults() throws IOException {
+        Path root = Files.createDirectories(temporaryDirectory.resolve("missing-identity"));
+        Path release = Files.createDirectories(root.resolve("section/release"));
+        Files.writeString(release.resolve("file.rar"), "data");
+        Root slaveRoot = new Root(root.toString());
+
+        RemergeDirectoryWalker walker = new RemergeDirectoryWalker(
+                List.of(slaveRoot), 1, 0L, true);
+        List<RemergeDirectoryWalker.DirectorySnapshot> snapshots = new ArrayList<>();
+
+        assertTrue(walker.walk("/", () -> false, snapshot -> {
+            snapshots.add(snapshot);
+            return true;
+        }));
+
+        LightRemoteInode inode = snapshot(snapshots, "/section/release").getInodes().stream()
+                .filter(candidate -> candidate.getName().equals("file.rar"))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("", inode.getUsername());
+        assertEquals("", inode.getGroup());
     }
 
     private static void assertBefore(List<RemergeDirectoryWalker.DirectorySnapshot> snapshots,
