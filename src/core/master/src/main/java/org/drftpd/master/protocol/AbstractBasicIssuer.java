@@ -57,10 +57,23 @@ public abstract class AbstractBasicIssuer extends AbstractIssuer {
         return issueReceiveToSlave(rslave, name, c, position, inetAddress, tindex, minSpeed, maxSpeed);
     }
 
+    public String issueReceiveToSlave(RemoteSlave rslave, String name, char c, long position,
+                                      String inetAddress, TransferIndex tindex, long minSpeed, long maxSpeed,
+                                      long minSpeedGrace, String username, String raceGroup,
+                                      String directoryUsername, String directoryRaceGroup)
+            throws SlaveUnavailableException {
+        return issueReceiveToSlave(
+                rslave, name, c, position, inetAddress, tindex, minSpeed, maxSpeed, minSpeedGrace);
+    }
+
     public abstract String issueRenameToSlave(RemoteSlave rslave, String from, String toDirPath,
                                               String toName) throws SlaveUnavailableException;
 
     public abstract String issueStatusToSlave(RemoteSlave rslave) throws SlaveUnavailableException;
+
+    public abstract String issueSetPersistentIdentity(RemoteSlave rslave, String path,
+                                                      String username, String raceGroup)
+            throws SlaveUnavailableException;
 
     public abstract String issueAbortToSlave(RemoteSlave rslave, TransferIndex transferIndex, String reason)
             throws SlaveUnavailableException;
@@ -78,9 +91,17 @@ public abstract class AbstractBasicIssuer extends AbstractIssuer {
     public abstract String issueRemergeToSlave(RemoteSlave rslave, String path, boolean partialRemerge,
                                                long skipAgeCutoff, long masterTime, boolean instantOnline) throws SlaveUnavailableException;
 
+    public String issueRemergeToSlave(RemoteSlave rslave, String path, boolean partialRemerge,
+                                      long skipAgeCutoff, long masterTime, boolean instantOnline,
+                                      boolean persistentIdentity) throws SlaveUnavailableException {
+        return issueRemergeToSlave(rslave, path, partialRemerge, skipAgeCutoff, masterTime, instantOnline);
+    }
+
     public abstract void issueRemergePauseToSlave(RemoteSlave rslave) throws SlaveUnavailableException;
 
     public abstract void issueRemergeResumeToSlave(RemoteSlave rslave) throws SlaveUnavailableException;
 
     public abstract String issueCheckSSL(RemoteSlave rslave) throws SlaveUnavailableException;
+
+    public abstract String issuePersistentIdentityCheck(RemoteSlave rslave) throws SlaveUnavailableException;
 }

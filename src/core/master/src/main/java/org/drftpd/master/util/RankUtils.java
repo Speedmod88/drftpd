@@ -40,7 +40,7 @@ public class RankUtils {
         for (FileHandle file : files) {
             String groupname;
             try {
-                groupname = file.getGroup();
+                groupname = file.getRaceGroup();
             } catch (FileNotFoundException e) {
                 continue;
                 // file was deleted or moved

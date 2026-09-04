@@ -482,7 +482,9 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
             name = lrf.getName() + ".collision." + rslave.getName();
             rslave.simpleRename(getPath() + lrf.getPath(), getPath(), name);
         }
-        FileHandle newFile = createFileUnchecked(name, "drftpd", "drftpd",
+        String username = hasPersistentIdentity(lrf, rslave) ? lrf.getUsername() : "drftpd";
+        String raceGroup = hasPersistentIdentity(lrf, rslave) ? lrf.getGroup() : "drftpd";
+        FileHandle newFile = createFileUnchecked(name, username, raceGroup,
                 rslave, lrf.lastModified(), true, lrf.length());
         newFile.setCheckSum(0);
         if (rslave.remergeChecksums() && lrf.length() != 0L) {
@@ -540,6 +542,28 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                                            long remergeStartedAt) throws FileNotFoundException {
         if (!preserveDestinationDuringRemerge(destination, remoteSlave, remergeStartedAt)) {
             destination.removeSlave(remoteSlave);
+        }
+    }
+
+    private boolean hasPersistentIdentity(LightRemoteInode source, RemoteSlave remoteSlave)
+            throws FileNotFoundException {
+        return remoteSlave.usePersistentInodeIdentity()
+                && !source.getUsername().isBlank()
+                && !source.getGroup().isBlank();
+    }
+
+    private void applyRemergedIdentity(InodeHandle destination, LightRemoteInode source,
+                                        RemoteSlave remoteSlave) throws FileNotFoundException {
+        if (!hasPersistentIdentity(source, remoteSlave)) {
+            return;
+        }
+        if (!Objects.equals(destination.getUsername(), source.getUsername())) {
+            destination.setUsername(source.getUsername());
+        }
+        String destinationRaceGroup = destination.isFile()
+                ? ((FileHandle) destination).getRaceGroup() : destination.getGroup();
+        if (!Objects.equals(destinationRaceGroup, source.getGroup())) {
+            destination.setGroup(source.getGroup());
         }
     }
 
@@ -740,6 +764,7 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                 } else if (source.isFile() && destination.isFile()) {
                     // both files
                     FileHandle destinationFile = (FileHandle) destination;
+                    applyRemergedIdentity(destinationFile, source, remoteSlave);
                     long destinationCRC;
                     try {
                         destinationCRC = destinationFile.getCheckSumCached();
@@ -775,7 +800,7 @@ public class DirectoryHandle extends InodeHandle implements DirectoryHandleInter
                         destinationFile.addSlave(remoteSlave);
                     }
                 } else if (source.isDirectory() && destination.isDirectory()) {
-                    // this is good, do nothing other than take up this case
+                    applyRemergedIdentity(destination, source, remoteSlave);
                 } else {
                     // we have a directory/name collision, let's find which one
                     // :)

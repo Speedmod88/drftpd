@@ -134,6 +134,15 @@ slave.operation.queue.commit.delay=60000
 # default.pre.user=drftpd
 # default.pre.group=drftpd
 
+# Use the physical slave name as the VFS group for files while retaining the
+# uploader's FTP group for race accounting and ${group} race theme output.
+# Replicated files show all owning slaves in alphabetical order, joined by +.
+# Requires an updated slave and filesystem xattr support. Files on an older
+# slave automatically keep their racer group, so mixed slave versions are safe.
+# Set false to use the racer group as the file group everywhere (legacy mode).
+# Default: [false]
+vfs.file.group.slave=false
+
 # This next section defines how the slave manager allows ssl/tls connections.
 slavemanager.ssl.supported_protocols.1=TLSv1.3
 slavemanager.ssl.cipher_suites.1=TLS_AES_128_GCM_SHA256
