@@ -48,7 +48,7 @@ import java.util.*;
 
 public class AutoFreeSpace implements PluginInterface {
     private static final Logger logger = LogManager.getLogger(AutoFreeSpace.class);
-    private Timer _timer = new Timer();
+    private static final String TIMER_NAME = "autofreespace.cleanup";
     private MrCleanIt _cleanTask = new MrCleanIt();
 
     public void startPlugin() {
@@ -61,7 +61,7 @@ public class AutoFreeSpace implements PluginInterface {
     public void stopPlugin(String reason) {
         AnnotationProcessor.unprocess(this);
         _cleanTask.stop();
-        _timer.cancel();
+        GlobalContext.getGlobalContext().cancelTimer(TIMER_NAME);
         logger.info("Autofreespace plugin unloaded successfully");
     }
 
@@ -77,19 +77,14 @@ public class AutoFreeSpace implements PluginInterface {
         if (Objects.equals(event.getCommand(), "SHUTDOWN")) {
             logger.info("Received shutdown event, shutting down AutoFreeSpace timer and task");
             _cleanTask.stop();
-            _timer.cancel();
+            GlobalContext.getGlobalContext().cancelTimer(TIMER_NAME);
         }
     }
 
     private void reload() {
-        if (_timer != null) {
-            logger.info("AUTODELETE: Reloading {}", AutoFreeSpace.class.getName());
-            _cleanTask.stop();
-            _timer.cancel();
-        } else
-        {
-            logger.info("AUTODELETE: Loading {}", AutoFreeSpace.class.getName());
-        }
+        logger.info("AUTODELETE: Reloading {}", AutoFreeSpace.class.getName());
+        _cleanTask.stop();
+        GlobalContext.getGlobalContext().cancelTimer(TIMER_NAME);
 
         AutoFreeSpaceSettings.getSettings().reload();
         if (AutoFreeSpaceSettings.getSettings().getMode().equals(AutoFreeSpaceSettings.MODE_DISABLED)
@@ -97,16 +92,18 @@ public class AutoFreeSpace implements PluginInterface {
             logger.info("AutoFreeSpace plugin is disabled");
             return;
         }
-        _timer = new Timer();
+
         _cleanTask = new MrCleanIt();
+        long cycleTime = AutoFreeSpaceSettings.getSettings().getCycleTime();
         try {
-            _timer.schedule(_cleanTask, AutoFreeSpaceSettings.getSettings().getCycleTime(), AutoFreeSpaceSettings.getSettings().getCycleTime());
-        } catch (IllegalStateException e) {
-            logger.error("Unable to start AutoFreeSpace timer task, reload and try again");
+            GlobalContext.getGlobalContext().scheduleTimer(TIMER_NAME, AutoFreeSpace.class.getName(),
+                    _cleanTask, cycleTime, cycleTime);
+        } catch (RuntimeException e) {
+            logger.error("Unable to start AutoFreeSpace timer task, reload and try again", e);
         }
     }
 
-    private static class MrCleanIt extends TimerTask {
+    private static class MrCleanIt implements Runnable {
         // This contains a list of all releases that (would) have been deleted.
         // Only useful when option "announce.only" is enabled
         // Also this will grow indefinitely and could potentially be a memory hog
