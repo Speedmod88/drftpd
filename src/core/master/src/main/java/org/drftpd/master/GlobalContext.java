@@ -729,6 +729,10 @@ public class GlobalContext {
         return _slaveSelectionManager;
     }
 
+    public List<String> getTimeEventNames() {
+        return _timeManager.getTimeEventNames();
+    }
+
     public void addTimeEvent(TimeEventInterface timeEvent) {
         _timeManager.addTimeEvent(timeEvent);
     }

@@ -53,6 +53,15 @@ public class TimeManagerTest {
     }
 
     @Test
+    public void testTimeEventNamesExposeEveryRegistration() {
+        List<String> names = _tm.getTimeEventNames();
+
+        assertEquals(2, names.size());
+        assertTrue(names.contains(TimeTester.class.getName()));
+        assertTrue(names.contains(TimeTesterAdder.class.getName()));
+    }
+
+    @Test
     public void testDoReset() throws ParseException {
         Calendar cal = Calendar.getInstance();
         SimpleDateFormat df = new SimpleDateFormat("MM/dd/yy HH:mm");
