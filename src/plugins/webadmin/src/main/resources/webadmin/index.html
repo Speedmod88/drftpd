@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>DrFTPD Control</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main id="loginView" class="login-shell">
+    <form id="loginForm" class="login-panel" autocomplete="on">
+      <div class="brand-mark">D</div>
+      <h1>DrFTPD Control</h1>
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit" class="primary">Sign in</button>
+      <p id="loginError" class="form-error" role="alert"></p>
+    </form>
+  </main>
+
+  <div id="appView" class="app-shell" hidden>
+    <header class="topbar">
+      <button id="menuButton" class="icon-button menu-button" type="button" aria-label="Toggle navigation">Menu</button>
+      <div class="brand"><span class="brand-mark small">D</span><strong>DrFTPD Control</strong></div>
+      <div class="topbar-status">
+        <span id="connectionState" class="status-dot online">Online</span>
+        <span id="currentUser"></span>
+        <button id="logoutButton" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <aside id="sidebar" class="sidebar">
+      <nav aria-label="Administration">
+        <button class="nav-item active" data-view="overview" type="button">Overview</button>
+        <button class="nav-item" data-view="timers" type="button">Timers</button>
+        <button class="nav-item" data-view="config" type="button">Configuration</button>
+        <button class="nav-item" data-view="logs" type="button">Logs</button>
+        <button class="nav-item" data-view="commands" type="button">Operations</button>
+      </nav>
+      <button id="restartButton" class="danger-outline restart-button" type="button">Restart master</button>
+    </aside>
+
+    <main class="workspace">
+      <section id="view-overview" class="view active">
+        <div class="view-header">
+          <div><p class="eyebrow">Runtime</p><h2>Overview</h2></div>
+          <button id="refreshOverview" type="button">Refresh</button>
+        </div>
+        <div class="metric-grid">
+          <article class="metric"><span>Slaves online</span><strong id="metricSlaves">-</strong></article>
+          <article class="metric"><span>Remerging</span><strong id="metricRemerging">-</strong></article>
+          <article class="metric"><span>Storage free</span><strong id="metricStorage">-</strong></article>
+          <article class="metric"><span>Heap used</span><strong id="metricHeap">-</strong></article>
+          <article class="metric"><span>CPU workers</span><strong id="metricCpu">-</strong></article>
+          <article class="metric"><span>Uptime</span><strong id="metricUptime">-</strong></article>
+        </div>
+        <div class="table-band">
+          <div class="band-header"><h3>Slaves</h3><span id="slaveCount"></span></div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Name</th><th>Status</th><th>Transfers</th><th>Speed</th><th>Free</th><th>Queues</th></tr></thead>
+              <tbody id="slaveRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-timers" class="view">
+        <div class="view-header">
+          <div><p class="eyebrow">Scheduler</p><h2>Timers</h2></div>
+          <button id="refreshTimers" type="button">Refresh</button>
+        </div>
+        <div class="table-band">
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Name</th><th>Owner</th><th>State</th><th>Period</th><th>Last run</th><th>Last error</th></tr></thead>
+              <tbody id="timerRows"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="table-band time-events">
+          <div class="band-header"><h3>Hourly event registrations</h3><span id="timeEventCount"></span></div>
+          <ul id="timeEventRows" class="plain-list"></ul>
+        </div>
+      </section>
+
+      <section id="view-config" class="view">
+        <div class="view-header">
+          <div><p class="eyebrow">Files</p><h2>Configuration</h2></div>
+          <div class="button-row">
+            <button id="reloadConfigList" type="button">Refresh</button>
+            <button id="reloadMasterConfig" class="warning" type="button">SITE RELOAD</button>
+            <button id="saveConfig" class="primary" type="button" disabled>Save</button>
+          </div>
+        </div>
+        <div class="split-pane">
+          <aside class="file-browser">
+            <input id="configFilter" type="search" placeholder="Filter configuration">
+            <div id="configFiles" class="file-list"></div>
+          </aside>
+          <div class="editor-pane">
+            <div class="editor-meta"><strong id="configPath">Select a file</strong><span id="configModified"></span></div>
+            <textarea id="configEditor" spellcheck="false" disabled></textarea>
+            <p id="configStatus" class="inline-status" role="status"></p>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-logs" class="view">
+        <div class="view-header">
+          <div><p class="eyebrow">Runtime</p><h2>Logs</h2></div>
+          <div class="log-controls">
+            <select id="logFile" aria-label="Log file"></select>
+            <input id="logLines" type="number" min="10" max="2000" value="500" aria-label="Lines">
+            <label class="toggle"><input id="logFollow" type="checkbox"><span>Follow</span></label>
+            <button id="refreshLog" type="button">Refresh</button>
+          </div>
+        </div>
+        <pre id="logOutput" class="log-output" tabindex="0"></pre>
+      </section>
+
+      <section id="view-commands" class="view">
+        <div class="view-header">
+          <div><p class="eyebrow">SITE commands</p><h2>Operations</h2></div>
+        </div>
+        <div class="command-layout">
+          <div class="command-panel">
+            <h3>Command</h3>
+            <div class="preset-grid">
+              <button type="button" data-command="SITE SEARCH ">Search</button>
+              <button type="button" data-command="SITE FIND ">Find</button>
+              <button type="button" data-command="SITE DUPE2 ">Dupe2</button>
+              <button type="button" data-command="SITE NUKE ">Nuke</button>
+              <button type="button" data-command="SITE WIPE ">Wipe</button>
+              <button type="button" data-command="SITE ADDSLAVE ">Add slave</button>
+            </div>
+            <label for="commandInput">Full SITE command</label>
+            <textarea id="commandInput" rows="5" spellcheck="false" placeholder="SITE FIND -section ANiMES-FR -dupe2 -tag SUBFRENCH -print"></textarea>
+            <button id="runCommand" class="primary" type="button">Run command</button>
+          </div>
+          <div class="command-panel output-panel">
+            <div class="band-header"><h3>Output</h3><span id="jobState"></span></div>
+            <pre id="commandOutput" class="command-output"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+  </div>
+
+  <dialog id="confirmDialog">
+    <form method="dialog">
+      <h3 id="confirmTitle">Confirm operation</h3>
+      <p id="confirmText"></p>
+      <div class="dialog-actions">
+        <button value="cancel">Cancel</button>
+        <button id="confirmAccept" value="confirm" class="danger">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

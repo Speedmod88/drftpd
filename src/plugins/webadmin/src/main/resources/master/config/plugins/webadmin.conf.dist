@@ -1,0 +1,51 @@
+####################################################################################################
+## HTTPS Web Administration                                                                      ##
+####################################################################################################
+
+# The panel is opt-in. Copy this file to webadmin.conf and enable it.
+enabled=false
+
+# The panel is HTTPS-only and reuses the certificate, protocols and cipher suites
+# configured by master.ssl.* in master.conf. It refuses to start without master SSL.
+# Keep the default loopback bind and use an SSH tunnel for remote administration.
+bind=127.0.0.1
+port=8443
+
+# HTTP requests and long-running DrFTPD commands use separate bounded executors.
+# FIND and DUPE2 jobs therefore do not occupy transfer or SiteBot event workers.
+worker.threads=8
+worker.queue=64
+command.threads=2
+command.queue=32
+
+# Authentication uses the normal DrFTPD user database. Only users who are members
+# of the siteop group can log in. Sessions use Secure/HttpOnly/SameSite cookies.
+session.timeout.minutes=30
+login.max.attempts=5
+login.window.seconds=60
+
+# Paths are relative to the master runtime directory unless absolute.
+# The editor only opens regular .conf/.conf.dist files below config.root and
+# creates timestamped copies under config/.webadmin-backups before every save.
+config.root=config
+config.maximum.bytes=2097152
+logs.root=logs
+logs.default.lines=500
+logs.maximum.lines=2000
+
+# Only these commands can be submitted from the panel. DrFTPD still applies the
+# command's normal permission checks, pre-hooks and post-hooks for the logged-in user.
+command.allowed.1=site search
+command.allowed.2=site find
+command.allowed.3=site dupe2
+command.allowed.4=site nuke
+command.allowed.5=site unnuke
+command.allowed.6=site wipe
+command.allowed.7=site delete
+command.allowed.8=site addslave
+command.allowed.9=site slave
+command.allowed.10=site slaves
+command.allowed.11=site reload
+
+# Restart performs GlobalContext.shutdown(). Run the master under systemd or
+# another supervisor configured to restart it after a clean process exit.
