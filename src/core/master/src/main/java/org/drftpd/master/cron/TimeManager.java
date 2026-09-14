@@ -236,6 +236,13 @@ public class TimeManager {
         }
     }
 
+    public synchronized List<String> getTimeEventNames() {
+        return _timedEvents.stream()
+                .map(event -> event.getClass().getName())
+                .sorted()
+                .toList();
+    }
+
     public synchronized void addTimeEvent(TimeEventInterface event) {
         _timedEvents.add(event);
     }
