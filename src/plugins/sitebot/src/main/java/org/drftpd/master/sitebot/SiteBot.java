@@ -1014,6 +1014,11 @@ public class SiteBot implements ReplyConstants, Runnable {
             doChanservInvites();
         }
         joinChannels();
+        // Deferred OPER startup loads announcers before channel writers exist.
+        // Rebuild the routing table now that destinations can be resolved.
+        if (_announceConfig != null) {
+            _announceConfig.reload();
+        }
         notifyAnnouncersConnected();
     }
 

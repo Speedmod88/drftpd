@@ -186,13 +186,13 @@ public class BasicAnnouncer extends AbstractAnnouncer {
     private boolean outputSlaveEvent(SlaveEvent event) {
         String command = event.getCommand();
         String slaveName = event.getRSlave().getName();
-        if (PendingSlaveEventQueue.isStateEvent(event)) {
+        boolean stateEvent = PendingSlaveEventQueue.isStateEvent(event);
+        if (stateEvent) {
             synchronized (_slaveEventLock) {
                 if (command.equals(_announcedSlaveStates.get(slaveName))) {
                     logger.debug("Skipping duplicate {} announcement for slave {}", command, slaveName);
                     return false;
                 }
-                _announcedSlaveStates.put(slaveName, command);
             }
         }
 
@@ -201,6 +201,7 @@ public class BasicAnnouncer extends AbstractAnnouncer {
         env.put("slave", slaveName);
         env.put("message", event.getMessage());
 
+        boolean announced;
         switch (command) {
             case "ADDSLAVE" -> {
                 SlaveStatus status = event.getSlaveStatus();
@@ -210,17 +211,31 @@ public class BasicAnnouncer extends AbstractAnnouncer {
                     } catch (SlaveUnavailableException e) {
                         logger.warn("Unable to announce ADDSLAVE for {} because no status snapshot is available",
                                 slaveName, e);
-                        synchronized (_slaveEventLock) {
-                            _announcedSlaveStates.remove(slaveName, command);
-                        }
                         return false;
                     }
                 }
                 SlaveManagement.fillEnvWithSlaveStatus(env, status);
-                outputSimpleEvent(ReplacerUtils.jprintf("addslave", env, _bundle), "addslave", MessagePriority.SLAVE);
+                announced = outputSimpleEvent(ReplacerUtils.jprintf("addslave", env, _bundle), "addslave",
+                        MessagePriority.SLAVE);
             }
-            case "DELSLAVE" -> outputSimpleEvent(ReplacerUtils.jprintf("delslave", env, _bundle), "delslave", MessagePriority.SLAVE);
-            case "MSGSLAVE" -> outputSimpleEvent(ReplacerUtils.jprintf("msgslave", env, _bundle), "msgslave", MessagePriority.SLAVE);
+            case "DELSLAVE" -> announced = outputSimpleEvent(
+                    ReplacerUtils.jprintf("delslave", env, _bundle), "delslave", MessagePriority.SLAVE);
+            case "MSGSLAVE" -> announced = outputSimpleEvent(
+                    ReplacerUtils.jprintf("msgslave", env, _bundle), "msgslave", MessagePriority.SLAVE);
+            default -> {
+                logger.debug("Ignoring unsupported IRC slave event command={} for slave={}", command, slaveName);
+                return false;
+            }
+        }
+        if (!announced) {
+            logger.warn("No IRC announcement destination is configured for slave event command={}, slave={}",
+                    command, slaveName);
+            return false;
+        }
+        if (stateEvent) {
+            synchronized (_slaveEventLock) {
+                _announcedSlaveStates.put(slaveName, command);
+            }
         }
         return true;
     }
@@ -271,12 +286,14 @@ public class BasicAnnouncer extends AbstractAnnouncer {
         outputSimpleEvent(output, type, MessagePriority.ANNOUNCEMENT);
     }
 
-    private void outputSimpleEvent(String output, String type, MessagePriority priority) {
+    private boolean outputSimpleEvent(String output, String type, MessagePriority priority) {
         AnnounceWriter writer = _config.getSimpleWriter(type);
         // Check we got a writer back, if it is null do nothing and ignore the event
         if (writer != null) {
             sayOutput(output, writer, priority);
+            return true;
         }
+        return false;
     }
 
     private void fillEnvSection(Map<String, Object> env,
