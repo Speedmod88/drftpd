@@ -83,4 +83,8 @@ public class MinfreespaceFilter extends DiskFilter {
     public String toString() {
         return getClass().getName() + "[minfreespace=" + _minfreespace + ",roots=" + getAssignList() + "]";
     }
+
+    public Long getMinimumFreeSpace(Root root) {
+        return AssignRoot.isAssignedRoot(this, root, _assignList) ? _minfreespace : null;
+    }
 }

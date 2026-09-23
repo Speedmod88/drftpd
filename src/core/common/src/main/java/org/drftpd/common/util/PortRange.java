@@ -22,6 +22,7 @@ import org.apache.logging.log4j.Logger;
 
 import javax.net.ServerSocketFactory;
 import java.io.IOException;
+import java.net.BindException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
@@ -62,15 +63,24 @@ public class PortRange {
 
     private ServerSocket createServerSocket(int port, ServerSocketFactory ssf, InetAddress bindIP) throws IOException {
         ServerSocket ss = ssf.createServerSocket();
-        if (_bufferSize > 0) {
-            ss.setReceiveBufferSize(_bufferSize);
+        try {
+            if (_bufferSize > 0) {
+                ss.setReceiveBufferSize(_bufferSize);
+            }
+            if (bindIP == null) {
+                ss.bind(new InetSocketAddress(port), 1);
+            } else {
+                ss.bind(new InetSocketAddress(bindIP, port), 1);
+            }
+            return ss;
+        } catch (IOException | RuntimeException failure) {
+            try {
+                ss.close();
+            } catch (IOException closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
         }
-        if (bindIP == null) {
-            ss.bind(new InetSocketAddress(port), 1);
-        } else {
-            ss.bind(new InetSocketAddress(bindIP, port), 1);
-        }
-        return ss;
     }
 
     /**
@@ -79,19 +89,19 @@ public class PortRange {
      * @param ssf The Server Socket Factory we need to create a listening socket on
      * @param bindIP The Internet IP Address. if Null we will listen on all ip's
      *
-     * @return A newly initialize ServerSocket or null
+     * @return A bound ServerSocket
+     * @throws IOException if no listening socket can be allocated
      */
-    public ServerSocket getPort(ServerSocketFactory ssf, InetAddress bindIP) {
+    public ServerSocket getPort(ServerSocketFactory ssf, InetAddress bindIP) throws IOException {
         ServerSocket ss = null;
         if (_minPort != 0) {
             int pos = rand.nextInt(_maxPort - _minPort + 1) + _minPort;
             int initPos = pos;
-            boolean retry = true;
             while (true) {
                 try {
                     ss = createServerSocket(pos, ssf, bindIP);
                     break;
-                } catch (IOException ignored) {
+                } catch (BindException ignored) {
                     logger.debug("Tried to open a socket on port {} and it is in use", pos);
                 }
                 pos++;
@@ -99,21 +109,12 @@ public class PortRange {
                     pos = _minPort;
                 }
                 if (pos == initPos) {
-                    if (!retry) {
-                        throw new RuntimeException("PortRange exhausted");
-                    }
-                    System.runFinalization();
-                    retry = false;
+                    throw new BindException("Passive port range exhausted (" + _minPort + "-" + _maxPort + ")");
                 }
             }
         } else
         {
-            try {
-                ss = createServerSocket(0, ssf, bindIP);
-            } catch (IOException e) {
-                logger.error("Unable to bind anonymous port", e);
-                throw new RuntimeException(e);
-            }
+            ss = createServerSocket(0, ssf, bindIP);
         }
 
         return ss;

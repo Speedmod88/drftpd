@@ -55,6 +55,18 @@
 #                                                                                                  #
 ####################################################################################################
 
+# minfreespace is measured per physical root, not against the slave's total free space.
+# multiplier=1 penalizes the score below the minimum; it DOES NOT block uploads.
+# multiplier=0 (or remove) excludes that root below the minimum. At equality it is allowed.
+# The master reports FULL (minfreespace) when every root has a configured minimum
+# and every root is below it. Unconfigured roots prevent a whole-slave FULL warning.
+# Warnings do not change selection rules, disconnect slaves, or stop downloads.
+# A recovery message is sent when at least one root meets its minimum again.
+# IRC uses the existing msgslave destination/theme; FTP shows warnings in upload
+# replies and SITE SLAVES. Old slaves without this status keep their existing behavior.
+# Background checks run every diskstatus.interval seconds (slave.conf, default 30),
+# as well as the existing status updates after transfers, deletes, and remerge.
+
 # Simple filter combined w/ the 'assign=all' property.
 # The 'assign=all' property saves the admin sometime as it automatically
 #  adds the existing roots to the ScoreChart chain.

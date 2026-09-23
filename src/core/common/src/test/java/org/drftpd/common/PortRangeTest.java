@@ -64,8 +64,8 @@ public class PortRangeTest {
         try {
             pr.getPort(ServerSocketFactory.getDefault(), null);
             throw new RuntimeException("PortRange should be exhausted!");
-        } catch (RuntimeException e) {
-            assertTrue(e.getMessage().equals("PortRange exhausted"));
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("Passive port range exhausted"));
         }
 
         ss.close();

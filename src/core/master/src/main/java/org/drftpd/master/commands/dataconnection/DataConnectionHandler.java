@@ -221,10 +221,9 @@ public class DataConnectionHandler extends CommandInterface {
                         logger.error("Slave unavailable for download", e);
                         slave = null;
                     } catch (RemoteIOException e) {
-                        slave.setOffline("Slave could not listen for a connection");
-                        logger.error("Slave could not listen for a connection", e);
-                        // make it loop until it finds a good one
-                        slave = null;
+                        logger.warn("Slave {} could not allocate a passive listener: {}", slave.getName(), e.getMessage());
+                        reset(conn);
+                        return new CommandResponse(425, "Cannot open data connection on " + slave.getName() + ": " + e.getMessage());
                     } catch (SSLUnavailableException e) {
                         logger.error("PASV Download SSLUnavailableException", e);
                         return new CommandResponse(421, e.getMessage());
@@ -255,10 +254,9 @@ public class DataConnectionHandler extends CommandInterface {
                         logger.error("Slave unavailable for upload", e);
                         slave = null;
                     } catch (RemoteIOException e) {
-                        slave.setOffline("Slave could not listen for a connection");
-                        logger.error("Slave could not listen for a connection", e);
-                        // make it loop until it finds a good one
-                        slave = null;
+                        logger.warn("Slave {} could not allocate a passive listener: {}", slave.getName(), e.getMessage());
+                        reset(conn);
+                        return new CommandResponse(425, "Cannot open data connection on " + slave.getName() + ": " + e.getMessage());
                     } catch (SSLUnavailableException e) {
                         logger.error("PASV Upload SSLUnavailableException", e);
                         return new CommandResponse(421, e.getMessage());
@@ -289,6 +287,12 @@ public class DataConnectionHandler extends CommandInterface {
                 ',' + (address.getPort() >> 8) + ',' + (address.getPort() & 0xFF);
         CommandResponse response = new CommandResponse(227, "Entering Passive Mode (" + addrStr + ").");
         response.addComment("Using " + (ts.isLocalPreTransfer() ? "master" : transferSlave.getName()) + " for upcoming transfer");
+        if (ts.isPASVUpload() && transferSlave != null) {
+            String diskWarning = transferSlave.getDiskSpaceWarning();
+            if (diskWarning != null) {
+                response.addComment(diskWarning);
+            }
+        }
         return response;
     }
 
@@ -950,8 +954,10 @@ public class DataConnectionHandler extends CommandInterface {
                 return StandardCommandManager.genericResponse("RESPONSE_503_BAD_SEQUENCE_OF_COMMANDS");
             }
 
+            String diskWarning = isStor ? ts.getTransferSlave().getDiskSpaceWarning() : null;
             conn.getControlWriter().write(new FtpReply(150, "File status okay; about to open data connection "
-                    + (isRetr ? "from " : "to ") + ts.getTransferSlave().getName() + ".").toString());
+                    + (isRetr ? "from " : "to ") + ts.getTransferSlave().getName() + "."
+                    + (diskWarning == null ? "" : " WARNING: " + diskWarning)).toString());
             conn.getControlWriter().flush();
 
             TransferStatus status = null;
