@@ -68,6 +68,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
@@ -143,6 +145,8 @@ public class Slave extends SslConfigurationLoader {
     private volatile boolean _responseWriterRunning;
 
     private Thread _responseWriterThread;
+
+    private ScheduledExecutorService _diskStatusExecutor;
 
     private final ThreadPoolExecutor _controlCommandExecutor;
 
@@ -348,6 +352,7 @@ public class Slave extends SslConfigurationLoader {
             s.getProtocolCentral().handshakeWithMaster();
             s.sendResponse(new AsyncResponseDiskStatus(s.getDiskStatus()));
             s.setOnline(true);
+            s.startDiskStatusMonitor();
             s.listenForCommands();
         } catch (IOException e) {
             throw new RuntimeException("Fatal IOException during main boot() process, Slave stopping", e);
@@ -391,6 +396,9 @@ public class Slave extends SslConfigurationLoader {
 
     public void shutdown() {
         logger.warn("Shutdown() called");
+        if (_diskStatusExecutor != null) {
+            _diskStatusExecutor.shutdownNow();
+        }
         stopCommandExecutors();
         stopResponseWriter();
         if (_sin != null) {
@@ -592,7 +600,24 @@ public class Slave extends SslConfigurationLoader {
     }
 
     public DiskStatus getDiskStatus() {
-        return new DiskStatus(_roots.getTotalDiskSpaceAvailable(), _roots.getTotalDiskSpaceCapacity());
+        return _diskSelection.getDiskStatus();
+    }
+
+    private void startDiskStatusMonitor() {
+        int interval = getPositiveIntProperty(_cfg, "diskstatus.interval", 30);
+        _diskStatusExecutor = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "Slave Disk Status");
+            thread.setDaemon(true);
+            return thread;
+        });
+        // Disk queries may block on a filesystem. Never run them on the ping/control pool.
+        _diskStatusExecutor.scheduleWithFixedDelay(() -> {
+            try {
+                sendResponse(new AsyncResponseDiskStatus(getDiskStatus()));
+            } catch (RuntimeException e) {
+                logger.warn("Unable to refresh disk capacity status", e);
+            }
+        }, interval, interval, TimeUnit.SECONDS);
     }
 
     public Transfer getTransfer(TransferIndex index) {
@@ -733,9 +758,8 @@ public class Slave extends SslConfigurationLoader {
     }
 
     public void removeTransfer(Transfer transfer) {
-        if (_transfers.remove(transfer.getTransferIndex()) == null) {
-            throw new IllegalStateException();
-        }
+        // An abort and the transfer's finally block can both finish cleanup.
+        _transfers.remove(transfer.getTransferIndex(), transfer);
     }
 
     /**

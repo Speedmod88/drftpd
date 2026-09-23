@@ -57,6 +57,7 @@ public class Transfer {
     private static final String separator = "/";
     private static final long _transferProgressAnnounce = 524288L; // Report every 512KB
     private String _abortReason = null;
+    private boolean _transferStarted;
     private CRC32 _checksum = null;
     private Connection _conn;
     private char _direction;
@@ -132,6 +133,9 @@ public class Transfer {
                 try {
                     _in.close();
                 } catch (IOException ignored) {}
+            }
+            if (!_transferStarted) {
+                _slave.removeTransfer(this);
             }
         }
     }
@@ -269,14 +273,15 @@ public class Transfer {
         _pathForUpload = dirname + separator + filename;
         _path = _pathForUpload;
         try {
-            _slave.getRoots().getFile(_pathForUpload);
-            throw new FileExistsException("File " + dirname + separator + filename + " exists");
-        } catch (FileNotFoundException ignored) {} // This is expected
+            beginTransfer();
+            try {
+                _slave.getRoots().getFile(_pathForUpload);
+                throw new FileExistsException("File " + dirname + separator + filename + " exists");
+            } catch (FileNotFoundException ignored) {} // This is expected
 
-        File directory = _slave.getRoots().getARootFileDir(dirname);
-        String root = directory.getPath();
+            File directory = _slave.getRoots().getARootFileDir(dirname);
+            String root = directory.getPath();
 
-        try {
             if (directoryUsername != null && directoryRaceGroup != null) {
                 try {
                     PersistentInodeIdentity.writeIfAbsent(
@@ -316,21 +321,7 @@ public class Transfer {
             _slave.sendResponse(new AsyncResponseDiskStatus(_slave.getDiskStatus()));
             return getTransferStatus();
         } finally {
-            if (_sock != null) {
-                try {
-                    _sock.close();
-                } catch (IOException ignored) {}
-            }
-            if (_out != null) {
-                try {
-                    _out.close();
-                } catch (IOException ignored) {}
-            }
-            if (_in != null) {
-                try {
-                    _in.close();
-                } catch (IOException ignored) {}
-            }
+            finishTransfer();
         }
     }
 
@@ -351,6 +342,7 @@ public class Transfer {
             throws IOException, TransferDeniedException {
         _path = path;
         try {
+            beginTransfer();
 
             _in = new FileInputStream(new PhysicalFile(_slave.getRoots().getFile(path)));
 
@@ -381,21 +373,36 @@ public class Transfer {
             }
             return getTransferStatus();
         } finally {
-            if (_sock != null) {
-                try {
-                    _sock.close();
-                } catch (IOException ignored) {}
-            }
-            if (_out != null) {
-                try {
-                    _out.close();
-                } catch (IOException ignored) {}
-            }
-            if (_in != null) {
-                try {
-                    _in.close();
-                } catch (IOException ignored) {}
-            }
+            finishTransfer();
+        }
+    }
+
+    private synchronized void beginTransfer() throws IOException {
+        if (_abortReason != null) {
+            throw new IOException("Transfer was aborted before starting: " + _abortReason);
+        }
+        _transferStarted = true;
+    }
+
+    private void finishTransfer() {
+        // Setup may fail before accept(), leaving a passive listener open.
+        if (_conn != null) {
+            _conn.abort();
+        }
+        closeQuietly(_sock);
+        closeQuietly(_out);
+        closeQuietly(_in);
+        if (_finished == 0) {
+            _finished = System.currentTimeMillis();
+        }
+        _slave.removeTransfer(this);
+    }
+
+    private static void closeQuietly(java.io.Closeable resource) {
+        if (resource != null) {
+            try {
+                resource.close();
+            } catch (IOException ignored) {}
         }
     }
 
@@ -559,7 +566,6 @@ public class Transfer {
             }
         } finally {
             _finished = System.currentTimeMillis();
-            _slave.removeTransfer(this); // transfers are added in setting up
             logger.debug("Transfer finalized (stats: {} bytes in {} seconds)", getTransferred(), getElapsed());
         }
     }

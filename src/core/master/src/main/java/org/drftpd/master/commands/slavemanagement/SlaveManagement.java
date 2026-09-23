@@ -278,6 +278,10 @@ public class SlaveManagement extends CommandInterface {
         } else {
             response.addComment(session.jprintf(_bundle, "slave.offline", env, request.getUser()));
         }
+        String diskWarning = rslave.getDiskSpaceWarning();
+        if (diskWarning != null) {
+            response.addComment(diskWarning);
+        }
         return response;
     }
 
