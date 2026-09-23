@@ -213,7 +213,8 @@ public class RootCollection {
         // to avoid this error SlaveSelectionManager MUST work
         // synchronized with DiskSelection.
         if (bestRoot == null) {
-            throw new IOException("No suitable root was found.");
+            throw new IOException("No upload disk satisfies diskselection.conf for " + dir
+                    + ". Check disk free space and minfreespace rules.");
         }
         bestRoot.touch();
 

@@ -39,7 +39,7 @@ import java.util.Arrays;
 public class PassiveConnection extends Connection {
     private static final Logger logger = LogManager.getLogger(PassiveConnection.class);
 
-    private ServerSocket _serverSocket;
+    private volatile ServerSocket _serverSocket;
 
     // Default is to initiate the handshake
     private final boolean _useSSLClientMode;
@@ -61,25 +61,29 @@ public class PassiveConnection extends Connection {
         } else {
             _serverSocket = portRange.getPort(ServerSocketFactory.getDefault(), bindIP);
         }
-        _serverSocket.setSoTimeout(TIMEOUT);
+        try {
+            _serverSocket.setSoTimeout(TIMEOUT);
+        } catch (IOException e) {
+            abort();
+            throw e;
+        }
     }
 
     public Socket connect(String[] cipherSuites, String[] sslProtocols, int bufferSize) throws IOException {
         // bufferSize has already been set on the ServerSocket
         // just need to accept this param to comply with the Connection class
 
-        if (_serverSocket == null) {
+        ServerSocket listener = _serverSocket;
+        if (listener == null) {
             // can happen if abort() is called before connect()
             throw new SocketException("abort() was called before connect()");
         }
 
         Socket sock;
         try {
-            sock = _serverSocket.accept();
+            sock = listener.accept();
         } finally {
-            if (_serverSocket != null) {
-                _serverSocket.close();
-            }
+            listener.close();
             _serverSocket = null;
         }
 
@@ -90,25 +94,34 @@ public class PassiveConnection extends Connection {
                     "abort() was called while waiting for accept()");
         }
 
-        setSockOpts(sock);
+        try {
+            setSockOpts(sock);
 
-        if (sock instanceof SSLSocket) {
-            SSLSocket sslSock = (SSLSocket) sock;
-            if (cipherSuites != null && cipherSuites.length != 0) {
-                sslSock.setEnabledCipherSuites(cipherSuites);
+            if (sock instanceof SSLSocket) {
+                SSLSocket sslSock = (SSLSocket) sock;
+                if (cipherSuites != null && cipherSuites.length != 0) {
+                    sslSock.setEnabledCipherSuites(cipherSuites);
+                }
+                if (sslProtocols != null && sslProtocols.length != 0) {
+                    sslSock.setEnabledProtocols(sslProtocols);
+                }
+                logger.debug("[{}] Enabled ciphers for this new connection are as follows: '{}'",
+                        sslSock.getRemoteSocketAddress(), Arrays.toString(sslSock.getEnabledCipherSuites()));
+                logger.debug("[{}] Enabled protocols for this new connection are as follows: '{}'",
+                        sslSock.getRemoteSocketAddress(), Arrays.toString(sslSock.getEnabledProtocols()));
+                sslSock.setUseClientMode(_useSSLClientMode);
+                sslSock.startHandshake();
             }
-            if (sslProtocols != null && sslProtocols.length != 0) {
-                sslSock.setEnabledProtocols(sslProtocols);
+
+            return sock;
+        } catch (IOException | RuntimeException failure) {
+            try {
+                sock.close();
+            } catch (IOException closeFailure) {
+                failure.addSuppressed(closeFailure);
             }
-            logger.debug("[{}] Enabled ciphers for this new connection are as follows: '{}'",
-                    sslSock.getRemoteSocketAddress(), Arrays.toString(sslSock.getEnabledCipherSuites()));
-            logger.debug("[{}] Enabled protocols for this new connection are as follows: '{}'",
-                    sslSock.getRemoteSocketAddress(), Arrays.toString(sslSock.getEnabledProtocols()));
-            sslSock.setUseClientMode(_useSSLClientMode);
-            sslSock.startHandshake();
+            throw failure;
         }
-
-        return sock;
     }
 
     public int getLocalPort() {
@@ -120,9 +133,10 @@ public class PassiveConnection extends Connection {
     }
 
     public void abort() {
+        ServerSocket listener = _serverSocket;
         try {
-            if (_serverSocket != null) {
-                _serverSocket.close();
+            if (listener != null) {
+                listener.close();
             }
         } catch (IOException e) {
             logger.error("failed to close() server socket", e);
