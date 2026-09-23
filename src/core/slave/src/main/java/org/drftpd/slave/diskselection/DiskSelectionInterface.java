@@ -19,6 +19,7 @@ package org.drftpd.slave.diskselection;
 
 
 import org.drftpd.slave.Slave;
+import org.drftpd.common.slave.DiskStatus;
 import org.drftpd.slave.vfs.Root;
 
 public abstract class DiskSelectionInterface {
@@ -33,4 +34,9 @@ public abstract class DiskSelectionInterface {
     }
 
     public abstract Root getBestRoot(String dir);
+
+    public DiskStatus getDiskStatus() {
+        return new DiskStatus(_slave.getRoots().getTotalDiskSpaceAvailable(),
+                _slave.getRoots().getTotalDiskSpaceCapacity());
+    }
 }

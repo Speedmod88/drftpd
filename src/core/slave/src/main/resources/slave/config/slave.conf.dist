@@ -106,6 +106,10 @@ command.checksum.queue=256
 command.remerge.threads=1
 command.remerge.queue=1
 
+# Refresh disk free-space/minfreespace status in a separate background worker.
+# Interval in seconds; does not block ping or transfer commands. Default: 30.
+diskstatus.interval=30
+
 # The amount of concurrent root collection actions we allow simultaneously.
 # If you have 1 root this will allow 3 concurrent I/O actions
 # If you have 4 roots this will allow 12 concurrent I/O actions to either drive

@@ -71,7 +71,10 @@ public class ScoreChart {
      * @param score
      */
     public void addScore(Root root, long score) {
-        getRootScoreObject(root).addScore(score);
+        RootScore rootScore = getRootScoreObject(root);
+        if (rootScore != null) {
+            rootScore.addScore(score);
+        }
     }
 
     /**

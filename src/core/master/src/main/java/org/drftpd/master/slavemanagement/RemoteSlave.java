@@ -93,7 +93,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     private transient volatile long _remergeSessionStartedAt = 0L;
     private final transient AtomicLong _nextRemergeIdleReport;
     private final String _name;
-    private transient DiskStatus _status;
+    private transient volatile DiskStatus _status;
+    private transient Boolean _announcedBelowMinimumFreeSpace;
     private HostMaskCollection _ipMasks;
     private Properties _keysAndValues;
     private final transient KeyedMap<Key<?>, Object> _transientKeyedMap;
@@ -808,6 +809,43 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             logger.warn("Unable to snapshot status while publishing ADDSLAVE for {}", getName(), e);
             GlobalContext.publishSlaveEvent(new SlaveEvent("ADDSLAVE", this));
         }
+        announceDiskSpaceState();
+    }
+
+    void updateDiskStatus(DiskStatus status) {
+        _status = status;
+        announceDiskSpaceState();
+    }
+
+    private synchronized void announceDiskSpaceState() {
+        DiskStatus status = _status;
+        if (!isAvailable() || status == null || !status.hasMinimumFreeSpaceStatus()) {
+            return;
+        }
+        boolean below = status.isBelowMinimumFreeSpace();
+        Boolean previous = _announcedBelowMinimumFreeSpace;
+        _announcedBelowMinimumFreeSpace = below;
+        if (previous == null ? !below : previous == below) {
+            return;
+        }
+        publishDiskSpaceMessage((below
+                ? "FULL (minfreespace): all roots are below their configured minimum. "
+                : "SPACE AVAILABLE: a root is back at or above its configured minimum. ")
+                + status.getMinimumFreeSpaceDetails());
+    }
+
+    protected void publishDiskSpaceMessage(String message) {
+        logger.info("Slave {}: {}", getName(), message);
+        GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", message, this));
+    }
+
+    public String getDiskSpaceWarning() {
+        DiskStatus status = _status;
+        if (!isOnline() || status == null || !status.isBelowMinimumFreeSpace()) {
+            return null;
+        }
+        return getName() + " FULL (minfreespace): " + status.getMinimumFreeSpaceDetails()
+                + ". Upload disk-selection rules still apply.";
     }
 
     public boolean processQueueAfterRemerge() {
@@ -1161,8 +1199,9 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         if (rar instanceof AsyncResponseException) {
             Throwable t = ((AsyncResponseException) rar).getThrowable();
 
-            if (t instanceof IOException) {
-                throw new RemoteIOException((IOException) t);
+            IOException ioFailure = recoverableCommandFailure(t);
+            if (ioFailure != null) {
+                throw new RemoteIOException(ioFailure);
             }
 
             logger.error("Exception on slave that is unable to be handled by the master", t);
@@ -1170,6 +1209,19 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             throw new SlaveUnavailableException("Exception on slave that is unable to be handled by the master");
         }
         return rar;
+    }
+
+    static IOException recoverableCommandFailure(Throwable failure) {
+        if (failure instanceof IOException) {
+            return (IOException) failure;
+        }
+        // Older slaves wrap passive-port exhaustion in reflection exceptions.
+        for (int depth = 0; failure != null && depth < 16; depth++, failure = failure.getCause()) {
+            if (failure instanceof RuntimeException && "PortRange exhausted".equals(failure.getMessage())) {
+                return new java.net.BindException("Passive port range exhausted on slave");
+            }
+        }
+        return null;
     }
 
     public void abandonCommandResponse(String index) {
@@ -1339,7 +1391,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
                                 getName(), progress.getDirectoriesScanned(), progress.getElapsedMillis(),
                                 progress.getPath());
                     }
-                    case "DiskStatus" -> _status = ((AsyncResponseDiskStatus) ar).getDiskStatus();
+                    case "DiskStatus" -> updateDiskStatus(((AsyncResponseDiskStatus) ar).getDiskStatus());
                     case "TransferStatus" -> {
                         TransferStatus ats = ((AsyncResponseTransferStatus) ar).getTransferStatus();
                         RemoteTransfer rt = _transfers.get(ats.getTransferIndex());
@@ -1473,6 +1525,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         if (_transfers != null)
             _transfers.clear();
         _status = null;
+        _announcedBelowMinimumFreeSpace = null;
 
         boolean publishDeleteEvent = hadConnection || _isAvailable;
         logger.info("Publishing {} event for slave {}: reason={}, hadConnection={}, available={}",

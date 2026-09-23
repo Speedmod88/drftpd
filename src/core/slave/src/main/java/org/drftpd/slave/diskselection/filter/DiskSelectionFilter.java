@@ -21,6 +21,8 @@ package org.drftpd.slave.diskselection.filter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.drftpd.common.misc.CaseInsensitiveHashMap;
+import org.drftpd.common.slave.DiskStatus;
+import org.drftpd.common.util.Bytes;
 import org.drftpd.common.util.ConfigLoader;
 import org.drftpd.slave.Slave;
 import org.drftpd.slave.diskselection.DiskSelectionInterface;
@@ -132,7 +134,7 @@ public class DiskSelectionFilter extends DiskSelectionInterface {
             }
         }
 
-        return bestRoot.getRoot();
+        return bestRoot == null ? null : bestRoot.getRoot();
     }
 
     /**
@@ -140,12 +142,48 @@ public class DiskSelectionFilter extends DiskSelectionInterface {
      */
     public void process(ScoreChart sc, String path) {
         for (DiskFilter filter : getFilters()) {
+            if (sc.getScoreList().isEmpty()) {
+                break;
+            }
             filter.process(sc, path);
         }
     }
 
     public ArrayList<DiskFilter> getFilters() {
         return _filters;
+    }
+
+    @Override
+    public DiskStatus getDiskStatus() {
+        long free = 0;
+        long total = 0;
+        boolean configured = false;
+        boolean allBelow = !getRootCollection().getRootList().isEmpty();
+        StringBuilder details = new StringBuilder();
+        int index = 0;
+        for (Root root : getRootCollection().getRootList()) {
+            long available = root.getDiskSpaceAvailable();
+            free += available;
+            total += root.getDiskSpaceCapacity();
+            Long minimum = null;
+            for (DiskFilter filter : getFilters()) {
+                if (filter instanceof MinfreespaceFilter) {
+                    Long assignedMinimum = ((MinfreespaceFilter) filter).getMinimumFreeSpace(root);
+                    if (assignedMinimum != null) {
+                        minimum = minimum == null ? assignedMinimum : Math.max(minimum, assignedMinimum);
+                    }
+                }
+            }
+            configured |= minimum != null;
+            // Never call the whole slave full when an unmonitored root remains.
+            allBelow &= minimum != null && available < minimum;
+            if (details.length() > 0) {
+                details.append("; ");
+            }
+            details.append("root.").append(++index).append(" free=").append(Bytes.formatBytes(available))
+                    .append(" min=").append(minimum == null ? "unset" : Bytes.formatBytes(minimum));
+        }
+        return new DiskStatus(free, total, allBelow, configured ? details.toString() : null);
     }
 
     private void initFilters() {

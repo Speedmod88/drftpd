@@ -32,9 +32,31 @@ public class DiskStatus implements Serializable {
 
     private final long _total;
 
+    // Optional fields: old peers ignore them; old senders leave details null.
+    private final boolean _belowMinimumFreeSpace;
+    private final String _minimumFreeSpaceDetails;
+
     public DiskStatus(long free, long total) {
+        this(free, total, false, null);
+    }
+
+    public DiskStatus(long free, long total, boolean belowMinimumFreeSpace, String minimumFreeSpaceDetails) {
         _free = free;
         _total = total;
+        _belowMinimumFreeSpace = belowMinimumFreeSpace;
+        _minimumFreeSpaceDetails = minimumFreeSpaceDetails;
+    }
+
+    public boolean hasMinimumFreeSpaceStatus() {
+        return _minimumFreeSpaceDetails != null;
+    }
+
+    public boolean isBelowMinimumFreeSpace() {
+        return hasMinimumFreeSpaceStatus() && _belowMinimumFreeSpace;
+    }
+
+    public String getMinimumFreeSpaceDetails() {
+        return _minimumFreeSpaceDetails;
     }
 
     public long getBytesAvailable() {

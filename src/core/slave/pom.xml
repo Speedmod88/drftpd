@@ -29,6 +29,7 @@
                         </goals>
                         <configuration>
                             <excludeScope>provided</excludeScope>
+                            <excludeArtifactIds>mockito-core,byte-buddy,byte-buddy-agent,objenesis</excludeArtifactIds>
                             <outputDirectory>${session.executionRootDirectory}/runtime/slave/lib</outputDirectory>
                         </configuration>
                     </execution>
@@ -81,6 +82,12 @@
     </build>
 
     <dependencies>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.12.0</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.drftpd</groupId>
             <artifactId>drftpd-common</artifactId>
