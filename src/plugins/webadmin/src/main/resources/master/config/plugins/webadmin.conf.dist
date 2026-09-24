@@ -11,6 +11,15 @@ enabled=false
 bind=127.0.0.1
 port=8443
 
+# For direct LAN access, bind must be an IP assigned to the master host/container,
+# not 127.0.0.1. Publish the port when using Docker and restrict it with a firewall.
+# The browser port must match port above; 8843 is not the default (8443 is).
+# Startup, authentication, command audit, and request diagnostics go to logs/webadmin.log
+# with the org.drftpd.webadmin logger in config/log4j2-master.xml.
+# DEBUG includes request method/path, remote address, response status and duration,
+# but not query strings, request bodies or session cookies. Use INFO to reduce noise.
+# Log rotation is daily with 90-day retention, independently of the root logger level.
+
 # HTTP requests and long-running DrFTPD commands use separate bounded executors.
 # FIND and DUPE2 jobs therefore do not occupy transfer or SiteBot event workers.
 worker.threads=8
