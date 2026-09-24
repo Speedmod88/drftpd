@@ -13,6 +13,7 @@ import org.apache.logging.log4j.Logger;
 import org.bushe.swing.event.annotation.AnnotationProcessor;
 import org.bushe.swing.event.annotation.EventSubscriber;
 import org.drftpd.common.extensibility.PluginInterface;
+import org.drftpd.common.util.ConfigLoader;
 import org.drftpd.master.event.ReloadEvent;
 
 public class WebAdminPlugin implements PluginInterface {
@@ -42,11 +43,17 @@ public class WebAdminPlugin implements PluginInterface {
     private void reload() {
         stopServer();
         try {
+            logger.info("Loading HTTPS web administration configuration from {}",
+                    ConfigLoader.loadConfigFile("webadmin.conf", true).getAbsolutePath());
             WebAdminSettings settings = WebAdminSettings.load();
             if (!settings.enabled) {
-                logger.info("HTTPS web administration plugin is disabled");
+                logger.info("HTTPS web administration plugin is disabled; no listener started. "
+                        + "Set enabled=true in config/plugins/webadmin.conf to enable it");
                 return;
             }
+            logger.info("Starting HTTPS web administration: bind={} port={} requestWorkers={} commandWorkers={}",
+                    settings.bindAddress.getHostAddress(), settings.port,
+                    settings.requestThreads, settings.commandThreads);
             server = new WebAdminServer(settings);
             server.start();
         } catch (RuntimeException e) {

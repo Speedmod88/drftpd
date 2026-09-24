@@ -134,8 +134,21 @@
                 </Delete>
             </DefaultRolloverStrategy>
         </RollingFile>
+        <RollingFile name="webadmin" fileName="${baseDir}/webadmin.log" filePattern="${baseDir}/$${date:yyyy-MM}/webadmin-%d{yyyy-MM-dd}.log.gz">
+            <PatternLayout pattern="%p %d{ISO8601} [%t] %c %x - %m%n" />
+            <CronTriggeringPolicy schedule="0 0 0 * * ?" />
+            <DefaultRolloverStrategy>
+                <Delete basePath="${baseDir}" maxDepth="2">
+                    <IfFileName glob="*/webadmin-*.log.gz" />
+                    <IfLastModified age="90d" />
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
     </Appenders>
     <Loggers>
+        <Logger name="org.drftpd.webadmin" level="debug" additivity="false">
+            <AppenderRef ref="webadmin" />
+        </Logger>
         <Logger name="org.drftpd.master.commands.usermanagement" level="warn" additivity="false">
             <AppenderRef ref="sysop" />
         </Logger>
