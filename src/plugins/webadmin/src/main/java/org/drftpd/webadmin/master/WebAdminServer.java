@@ -135,6 +135,13 @@ final class WebAdminServer {
             server.start();
             logger.info("HTTPS web administration listening on https://{}:{}; login restricted to siteop",
                     settings.bindAddress.getHostAddress(), settings.port);
+            if (settings.bindAddress.isLoopbackAddress()) {
+                logger.warn("WebAdmin is bound to loopback only ({}). Direct LAN connections cannot reach it. "
+                                + "Use an SSH tunnel, or configure bind in config/plugins/webadmin.conf "
+                                + "to an address assigned to the master and restrict access with a firewall",
+                        settings.bindAddress.getHostAddress());
+            }
+            logger.debug("WebAdmin paths: configRoot={} logsRoot={}", settings.configRoot, settings.logsRoot);
         } catch (IOException e) {
             stop();
             throw new IllegalStateException("Unable to bind HTTPS web administration server", e);
@@ -154,6 +161,9 @@ final class WebAdminServer {
     }
 
     private void handle(HttpExchange exchange) {
+        long startedAt = System.nanoTime();
+        // The raw path excludes query values and keeps control characters escaped.
+        String requestPath = exchange.getRequestURI().getRawPath();
         try {
             secureHeaders(exchange);
             String path = exchange.getRequestURI().getPath();
@@ -193,12 +203,17 @@ final class WebAdminServer {
         } catch (ApiException e) {
             sendError(exchange, e.status, e.getMessage());
         } catch (RejectedExecutionException e) {
+            logger.warn("WebAdmin request queue full: method={} path={} remote={}",
+                    exchange.getRequestMethod(), requestPath, exchange.getRemoteAddress());
             sendError(exchange, 503, "The web administration queue is full");
         } catch (Exception e) {
             logger.error("Web administration request failed: {} {}", exchange.getRequestMethod(),
-                    exchange.getRequestURI(), e);
+                    requestPath, e);
             sendError(exchange, 500, "Request failed");
         } finally {
+            logger.debug("WebAdmin request: method={} path={} remote={} status={} durationMs={}",
+                    exchange.getRequestMethod(), requestPath, exchange.getRemoteAddress(),
+                    exchange.getResponseCode(), TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
             exchange.close();
         }
     }
