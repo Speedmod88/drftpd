@@ -6,7 +6,10 @@ const state = {
   configFiles: [],
   config: null,
   logTimer: null,
-  jobTimer: null
+  jobTimer: null,
+  expiryTimer: null,
+  recoveryTimer: null,
+  view: "overview"
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -26,13 +29,22 @@ async function api(path, options = {}) {
   return body;
 }
 
-function showLogin() {
+function showLogin(expired = false) {
   state.csrf = "";
   state.username = "";
   $("#appView").hidden = true;
   $("#loginView").hidden = false;
   clearInterval(state.logTimer);
   clearInterval(state.jobTimer);
+  clearTimeout(state.expiryTimer);
+  clearTimeout(state.recoveryTimer);
+  if ($("#confirmDialog").open) $("#confirmDialog").close("cancel");
+  if (location.pathname === "/home") {
+    location.replace(expired ? "/login?expired=1" : "/login");
+    return;
+  }
+  history.replaceState(null, "", "/login");
+  if (expired) $("#loginError").textContent = "Session expired. Sign in again.";
 }
 
 function showApp(session) {
@@ -41,7 +53,10 @@ function showApp(session) {
   $("#currentUser").textContent = session.username;
   $("#loginView").hidden = true;
   $("#appView").hidden = false;
-  loadOverview();
+  history.replaceState(null, "", "/home");
+  clearTimeout(state.expiryTimer);
+  state.expiryTimer = setTimeout(() => showLogin(true), Math.max(0, session.expiresAt - session.serverTime));
+  selectView("overview");
 }
 
 function toast(message) {
@@ -325,6 +340,8 @@ async function restartMaster() {
 }
 
 function selectView(name) {
+  state.view = name;
+  clearTimeout(state.recoveryTimer);
   $$(".nav-item").forEach(button => button.classList.toggle("active", button.dataset.view === name));
   $$(".view").forEach(view => view.classList.toggle("active", view.id === `view-${name}`));
   $("#sidebar").classList.remove("open");
@@ -332,7 +349,104 @@ function selectView(name) {
   if (name === "timers") loadTimers();
   if (name === "config" && state.configFiles.length === 0) loadConfigFiles();
   if (name === "logs" && $("#logFile").options.length === 0) loadLogFiles();
+  if (name === "srrdb") loadRecovery();
 }
+
+function renderRecovery(data) {
+  const busy = data.scanState === "queued" || data.scanState === "running";
+  $("#scanRecovery").disabled = busy;
+  $("#cancelRecovery").disabled = !busy;
+  $("#recoveryProgress").textContent = `${data.scanState}: ${data.scanned}/${data.total} releases, ${data.errors} errors. ${data.scanMessage || ""}`;
+  $("#recoveryErrors").hidden = !data.scanErrors.length;
+  $("#recoveryErrorText").textContent = data.scanErrors.join("\n");
+  const body = $("#recoveryRows");
+  body.replaceChildren();
+  if (!data.files.length) {
+    const row = document.createElement("tr");
+    const cell = td("No files awaiting review.");
+    cell.colSpan = 4;
+    row.append(cell);
+    body.append(row);
+  }
+  for (const file of data.files) {
+    const row = document.createElement("tr");
+    const destination = td(`${file.releasePath}/${file.file}`);
+    const source = document.createElement("a");
+    source.textContent = "srrDB source";
+    source.href = file.source;
+    source.target = "_blank";
+    source.rel = "noopener noreferrer";
+    const sourceLine = document.createElement("small");
+    sourceLine.append(source);
+    destination.append(sourceLine);
+    const details = td(formatBytes(file.size));
+    const crc = document.createElement("small");
+    crc.textContent = `CRC32 ${file.crc}`;
+    details.append(crc);
+    const status = td(file.state);
+    const message = document.createElement("small");
+    message.textContent = file.message;
+    status.append(message);
+    const reviewer = document.createElement("small");
+    reviewer.textContent = file.decidedBy ? `Reviewed by ${file.decidedBy}` : `Requested by ${file.requestedBy}`;
+    status.append(reviewer);
+    const actions = document.createElement("td");
+    const buttons = document.createElement("div");
+    buttons.className = "button-row";
+    if (file.state === "pending" || file.state === "failed") {
+      for (const action of ["accept", "reject"]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = action === "accept" ? (file.state === "failed" ? "Retry" : "Accept") : "Reject";
+        if (action === "accept") button.className = "primary";
+        button.addEventListener("click", async () => {
+          if (action === "accept" && !await confirmAction("Download missing metadata", `${file.releasePath}/${file.file} (${formatBytes(file.size)})`)) return;
+          button.disabled = true;
+          await recoveryAction({ action, id: file.id });
+        });
+        buttons.append(button);
+      }
+    }
+    actions.append(buttons);
+    row.append(destination, details, status, actions);
+    body.append(row);
+  }
+}
+
+async function loadRecovery() {
+  clearTimeout(state.recoveryTimer);
+  if (!state.csrf || state.view !== "srrdb") return;
+  try { renderRecovery(await api("/api/srrdb")); }
+  catch (error) { showError(error); }
+  if (state.csrf && state.view === "srrdb") state.recoveryTimer = setTimeout(loadRecovery, 3000);
+}
+
+async function recoveryAction(payload) {
+  try {
+    renderRecovery(await api("/api/srrdb", { method: "POST", body: JSON.stringify(payload) }));
+  } catch (error) { showError(error); }
+  await loadRecovery();
+}
+
+$("#recoveryForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const path = $("#recoveryPath").value.trim().replace(/\/+$/, "") || "/";
+  const recursive = $("#recoveryScope").value === "tree";
+  if (!await confirmAction("Start srrDB lookup", `Look up release names from ${path} on srrDB?`)) return;
+  await recoveryAction({ action: "scan", path, recursive });
+});
+$("#refreshRecovery").addEventListener("click", loadRecovery);
+$("#cancelRecovery").addEventListener("click", () => recoveryAction({ action: "cancel" }));
+$("#clearRecovery").addEventListener("click", () => recoveryAction({ action: "clear" }));
+
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState !== "visible" || !state.csrf) return;
+  try {
+    const session = await api("/api/session");
+    clearTimeout(state.expiryTimer);
+    state.expiryTimer = setTimeout(() => showLogin(true), Math.max(0, session.expiresAt - session.serverTime));
+  } catch (error) { if (state.csrf) showError(error); }
+});
 
 $("#loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -380,10 +494,11 @@ $$("[data-command]").forEach(button => button.addEventListener("click", () => {
 $("#restartButton").addEventListener("click", restartMaster);
 
 (async () => {
+  const expired = new URLSearchParams(location.search).has("expired");
   try {
     const session = await api("/api/session");
     showApp(session);
   } catch (_) {
-    showLogin();
+    showLogin(expired);
   }
 })();

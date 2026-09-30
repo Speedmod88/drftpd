@@ -39,16 +39,19 @@ final class WebAdminSettings {
     final int maximumConfigBytes;
     final Path configRoot;
     final Path logsRoot;
+    final Path srrdbState;
+    final int srrdbScanLimit;
+    final int srrdbMaximumBytes;
     final Set<String> allowedCommands;
 
-    private WebAdminSettings(Properties properties) {
+    WebAdminSettings(Properties properties) {
         enabled = booleanValue(properties, "enabled", false);
         port = intValue(properties, "port", 8443, 1, 65535);
         requestThreads = intValue(properties, "worker.threads", 8, 2, 64);
         requestQueue = intValue(properties, "worker.queue", 64, 8, 1024);
         commandThreads = intValue(properties, "command.threads", 2, 1, 16);
         commandQueue = intValue(properties, "command.queue", 32, 1, 512);
-        sessionTimeoutMinutes = intValue(properties, "session.timeout.minutes", 30, 5, 1440);
+        sessionTimeoutMinutes = intValue(properties, "session.timeout.minutes", 1440, 5, 1440);
         loginMaxAttempts = intValue(properties, "login.max.attempts", 5, 1, 100);
         loginWindowSeconds = intValue(properties, "login.window.seconds", 60, 10, 3600);
         defaultLogLines = intValue(properties, "logs.default.lines", 500, 10, 2000);
@@ -57,6 +60,9 @@ final class WebAdminSettings {
                 16 * 1024 * 1024);
         configRoot = rootPath(properties.getProperty("config.root", "config"));
         logsRoot = rootPath(properties.getProperty("logs.root", "logs"));
+        srrdbState = rootPath(properties.getProperty("srrdb.state.file", "userdata/webadmin/srrdb.json"));
+        srrdbScanLimit = intValue(properties, "srrdb.scan.limit", 100, 1, 1000);
+        srrdbMaximumBytes = intValue(properties, "srrdb.maximum.bytes", 1048576, 1024, 4194304);
         bindAddress = address(properties.getProperty("bind", "127.0.0.1"));
         allowedCommands = Collections.unmodifiableSet(loadAllowedCommands(properties));
     }
