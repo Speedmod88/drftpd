@@ -29,9 +29,22 @@ command.queue=32
 
 # Authentication uses the normal DrFTPD user database. Only users who are members
 # of the siteop group can log in. Sessions use Secure/HttpOnly/SameSite cookies.
-session.timeout.minutes=30
+# Absolute lifetime from login, not renewed by requests. Default: 24 hours.
+# A master restart or WebAdmin reload also invalidates in-memory login sessions.
+session.timeout.minutes=1440
 login.max.attempts=5
 login.window.seconds=60
+
+# srrDB recovery is manually started from the panel. No scheduled automatic scans.
+# One background worker, at least one second between remote requests, exact release
+# names only. Only missing SFV/NFO files are offered; existing files are never replaced.
+# Each file requires Accept before any file content is downloaded or written to a slave.
+# Review decisions survive restarts. Interrupted imports require manual review/retry.
+# Scope scans use the index, capped per scan. Subdirectories (CD1, Subs...) must exist.
+# HTTPS download errors (including srrDB access restrictions) are reported, not bypassed.
+srrdb.scan.limit=100
+srrdb.maximum.bytes=1048576
+srrdb.state.file=userdata/webadmin/srrdb.json
 
 # Paths are relative to the master runtime directory unless absolute.
 # The editor only opens regular .conf/.conf.dist files below config.root and
