@@ -99,6 +99,8 @@ final class WebAdminServer {
     private final ThreadPoolExecutor commandExecutor;
 
     private HttpsServer server;
+    private SrrdbRecovery recovery;
+    private boolean stopping;
 
     WebAdminServer(WebAdminSettings settings) {
         this.settings = Objects.requireNonNull(settings);
@@ -149,6 +151,10 @@ final class WebAdminServer {
     }
 
     void stop() {
+        synchronized (this) {
+            stopping = true;
+            if (recovery != null) recovery.close();
+        }
         HttpsServer current = server;
         server = null;
         if (current != null) {
@@ -192,6 +198,7 @@ final class WebAdminServer {
                 case "/api/logs/tail" -> logTail(exchange);
                 case "/api/commands" -> commands(exchange, session);
                 case "/api/restart" -> restart(exchange, session);
+                case "/api/srrdb" -> srrdb(exchange, session);
                 default -> {
                     if (path.startsWith("/api/jobs/")) {
                         commandJob(exchange, session, path.substring("/api/jobs/".length()));
@@ -240,6 +247,10 @@ final class WebAdminServer {
         }
 
         attempt.success();
+        sessions.values().removeIf(WebSessionToken::expired);
+        if (sessions.size() >= 1000) throw new ApiException(503, "Too many active sessions");
+        String previousSession = cookie(exchange, SESSION_COOKIE);
+        if (previousSession != null) sessions.remove(previousSession);
         WebSessionToken session = new WebSessionToken(randomToken(), randomToken(), user.getName(),
                 settings.sessionTimeoutMinutes);
         sessions.put(session.id, session);
@@ -247,7 +258,7 @@ final class WebAdminServer {
                 + "; Path=/; Max-Age=" + settings.sessionTimeoutMinutes * 60
                 + "; Secure; HttpOnly; SameSite=Strict");
         logger.info("Webadmin login accepted for siteop [{}] from {}", user.getName(), address);
-        sendJson(exchange, 200, Map.of("username", user.getName(), "csrf", session.csrf));
+        sendJson(exchange, 200, sessionView(session));
     }
 
     private User authenticate(String username, String password) {
@@ -284,7 +295,6 @@ final class WebAdminServer {
             sessions.remove(session.id);
             throw new ApiException(401, "Authentication required");
         }
-        session.touch(settings.sessionTimeoutMinutes);
         return session;
     }
 
@@ -298,7 +308,41 @@ final class WebAdminServer {
 
     private void session(HttpExchange exchange, WebSessionToken session) throws IOException {
         requireMethod(exchange, "GET");
-        sendJson(exchange, 200, Map.of("username", session.username, "csrf", session.csrf));
+        sendJson(exchange, 200, sessionView(session));
+    }
+
+    private Map<String, Object> sessionView(WebSessionToken session) {
+        return Map.of("username", session.username, "csrf", session.csrf,
+                "expiresAt", session.expires, "serverTime", System.currentTimeMillis());
+    }
+
+    private synchronized SrrdbRecovery recovery() throws IOException {
+        if (stopping) throw new ApiException(503, "WebAdmin is stopping");
+        if (recovery == null) {
+            recovery = new SrrdbRecovery(settings.srrdbState, settings.srrdbScanLimit,
+                    new SrrdbClient(settings.srrdbMaximumBytes), new SrrdbLibrary());
+        }
+        return recovery;
+    }
+
+    private void srrdb(HttpExchange exchange, WebSessionToken session) throws IOException {
+        if (exchange.getRequestMethod().equals("GET")) {
+            sendJson(exchange, 200, recovery().view());
+            return;
+        }
+        requireMethod(exchange, "POST");
+        RecoveryPayload payload = readJson(exchange, RecoveryPayload.class, MAX_LOGIN_BODY);
+        if (payload == null || payload.action == null) throw new ApiException(400, "An action is required");
+        try {
+            switch (payload.action) {
+                case "scan" -> recovery().scan(session.username, payload.path, payload.recursive);
+                case "cancel" -> recovery().cancel();
+                case "clear" -> recovery().clearFinished();
+                case "accept", "reject" -> recovery().decide(payload.id, payload.action, session.username);
+                default -> throw new IllegalArgumentException("Unknown recovery action");
+            }
+        } catch (IllegalArgumentException e) { throw new ApiException(400, e.getMessage()); }
+        sendJson(exchange, 202, recovery().view());
     }
 
     private void logout(HttpExchange exchange, WebSessionToken session) throws IOException {
@@ -641,7 +685,17 @@ final class WebAdminServer {
 
     private void staticResource(HttpExchange exchange, String requestPath) throws IOException {
         requireMethod(exchange, "GET");
-        String path = "/".equals(requestPath) ? "/index.html" : requestPath;
+        if ("/home".equals(requestPath)) {
+            try { requireSession(exchange); }
+            catch (ApiException e) {
+                if (e.status != 401) throw e;
+                exchange.getResponseHeaders().set("Location", "/login");
+                exchange.getResponseHeaders().set("Cache-Control", "no-store");
+                exchange.sendResponseHeaders(303, -1);
+                return;
+            }
+        }
+        String path = Set.of("/", "/login", "/home").contains(requestPath) ? "/index.html" : requestPath;
         String contentType = STATIC_TYPES.get(path);
         if (contentType == null) {
             throw new ApiException(404, "Not found");
@@ -895,25 +949,29 @@ final class WebAdminServer {
         }
     }
 
-    private static final class WebSessionToken {
+    static final class WebSessionToken {
         private final String id;
         private final String csrf;
         private final String username;
-        private volatile long expires;
+        final long expires;
 
-        private WebSessionToken(String id, String csrf, String username, int timeoutMinutes) {
+        WebSessionToken(String id, String csrf, String username, int timeoutMinutes) {
+            this(id, csrf, username, timeoutMinutes, System.currentTimeMillis());
+        }
+
+        WebSessionToken(String id, String csrf, String username, int timeoutMinutes, long now) {
             this.id = id;
             this.csrf = csrf;
             this.username = username;
-            touch(timeoutMinutes);
+            expires = now + TimeUnit.MINUTES.toMillis(timeoutMinutes);
         }
 
         private boolean expired() {
-            return System.currentTimeMillis() > expires;
+            return expired(System.currentTimeMillis());
         }
 
-        private void touch(int timeoutMinutes) {
-            expires = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(timeoutMinutes);
+        boolean expired(long now) {
+            return now >= expires;
         }
     }
 
@@ -999,6 +1057,13 @@ final class WebAdminServer {
 
     private static final class RestartPayload {
         private String confirm;
+    }
+
+    private static final class RecoveryPayload {
+        private String action;
+        private String id;
+        private String path;
+        private boolean recursive;
     }
 
     private static final class ApiException extends RuntimeException {
