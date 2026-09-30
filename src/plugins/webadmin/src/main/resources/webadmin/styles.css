@@ -21,6 +21,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { min-height: 100%; margin: 0; }
 body { min-width: 320px; background: #f2f4f3; }
 button, input, select, textarea { font: inherit; letter-spacing: 0; }
@@ -287,6 +288,22 @@ dialog { width: min(430px, calc(100vw - 32px)); border: 1px solid var(--line); b
 dialog::backdrop { background: rgba(19, 25, 23, .55); }
 dialog h3 { margin-top: 0; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+.recovery-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-bottom: 18px; }
+.recovery-controls label { display: grid; gap: 6px; min-width: 0; }
+.recovery-controls .recovery-path { flex: 1 1 300px; }
+.recovery-controls select { width: 180px; }
+.recovery-controls button { flex-shrink: 0; }
+.recovery-table { table-layout: fixed; white-space: normal; }
+.recovery-table td { overflow-wrap: anywhere; vertical-align: top; }
+.recovery-table th:nth-child(1) { width: 42%; }
+.recovery-table th:nth-child(2) { width: 18%; }
+.recovery-table th:nth-child(3) { width: 20%; }
+.recovery-table .button-row { flex-wrap: wrap; }
+.recovery-table small { display: block; margin-top: 5px; color: var(--muted); }
+.recovery-table a { color: var(--blue); }
+.scan-progress { min-height: 24px; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .recovery-table { min-width: 680px; } }
 
 @media (max-width: 1050px) {
   .metric-grid { grid-template-columns: repeat(3, minmax(120px, 1fr)); }

@@ -40,6 +40,7 @@
         <button class="nav-item" data-view="config" type="button">Configuration</button>
         <button class="nav-item" data-view="logs" type="button">Logs</button>
         <button class="nav-item" data-view="commands" type="button">Operations</button>
+        <button class="nav-item" data-view="srrdb" type="button">srrDB recovery</button>
       </nav>
       <button id="restartButton" class="danger-outline restart-button" type="button">Restart master</button>
     </aside>
@@ -146,6 +147,31 @@
             <div class="band-header"><h3>Output</h3><span id="jobState"></span></div>
             <pre id="commandOutput" class="command-output"></pre>
           </div>
+        </div>
+      </section>
+      <section id="view-srrdb" class="view">
+        <div class="view-header">
+          <div><p class="eyebrow">Missing metadata</p><h2>srrDB recovery</h2></div>
+          <button id="refreshRecovery" type="button">Refresh</button>
+        </div>
+        <form id="recoveryForm" class="recovery-controls">
+          <label class="recovery-path" for="recoveryPath">VFS directory
+            <input id="recoveryPath" placeholder="/ANiMES-FR/Release.Name-GROUP" required pattern="/.*">
+          </label>
+          <label for="recoveryScope">Scope
+            <select id="recoveryScope"><option value="release">One release</option><option value="tree">Indexed subdirectories</option></select>
+          </label>
+          <button id="scanRecovery" class="primary" type="submit">Find missing files</button>
+          <button id="cancelRecovery" type="button" disabled>Cancel scan</button>
+          <button id="clearRecovery" type="button">Clear finished</button>
+        </form>
+        <p id="recoveryProgress" class="scan-progress" role="status"></p>
+        <details id="recoveryErrors" hidden><summary>Lookup errors</summary><pre id="recoveryErrorText" class="log-output"></pre></details>
+        <div class="table-scroll">
+          <table class="recovery-table">
+            <thead><tr><th>Destination / source</th><th>Size / CRC32</th><th>Status</th><th>Review</th></tr></thead>
+            <tbody id="recoveryRows"></tbody>
+          </table>
         </div>
       </section>
     </main>
