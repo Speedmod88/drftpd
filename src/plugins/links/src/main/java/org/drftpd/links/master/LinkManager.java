@@ -48,7 +48,8 @@ public class LinkManager implements PluginInterface {
 
     private CaseInsensitiveHashMap<String, Class<? extends LinkType>> _typesMap;
 
-    private ArrayList<LinkType> _links;
+    private volatile ArrayList<LinkType> _links = new ArrayList<>();
+    private LinkReconciler reconciler;
 
     /*
      * Get the LinkManager Plugin
@@ -64,13 +65,60 @@ public class LinkManager implements PluginInterface {
 
     @Override
     public void startPlugin() {
-        AnnotationProcessor.process(this);
         loadConf();
+        reconciler = new LinkReconciler(this::reconcile);
+        reconciler.start();
+        AnnotationProcessor.process(this);
     }
 
     @Override
     public void stopPlugin(String reason) {
         AnnotationProcessor.unprocess(this);
+        if (reconciler != null) reconciler.close();
+    }
+
+    public void requestReconcile(DirectoryHandle directory) {
+        if (reconciler != null && !directory.isRoot()) reconciler.request(directory.getPath());
+    }
+
+    private boolean reconcile(String path) {
+        DirectoryHandle directory = new DirectoryHandle(path);
+        if (!directory.exists()) return true;
+        boolean known = true;
+        for (LinkType link : getLinks()) {
+            known &= link.reconcileStatus(directory);
+        }
+        return known;
+    }
+
+    private void requestReconcile(InodeHandle inode) {
+        if (inode.isLink()) return;
+        requestReconcile(inode.isDirectory() ? new DirectoryHandle(inode.getPath()) : inode.getParent());
+    }
+
+    @EventSubscriber
+    public void onRefresh(org.drftpd.master.vfs.event.VirtualFileSystemInodeRefreshEvent event) {
+        requestReconcile(event.getInode());
+    }
+
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
+    public void onCreated(org.drftpd.master.vfs.event.VirtualFileSystemInodeCreatedEvent event) {
+        requestReconcile(event.getInode());
+    }
+
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
+    public void onChanged(org.drftpd.master.vfs.event.VirtualFileSystemLastModifiedEvent event) {
+        requestReconcile(event.getInode());
+    }
+
+    @EventSubscriber
+    public void onTransfer(org.drftpd.master.event.TransferEvent event) {
+        if ("STOR".equals(event.getCommand())) requestReconcile(event.getDirectory());
+    }
+
+    @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SITEBOT_FUNCTIONAL)
+    public void onCompletion(org.drftpd.zipscript.master.sfv.event.SFVMemberTransferEvent event) {
+        requestReconcile(event.getDirectory());
     }
 
     @EventSubscriber
@@ -156,6 +204,9 @@ public class LinkManager implements PluginInterface {
      */
     @EventSubscriber(eventServiceName = GlobalContext.SERVICE_NAME_EVENT_BUS_SLOWEST)
     public void onVirtualFileSystemDeleteEvent(VirtualFileSystemInodeDeletedEvent vfsevent) {
+        if (!vfsevent.getInode().isLink() && !vfsevent.getInode().getPath().equals("/")) {
+            requestReconcile(vfsevent.getInode().getParent());
+        }
         if (vfsevent.getInode().isDirectory()) {
             logger.debug("Caught VirtualFileSystemInodeDeletedEvent for directory {}, Checking links", vfsevent.getInode());
             for (LinkType link : getLinks()) {

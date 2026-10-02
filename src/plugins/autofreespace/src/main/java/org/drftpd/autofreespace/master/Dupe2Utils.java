@@ -25,8 +25,7 @@ import org.drftpd.master.indexation.IndexEngineInterface;
 import org.drftpd.master.indexation.IndexException;
 import org.drftpd.master.sections.SectionInterface;
 import org.drftpd.master.vfs.DirectoryHandle;
-import org.drftpd.zipscript.master.sfv.vfs.ZipscriptVFSDataSFV;
-import org.drftpd.zipscript.master.zip.vfs.ZipscriptVFSDataZip;
+import org.drftpd.zipscript.master.CachedCompletion;
 
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
@@ -476,8 +475,8 @@ public final class Dupe2Utils {
         if (isExcludedReleaseName(release.getName())) {
             return null;
         }
-        boolean complete = isComplete(release);
-        if (!includeIncomplete && !complete) {
+        CachedCompletion.Status complete = CachedCompletion.release(release);
+        if (!includeIncomplete && complete != CachedCompletion.Status.COMPLETE) {
             logger.debug("DUPE2: Skipping incomplete duplicate candidate {}", release.getPath());
             return null;
         }
@@ -547,18 +546,7 @@ public final class Dupe2Utils {
     }
 
     private static boolean isComplete(DirectoryHandle release) {
-        try {
-            if (new ZipscriptVFSDataSFV(release).getSFVStatus().isFinished()) {
-                return true;
-            }
-        } catch (Exception ignored) {
-            // Not an SFV release, try zip/diz below.
-        }
-        try {
-            return new ZipscriptVFSDataZip(release).getDizStatus().isFinished();
-        } catch (Exception ignored) {
-            return false;
-        }
+        return CachedCompletion.release(release) == CachedCompletion.Status.COMPLETE;
     }
 
     static class DupeCandidate implements Comparable<DupeCandidate> {
@@ -567,12 +555,12 @@ public final class Dupe2Utils {
         private final String sectionName;
         private String bucket;
         private final int score;
-        private final boolean complete;
+        private final CachedCompletion.Status complete;
         private final long size;
         private final long creationTime;
 
         private DupeCandidate(String key, DirectoryHandle directory, String sectionName, String bucket, int score,
-                              boolean complete, long size, long creationTime) {
+                              CachedCompletion.Status complete, long size, long creationTime) {
             this.key = key;
             this.directory = directory;
             this.sectionName = sectionName;
@@ -612,11 +600,11 @@ public final class Dupe2Utils {
         }
 
         boolean isComplete() {
-            return complete;
+            return complete == CachedCompletion.Status.COMPLETE;
         }
 
         String getStatus() {
-            return complete ? "completed" : "incomplete";
+            return isComplete() ? "completed" : complete == CachedCompletion.Status.UNKNOWN ? "unknown" : "incomplete";
         }
 
         long getSize() {

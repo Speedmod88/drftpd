@@ -72,7 +72,7 @@ final class SrrdbRecovery implements AutoCloseable {
     }
 
     synchronized void scan(String username, String path, boolean recursive) {
-        validatePath(path);
+        String normalizedPath = normalizePath(path);
         if (closed) throw new IllegalArgumentException("Recovery service is stopping");
         if (scanState.equals("running") || scanState.equals("queued")) throw new IllegalArgumentException("A scan is already running");
         cancelled = false;
@@ -81,7 +81,7 @@ final class SrrdbRecovery implements AutoCloseable {
         errors = 0;
         scanErrors.clear();
         scanMessage = "";
-        worker.execute(() -> scanNow(username, path, recursive));
+        worker.execute(() -> scanNow(username, normalizedPath, recursive));
         scanState = "queued";
     }
 
@@ -91,7 +91,8 @@ final class SrrdbRecovery implements AutoCloseable {
         try {
             List<String> paths = library.releases(username, path, recursive, scanLimit);
             synchronized (this) { total = paths.size(); }
-            for (String releasePath : paths) {
+            for (String returnedPath : paths) {
+                String releasePath = normalizePath(returnedPath);
                 if (cancelled || closed || Thread.currentThread().isInterrupted()) break;
                 synchronized (this) { scanMessage = releasePath; }
                 try {
@@ -189,7 +190,7 @@ final class SrrdbRecovery implements AutoCloseable {
             Entry[] saved = gson.fromJson(Files.readString(stateFile), Entry[].class);
             if (saved == null || saved.length > MAX_ENTRIES) throw new IOException("Invalid srrDB review state");
             for (Entry entry : saved) {
-                validatePath(entry.releasePath);
+                entry.releasePath = normalizePath(entry.releasePath);
                 if (!SrrdbClient.metadataPath(entry.file) || entry.id == null || entry.crc == null
                         || !entry.crc.matches("(?i)[0-9a-f]{8}")) throw new IOException("Invalid srrDB review entry");
                 if (entry.state.equals("queued") || entry.state.equals("downloading")) {
@@ -217,7 +218,18 @@ final class SrrdbRecovery implements AutoCloseable {
                 || path.contains(":") || path.chars().anyMatch(c -> c < 32 || c == 127)) throw new IllegalArgumentException("An absolute VFS path is required");
         for (String part : path.split("/")) if (part.equals("..") || part.equals(".")) throw new IllegalArgumentException("Invalid VFS path");
     }
-    static String releaseName(String path) { return path.substring(path.lastIndexOf('/') + 1); }
+    static String normalizePath(String path) {
+        validatePath(path);
+        String normalized = path.replaceAll("/+", "/");
+        return normalized.length() > 1 && normalized.endsWith("/")
+                ? normalized.substring(0, normalized.length() - 1) : normalized;
+    }
+
+    static String releaseName(String path) {
+        String normalized = normalizePath(path);
+        if (normalized.equals("/")) throw new IllegalArgumentException("Select a release directory");
+        return normalized.substring(normalized.lastIndexOf('/') + 1);
+    }
 
     @Override public void close() {
         synchronized (this) { closed = true; cancelled = true; }

@@ -48,6 +48,12 @@ public class SFVMissing extends LinkType {
     public void doCreateLink(DirectoryHandle targetDir) {
         logger.debug("doCreateLink() for {}", targetDir);
         try {
+            for (FileHandle file : targetDir.getFilesUnchecked()) {
+                if (file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".sfv")) {
+                    doDeleteLink(targetDir);
+                    return;
+                }
+            }
             if (targetDir.getName().matches(getAddParentDir())) {
                 doDeleteLink(targetDir.getParent());
             }
