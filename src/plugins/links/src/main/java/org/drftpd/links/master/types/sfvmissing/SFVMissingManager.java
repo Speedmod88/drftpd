@@ -104,6 +104,7 @@ public class SFVMissingManager implements PluginInterface {
                     link.doCreateLink(direvent.getDirectory());
                 }
             }
+            _linkmanager.requestReconcile(direvent.getDirectory());
         }
     }
 
