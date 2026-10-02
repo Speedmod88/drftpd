@@ -11,6 +11,26 @@ import java.util.function.BooleanSupplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SrrdbRecoveryTest {
+    @Test void fullVfsPathUsesOnlyReleaseNameForApiAndKeepsImportDestination() throws Exception {
+        String name = "Amphibia.S03E18.FiNAL.FRENCH.WEB.H264-C0MPL3T3D";
+        String destination = "/_INCOMPLETED/TV-SD-FRENCH/" + name;
+        FakeLibrary target = new FakeLibrary();
+        try (var recovery = new SrrdbRecovery(temp.resolve("path-review.json"), 100,
+                new SrrdbClient(1024, (uri, limit) -> {
+                    assertFalse(uri.getPath().contains("_INCOMPLETED"));
+                    assertFalse(uri.getPath().contains("TV-SD-FRENCH"));
+                    assertTrue(uri.getPath().contains(name));
+                    return uri.getHost().equals("api.srrdb.com") ? SrrdbClientTest.details(name, file) : data;
+                }), target)) {
+            recovery.scan("siteop", destination + "/", false);
+            waitUntil(() -> recovery.view().get("scanState").equals("completed"));
+            assertEquals(destination, entries(recovery).get(0).get("releasePath"));
+            recovery.decide((String) entries(recovery).get(0).get("id"), "accept", "siteop");
+            waitUntil(() -> entries(recovery).get(0).get("state").equals("installed"));
+            assertEquals(destination, target.installedPath);
+        }
+        assertEquals(name, SrrdbRecovery.releaseName(destination + "///"));
+    }
     @TempDir Path temp;
     final byte[] data = SrrdbClientTest.bytes("release nfo content");
     final SrrdbClient.RemoteFile file = SrrdbClientTest.file("release.nfo", data);
@@ -120,10 +140,12 @@ class SrrdbRecoveryTest {
     private static final class FakeLibrary implements SrrdbRecovery.Library {
         volatile boolean missing = true;
         final AtomicInteger installs = new AtomicInteger();
+        volatile String installedPath;
         @Override public List<String> releases(String user, String path, boolean recursive, int limit) { return List.of(path); }
         @Override public boolean missing(String user, String path, String file) { return missing; }
         @Override public String install(String user, String path, SrrdbClient.RemoteFile file, byte[] content) {
             assertTrue(missing);
+            installedPath = path;
             installs.incrementAndGet();
             return "TestSlave";
         }
