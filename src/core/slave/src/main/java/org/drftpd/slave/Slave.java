@@ -159,6 +159,11 @@ public class Slave extends SslConfigurationLoader {
     private final ThreadPoolExecutor _remergeCommandExecutor;
 
     private Map<TransferIndex, Transfer> _transfers;
+    private int passiveListenerTimeoutSeconds = 180;
+
+    public int getPassiveListenerTimeoutSeconds() {
+        return passiveListenerTimeoutSeconds;
+    }
 
     private boolean _uploadChecksums;
 
@@ -268,6 +273,15 @@ public class Slave extends SslConfigurationLoader {
         loadDiskSelection(p);
 
         _transfers = new ConcurrentHashMap<TransferIndex, Transfer>();
+        try {
+            passiveListenerTimeoutSeconds = Integer.parseInt(p.getProperty("passive.listener.timeout.seconds", "180"));
+            if (passiveListenerTimeoutSeconds < 30 || passiveListenerTimeoutSeconds > 3600) {
+                throw new NumberFormatException("outside 30..3600");
+            }
+        } catch (NumberFormatException e) {
+            passiveListenerTimeoutSeconds = 180;
+            logger.warn("Invalid passive.listener.timeout.seconds; using 180 seconds");
+        }
 
         try {
             int minport = Integer.parseInt(p.getProperty("slave.portfrom"));

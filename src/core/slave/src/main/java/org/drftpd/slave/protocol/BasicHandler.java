@@ -143,8 +143,17 @@ public class BasicHandler extends AbstractHandler {
 
         Transfer t = new Transfer(c, getSlaveObject(), new TransferIndex());
         getSlaveObject().addTransfer(t);
-
-        return new AsyncResponseTransfer(ac.getIndex(), new ConnectInfo(c.getLocalPort(), t.getTransferIndex(), t.getTransferStatus(), useLanIP ? getSlaveObject().getSlaveLanIP().getHostAddress() : null));
+        try {
+            var response = new AsyncResponseTransfer(ac.getIndex(), new ConnectInfo(c.getLocalPort(),
+                    t.getTransferIndex(), t.getTransferStatus(),
+                    useLanIP ? getSlaveObject().getSlaveLanIP().getHostAddress() : null));
+            t.expireUnusedListenerAfter(getSlaveObject().getPassiveListenerTimeoutSeconds(),
+                    java.util.concurrent.TimeUnit.SECONDS);
+            return response;
+        } catch (RuntimeException e) {
+            t.abort("Passive listener setup failed");
+            return new AsyncResponseException(ac.getIndex(), new IOException("Passive listener setup failed", e));
+        }
     }
 
     // MAXPATH
