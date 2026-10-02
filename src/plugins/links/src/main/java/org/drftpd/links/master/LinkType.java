@@ -39,6 +39,54 @@ import java.util.regex.Pattern;
  */
 
 public abstract class LinkType {
+    /** Unknown verification never removes an incomplete marker. */
+    boolean reconcileStatus(DirectoryHandle dir) {
+        if (dir.isRoot()) return true;
+        if (getEventType().equals("sfvmissing")) {
+            // Refresh removes stale markers, but must not create no-SFV markers
+            // for internal link folders discovered by ordinary VFS events.
+            try {
+                for (var file : dir.getFilesUnchecked()) {
+                    if (file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".sfv")) {
+                        doDeleteLink(dir);
+                        break;
+                    }
+                }
+            } catch (FileNotFoundException ignored) { }
+            return true;
+        }
+        String extension = getEventType().equals("sfvincomplete") ? ".sfv"
+                : getEventType().equals("zipincomplete") ? ".zip" : null;
+        if (extension == null) return true;
+        try {
+            boolean found = false;
+            for (var file : dir.getFilesUnchecked()) {
+                if (file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(extension)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return true;
+        } catch (FileNotFoundException e) {
+            return true;
+        }
+        org.drftpd.zipscript.master.CachedCompletion.Status status;
+        if (getEventType().equals("sfvincomplete")) {
+            status = org.drftpd.zipscript.master.CachedCompletion.sfv(dir);
+        } else if (getEventType().equals("zipincomplete")) {
+            status = org.drftpd.zipscript.master.CachedCompletion.zip(dir);
+        } else {
+            return true;
+        }
+        if (status == org.drftpd.zipscript.master.CachedCompletion.Status.COMPLETE) {
+            doDeleteLink(dir);
+        } else if (status == org.drftpd.zipscript.master.CachedCompletion.Status.INCOMPLETE) {
+            doCreateLink(dir);
+        } else {
+            return false;
+        }
+        return true;
+    }
     protected static final Logger logger = LogManager.getLogger(LinkType.class);
     private static final long COLLISION_WARNING_INTERVAL = 3600000L;
     private static final ConcurrentMap<String, Long> collisionWarnings = new ConcurrentHashMap<>();
@@ -167,7 +215,32 @@ public abstract class LinkType {
      *
      * It will also check and make sure it does not exist as an AddParentDir, but if it does, creates the link accordingly
      */
-    protected void createLink(DirectoryHandle targetDir, String dirPath, String linkName) {
+    protected synchronized void createLink(DirectoryHandle targetDir, String dirPath, String linkName) {
+        if (getEventType().equals("sfvmissing")) {
+            try {
+                for (var file : targetDir.getFilesUnchecked()) {
+                    if (file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".sfv")) {
+                        doDeleteLink(targetDir);
+                        return;
+                    }
+                }
+            } catch (FileNotFoundException e) {
+                return;
+            }
+        }
+        // Old queued MKD/delete events must not recreate a marker after completion.
+        if (getEventType().equals("sfvincomplete")
+                && org.drftpd.zipscript.master.CachedCompletion.sfv(targetDir)
+                == org.drftpd.zipscript.master.CachedCompletion.Status.COMPLETE) {
+            doDeleteLink(targetDir);
+            return;
+        }
+        if (getEventType().equals("zipincomplete")
+                && org.drftpd.zipscript.master.CachedCompletion.zip(targetDir)
+                == org.drftpd.zipscript.master.CachedCompletion.Status.COMPLETE) {
+            doDeleteLink(targetDir);
+            return;
+        }
         SectionInterface section = GlobalContext.getGlobalContext().getSectionManager().lookup(targetDir);
         String sectionname;
         if (!section.getName().isEmpty()) {
@@ -296,7 +369,7 @@ public abstract class LinkType {
     /*
      * This method will delete the link(s) corresponding with the .conf file
      */
-    protected void deleteLink(DirectoryHandle targetDir, String dirPath, String linkName) {
+    protected synchronized void deleteLink(DirectoryHandle targetDir, String dirPath, String linkName) {
         DirectoryHandle linkDir = new DirectoryHandle(getDirName(targetDir));
         if (linkDir.exists()) {
             String linkNameFinal = getLinkName().replace("${dirname}", linkName);
@@ -328,7 +401,9 @@ public abstract class LinkType {
             try {
                 LinkHandle link = linkDir.getLinkUnchecked(linkNameFinal);
                 try {
-                    link.deleteUnchecked();
+                    if (link.getTargetStringWithSlash().equals(targetDir.getPath() + "/")) {
+                        link.deleteUnchecked();
+                    }
                 } catch (FileNotFoundException e) {
                     // Link no longer exists....ignore
                 }
@@ -337,6 +412,10 @@ public abstract class LinkType {
             } catch (ObjectNotValidException e1) {
                 // INode doesn't exist
             }
+
+            // A completion refresh needs only its exact marker. Descendant cleanup is
+            // needed for a wiped directory, not on every upload into a living release.
+            if (targetDir.exists()) return;
 
             /*
              * Find Any Other Link Names With This Path
