@@ -24,6 +24,36 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class TransferCleanupTest {
+    @Test void unusedListenerExpiresAndPortCanBeReused() throws Exception {
+        Slave slave = mock(Slave.class);
+        PassiveConnection listener = new PassiveConnection(null, new PortRange(0), false, null);
+        int port = listener.getLocalPort();
+        Transfer transfer = new Transfer(listener, slave, new TransferIndex());
+        transfer.expireUnusedListenerAfter(1, java.util.concurrent.TimeUnit.MILLISECONDS);
+        verify(slave, timeout(3000)).removeTransfer(transfer);
+        try (ServerSocket reused = new ServerSocket(port)) {
+            assertEquals(port, reused.getLocalPort());
+        }
+        assertThrows(IOException.class, () -> transfer.sendFile("/late", 'I', 0, "*@*"));
+    }
+
+    @Test void expiryCannotAbortStartedUploadSetup() throws Exception {
+        Slave slave = mock(Slave.class);
+        RootCollection roots = mock(RootCollection.class);
+        when(slave.getRoots()).thenReturn(roots);
+        when(roots.getFile("/release/file.rar")).thenThrow(new FileNotFoundException());
+        Connection connection = mock(Connection.class);
+        Transfer transfer = new Transfer(connection, slave, new TransferIndex());
+        when(roots.getARootFileDir("/release")).thenAnswer(call -> {
+            transfer.expireUnusedListener();
+            verify(connection, never()).abort();
+            throw new IOException("disk full");
+        });
+        transfer.expireUnusedListenerAfter(1, java.util.concurrent.TimeUnit.DAYS);
+        assertThrows(IOException.class, () -> transfer.receiveFile("/release", 'I', "file.rar", 0, "*@*"));
+        verify(connection).abort();
+        verify(slave).removeTransfer(transfer);
+    }
     @TempDir
     Path directory;
 

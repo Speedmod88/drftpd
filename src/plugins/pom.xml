@@ -59,6 +59,7 @@
                         </goals>
                         <configuration>
                             <excludeScope>provided</excludeScope>
+                            <excludeArtifactIds>mockito-core,byte-buddy,byte-buddy-agent,objenesis</excludeArtifactIds>
                             <outputDirectory>${session.executionRootDirectory}/runtime/master/lib</outputDirectory>
                         </configuration>
                     </execution>
@@ -70,6 +71,7 @@
                         </goals>
                         <configuration>
                             <excludeScope>provided</excludeScope>
+                            <excludeArtifactIds>mockito-core,byte-buddy,byte-buddy-agent,objenesis</excludeArtifactIds>
                             <outputDirectory>${session.executionRootDirectory}/runtime/slave/lib</outputDirectory>
                         </configuration>
                     </execution>

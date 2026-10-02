@@ -24,6 +24,10 @@ slave.masterSSL=true
 #slave.portfrom=30000
 #slave.portto=33000
 
+# Release a PASV listener if STOR/RETR has not started within this many seconds.
+# Does not interrupt transfers that have begun. Range: 30..3600. Default: 180.
+passive.listener.timeout.seconds=180
+
 # BIND IP - This will bind SLAVE ip to this address.
 #bind.ip=xxx.xxx.xxx.xxx
 

@@ -49,6 +49,7 @@ import java.nio.charset.UnsupportedCharsetException;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * @author Modified from PircBot by Paul James Mutton, http://www.jibble.org/
@@ -116,6 +117,8 @@ public class SiteBot implements ReplyConstants, Runnable {
     private final Object _channelJoinLock = new Object();
     private long _channelJoinGeneration;
     private volatile boolean _channelJoinPending;
+    private volatile boolean _channelWritersReady;
+    private final AtomicBoolean _announcersConnected = new AtomicBoolean();
 
     // ArrayList to hold Listeners
     private List<ListenerInterface> _listeners = new ArrayList<>();
@@ -181,8 +184,10 @@ public class SiteBot implements ReplyConstants, Runnable {
         }
 
         // Find and start announcers
-        loadAnnouncers(_confDir);
-        _announcersLoaded = true;
+        synchronized (this) {
+            loadAnnouncers(_confDir);
+            _announcersLoaded = true;
+        }
         notifyAnnouncersConnected();
 
         // Find all Bot Listeners
@@ -969,6 +974,7 @@ public class SiteBot implements ReplyConstants, Runnable {
         synchronized (_channelJoinLock) {
             generation = ++_channelJoinGeneration;
             _channelJoinPending = true;
+            _channelWritersReady = false;
         }
         logger.info("Deferring channel joins until OPER succeeds, then waiting {} ms",
                 _config.getDelayAfterOper());
@@ -1009,15 +1015,18 @@ public class SiteBot implements ReplyConstants, Runnable {
     }
 
     private void finishChannelJoin(String reason) {
-        logger.info("Joining configured channels: {}", reason);
-        if (_config.getChanservEnabled()) {
-            doChanservInvites();
-        }
-        joinChannels();
-        // Deferred OPER startup loads announcers before channel writers exist.
-        // Rebuild the routing table now that destinations can be resolved.
-        if (_announceConfig != null) {
-            _announceConfig.reload();
+        // Same monitor as connect/reload: never hold the generation lock during socket I/O.
+        synchronized (this) {
+            if (!isConnected()) return;
+            logger.info("Joining configured channels: {}", reason);
+            if (_config.getChanservEnabled()) {
+                doChanservInvites();
+            }
+            joinChannels();
+            if (_announceConfig != null) {
+                _announceConfig.reload();
+            }
+            _channelWritersReady = true;
         }
         notifyAnnouncersConnected();
     }
@@ -1026,6 +1035,8 @@ public class SiteBot implements ReplyConstants, Runnable {
         synchronized (_channelJoinLock) {
             _channelJoinPending = false;
             _channelJoinGeneration++;
+            _channelWritersReady = false;
+            _announcersConnected.set(false);
         }
     }
 
@@ -3142,7 +3153,10 @@ public class SiteBot implements ReplyConstants, Runnable {
     }
 
     private void notifyAnnouncersConnected() {
-        if (!_announcersLoaded || _channelJoinPending || !isConnected()) {
+        if (!_announcersLoaded || !_channelWritersReady || _channelJoinPending || !isConnected()) {
+            return;
+        }
+        if (!_announcersConnected.compareAndSet(false, true)) {
             return;
         }
         for (AbstractAnnouncer announcer : _announcers) {

@@ -58,6 +58,38 @@ public class Transfer {
     private static final long _transferProgressAnnounce = 524288L; // Report every 512KB
     private String _abortReason = null;
     private boolean _transferStarted;
+    private java.util.concurrent.ScheduledFuture<?> listenerExpiry;
+    private static final java.util.concurrent.ScheduledThreadPoolExecutor LISTENER_EXPIRY = listenerExpiryExecutor();
+
+    private static java.util.concurrent.ScheduledThreadPoolExecutor listenerExpiryExecutor() {
+        var executor = new java.util.concurrent.ScheduledThreadPoolExecutor(1, runnable -> {
+            Thread thread = new Thread(runnable, "Slave Passive Listener Expiry");
+            thread.setDaemon(true);
+            return thread;
+        });
+        executor.setRemoveOnCancelPolicy(true);
+        return executor;
+    }
+
+    /** Only expires PASV reservations for which RECEIVE/SEND has not begun. */
+    public synchronized void expireUnusedListenerAfter(long timeout, java.util.concurrent.TimeUnit unit) {
+        if (_transferStarted || _abortReason != null || _finished != 0) return;
+        cancelListenerExpiry();
+        listenerExpiry = LISTENER_EXPIRY.schedule(this::expireUnusedListener, timeout, unit);
+    }
+
+    synchronized void expireUnusedListener() {
+        if (!_transferStarted && _abortReason == null && _finished == 0) {
+            abort("Unused passive listener expired before STOR/RETR");
+        }
+    }
+
+    private synchronized void cancelListenerExpiry() {
+        if (listenerExpiry != null) {
+            listenerExpiry.cancel(false);
+            listenerExpiry = null;
+        }
+    }
     private CRC32 _checksum = null;
     private Connection _conn;
     private char _direction;
@@ -108,6 +140,7 @@ public class Transfer {
     }
 
     public synchronized void abort(String reason) {
+        cancelListenerExpiry();
         logger.warn("Abort was requested, starting to abort transfer. Reason: " + reason);
         try {
             _abortReason = reason;
@@ -382,9 +415,11 @@ public class Transfer {
             throw new IOException("Transfer was aborted before starting: " + _abortReason);
         }
         _transferStarted = true;
+        cancelListenerExpiry();
     }
 
     private void finishTransfer() {
+        cancelListenerExpiry();
         // Setup may fail before accept(), leaving a passive listener open.
         if (_conn != null) {
             _conn.abort();
