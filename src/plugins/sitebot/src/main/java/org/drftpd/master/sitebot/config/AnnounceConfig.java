@@ -40,9 +40,9 @@ import java.util.regex.PatternSyntaxException;
 public class AnnounceConfig {
 
     private static final Logger logger = LogManager.getLogger(AnnounceConfig.class);
-    private HashMap<String, ArrayList<AnnounceWriter>> _pathWriters = new HashMap<>();
-    private HashMap<String, ArrayList<AnnounceWriter>> _sectionWriters = new HashMap<>();
-    private HashMap<String, AnnounceWriter> _simpleWriters = new HashMap<>();
+    private volatile HashMap<String, ArrayList<AnnounceWriter>> _pathWriters = new HashMap<>();
+    private volatile HashMap<String, ArrayList<AnnounceWriter>> _sectionWriters = new HashMap<>();
+    private volatile HashMap<String, AnnounceWriter> _simpleWriters = new HashMap<>();
     private final ArrayList<String> _eventTypes;
     private final SiteBot _bot;
     private final String _confDir;
