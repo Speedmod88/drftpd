@@ -567,7 +567,9 @@ public class AutoFreeSpaceCommands extends CommandInterface {
         List<Dupe2Utils.DupeCandidate> completedCandidates = Dupe2Utils.getCompletedCandidates(candidates);
         Set<Dupe2Utils.DupeCandidate> keepers = Dupe2Utils.getDupeKeepers(completedCandidates);
         response.addComment("Found " + candidates.size() + " release(s), completed="
-                + completedCandidates.size() + ", incomplete=" + (candidates.size() - completedCandidates.size()));
+                + completedCandidates.size() + ", incomplete="
+                + candidates.stream().filter(c -> c.getStatus().equals("incomplete")).count()
+                + ", unknown=" + candidates.stream().filter(c -> c.getStatus().equals("unknown")).count());
 
         int count = 0;
         for (Dupe2Utils.DupeCandidate candidate : candidates) {
