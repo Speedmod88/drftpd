@@ -59,8 +59,10 @@ keepFree=100GB
 # SITE DUPE2 / !dupe2 <path> resolves section paths, or scans configured child sections below that path.
 # Add -l N or -limit N to override the configured command limit for one lookup.
 # AutoFreeSpace Dupe2 cleanup also scans all sections, but only wipes from sections with x.dupeonly=true.
-# Commands show status=completed or status=incomplete. Cleanup ignores incomplete releases.
-# Completion is checked from zipscript SFV/DIZ metadata.
+# Commands show status=completed, status=incomplete or status=unknown.
+# Cleanup ignores incomplete AND unknown releases; neither can replace a verified keeper.
+# Completion uses cached zipscript SFV/DIZ and CRC metadata only, with no slave checksum reads.
+# Missing/stale verification is unknown. Use an explicit rescan to verify it separately.
 
 # First token that marks the start of variant details. The duplicate key is everything before this marker.
 # Edit this regex to add/remove markers whenever you need new release tags to split the title/key.
