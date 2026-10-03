@@ -1,0 +1,25 @@
+# Persistent catalogue backfill and optional IDLE CRC audits.
+# Does NOT change upload/download checksums or explicit CHECKSUM/RESCAN commands.
+# Copy to integrity.conf, enable the audit, then SITE RELOAD.
+audit.enabled=false
+# Empty = all capable slaves. Old slave versions are safely skipped.
+audit.slaves=
+# Absolute VFS directory prefixes, comma-separated. Each file copy is audited separately.
+audit.paths=/
+audit.exclude.regex=(?i)^/PRE(?:/|$)
+# No uploads/downloads and no remerge. Wait this long after observed transfer activity.
+audit.idle.seconds=300
+# Revisit unchanged files even if a slave never disconnects/remerges.
+audit.interval.days=90
+audit.minimum.age.minutes=60
+# At most 4 MiB per step. 8 steps per one-second tick = at most 32 MiB per tick TOTAL.
+# Actual rate is lower when busy, network/disk operations take time or several slaves share the budget.
+audit.steps.per.tick=8
+audit.scan.batch=32
+# Build old directory summaries in bounded batches, without a full index rebuild.
+catalogue.backfill.enabled=true
+catalogue.backfill.batch=32
+# Data: userdata/index (search catalogue) and userdata/integrity-audit (per-copy audit DB).
+# Back up BOTH along with VFS/userdata. No SRR files are created or exposed over FTP.
+# New mismatches are logged and announced using existing sysop routing in irc.announce.conf.
+# No deletion, nuke, repair, or replacement is performed by the audit.
