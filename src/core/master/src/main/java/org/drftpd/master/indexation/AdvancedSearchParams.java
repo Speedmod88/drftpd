@@ -31,6 +31,11 @@ import java.util.Set;
 public class AdvancedSearchParams {
 
     private String _name;
+    private String _afterPath;
+
+    /** Exclusive fullPath cursor, with ascending path order, for bounded background scans. */
+    public String getAfterPath() { return _afterPath; }
+    public void setAfterPath(String path) { _afterPath = path; }
     private Set<String> _names = Collections.emptySet();
     private String _exact;
     private String _regex;

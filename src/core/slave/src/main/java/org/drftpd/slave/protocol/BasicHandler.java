@@ -158,6 +158,9 @@ public class BasicHandler extends AbstractHandler {
 
     // MAXPATH
     public AsyncResponse handleMaxpath(AsyncCommandArgument ac) {
+        if ("idle-crc-audit-v1".equals(ac.getArgs())) {
+            return new AsyncResponseMaxPath(ac.getIndex(), org.drftpd.slave.IdleChecksumScanner.CAPABILITY);
+        }
         if (IDENTITY_CAPABILITY_REQUEST.equals(ac.getArgs())) {
             boolean supported = PersistentInodeIdentity.isSupported(
                     getSlaveObject().getRoots().getRootList());
@@ -464,6 +467,16 @@ public class BasicHandler extends AbstractHandler {
     }
 
     // CHECKSUM
+    public AsyncResponse handleIdlecrc(AsyncCommandArgument ac) {
+        try {
+            String[] args = ac.getArgsArray();
+            return new AsyncResponseChecksum(ac.getIndex(),
+                    getSlaveObject().auditChecksum(args[0], Long.parseLong(args[1]), _remerging.get()));
+        } catch (IOException | RuntimeException e) {
+            return new AsyncResponseException(ac.getIndex(), new IOException("Idle CRC audit deferred: " + e.getMessage(), e));
+        }
+    }
+
     public AsyncResponse handleChecksum(AsyncCommandArgument ac) {
         try {
             return new AsyncResponseChecksum(ac.getIndex(), getSlaveObject().checkSum(ac.getArgs()));

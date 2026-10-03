@@ -298,8 +298,7 @@ public class AutoFreeSpaceCommands extends CommandInterface {
 
     private IndexedCandidates getIndexedCandidatesForKey(String key)
             throws IndexException, IllegalArgumentException {
-        Map<String, String> indexedDirectories = getIndexedDirectories(
-                GlobalContext.getGlobalContext().getRoot(), getIndexSearchText(key), "DUPE2-release");
+        Map<String, String> indexedDirectories = Dupe2Utils.findIndexedKeys(Set.of(key), "DUPE2-release");
         List<Dupe2Utils.DupeCandidate> candidates = new ArrayList<>();
         Set<String> seenPaths = new HashSet<>();
         Map<String, Set<String>> releaseParentPathCache = new HashMap<>();
@@ -345,8 +344,7 @@ public class AutoFreeSpaceCommands extends CommandInterface {
 
     private IndexedDuplicateGroups getIndexedDuplicateGroups(Set<String> keys)
             throws IndexException, IllegalArgumentException {
-        Map<String, String> indexedDirectories = getIndexedDirectories(
-                GlobalContext.getGlobalContext().getRoot(), null, "DUPE2-batch");
+        Map<String, String> indexedDirectories = Dupe2Utils.findIndexedKeys(keys, "DUPE2-batch");
         Map<String, List<Dupe2Utils.DupeCandidate>> candidatesByKey = new HashMap<>();
         Set<String> seenPaths = new HashSet<>();
         Map<String, Set<String>> releaseParentPathCache = new HashMap<>();

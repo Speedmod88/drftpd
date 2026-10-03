@@ -15,7 +15,7 @@ public class AutoFreeSpaceSettings {
     public static String MODE_DISABLED = "Disabled";
     public static String MODE_DATE = "Date";
     public static String MODE_SPACE = "Space";
-    private static final String DEFAULT_DUPE_MARKER_REGEX =
+    static final String DEFAULT_DUPE_MARKER_REGEX =
             "(?i)(^|[._ -])(MULTI|SUBFRENCH|FRENCH|TRUEFRENCH|VOSTFR|2160P|1080P|720P|480P|WEB[-.]?DL|WEBDL|WEB|BLURAY|BDRIP|HDRIP|DVDRIP|HDTV|UHD|HDR|DV|HEVC|H265|H264|X265|X264)([._ -]|$)";
     private static AutoFreeSpaceSettings ref;
     private Map<String, Section> _sections;
@@ -29,7 +29,7 @@ public class AutoFreeSpaceSettings {
     private long _minFreeSpace;
     private long _cycleTime;
     private int _maxIterations;
-    private String _dupeMarkerRegex;
+    private volatile String _dupeMarkerRegex;
 
     private AutoFreeSpaceSettings() {
         // Set defaults (just in case)
@@ -133,6 +133,7 @@ public class AutoFreeSpaceSettings {
         logger.debug("excluded Files set to {}", _excludeFiles.toString());
 
         _dupeMarkerRegex = p.getProperty("dupe.marker.regex", DEFAULT_DUPE_MARKER_REGEX);
+        ReleaseCatalogue.configure(_dupeMarkerRegex);
         _dupeKeepUnmatched = p.getProperty("dupe.keep.unmatched", "true").equalsIgnoreCase("true");
         _dupeScoreRules = loadDupeScoreRules(p);
         _dupeKeepRules = loadDupeKeepRules(p);
