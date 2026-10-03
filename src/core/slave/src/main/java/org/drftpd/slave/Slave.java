@@ -159,6 +159,14 @@ public class Slave extends SslConfigurationLoader {
     private final ThreadPoolExecutor _remergeCommandExecutor;
 
     private Map<TransferIndex, Transfer> _transfers;
+    private final java.util.concurrent.atomic.AtomicLong auditActivity = new java.util.concurrent.atomic.AtomicLong();
+    private final IdleChecksumScanner idleChecksumScanner = new IdleChecksumScanner();
+    private final ThreadPoolExecutor idleChecksumExecutor = new ThreadPoolExecutor(1, 1, 0L,
+            TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1), task -> {
+        Thread thread = new Thread(task, "Slave Idle CRC Audit");
+        thread.setPriority(Thread.MIN_PRIORITY);
+        return thread;
+    }, new ThreadPoolExecutor.AbortPolicy());
     private int passiveListenerTimeoutSeconds = 180;
 
     public int getPassiveListenerTimeoutSeconds() {
@@ -453,7 +461,27 @@ public class Slave extends SslConfigurationLoader {
     }
 
     public void addTransfer(Transfer transfer) {
+        auditActivity.incrementAndGet();
         _transfers.put(transfer.getTransferIndex(), transfer);
+    }
+
+    public long auditChecksum(String path, long size, boolean remerging) throws IOException {
+        if (remerging || !idleForAudit()) return IdleChecksumScanner.BUSY;
+        if (_roots.getMultipleRootsForFile(path).size() != 1) {
+            throw new IOException("Audit requires an unambiguous physical copy on this slave");
+        }
+        return idleChecksumScanner.step(_roots.getFile(path).toPath(), size, 4 * 1024 * 1024,
+                this::idleForAudit,
+                auditActivity::get);
+    }
+
+    private boolean idleForAudit() {
+        return _transfers.isEmpty() && idleExecutor(_remergeCommandExecutor)
+                && idleExecutor(_checksumCommandExecutor) && idleExecutor(_filesystemCommandExecutor);
+    }
+
+    private static boolean idleExecutor(ThreadPoolExecutor executor) {
+        return executor.getActiveCount() == 0 && executor.getQueue().isEmpty();
     }
 
     public long checkSum(String path) throws IOException {
@@ -703,6 +731,7 @@ public class Slave extends SslConfigurationLoader {
     }
 
     private ExecutorService getCommandExecutor(String commandName) {
+        if ("idlecrc".equals(commandName)) return idleChecksumExecutor;
         return switch (getCommandExecutorType(commandName)) {
             case REMERGE -> _remergeCommandExecutor;
             case TRANSFER -> _transferCommandExecutor;
@@ -755,6 +784,7 @@ public class Slave extends SslConfigurationLoader {
     }
 
     private void stopCommandExecutors() {
+        stopCommandExecutor(idleChecksumExecutor);
         stopCommandExecutor(_remergeCommandExecutor);
         stopCommandExecutor(_checksumCommandExecutor);
         stopCommandExecutor(_filesystemCommandExecutor);
