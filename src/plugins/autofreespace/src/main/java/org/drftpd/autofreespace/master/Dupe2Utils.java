@@ -330,15 +330,11 @@ public final class Dupe2Utils {
         return batches;
     }
 
-    private static Map<String, String> findIndexedDirectoriesForKeyBatch(Set<String> keys, String caller)
+    static Map<String, String> findIndexedDirectoriesForKeyBatch(Set<String> keys, String caller)
             throws IndexException {
-        Set<String> analyzedNames = new HashSet<>();
-        for (String key : keys) {
-            analyzedNames.add(key.replace('.', ' '));
-        }
         AdvancedSearchParams params = new AdvancedSearchParams();
         params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
-        params.setNames(analyzedNames);
+        ReleaseCatalogueQuery.keys(params, keys);
         params.setLimit(0);
         return GlobalContext.getGlobalContext().getIndexEngine().advancedFind(
                 GlobalContext.getGlobalContext().getRoot(), params, caller);
@@ -435,10 +431,20 @@ public final class Dupe2Utils {
     }
 
     static String makeDupeKey(String releaseName) {
-        int markerIndex = findMarkerIndex(releaseName);
-        String title = markerIndex >= 0 ? releaseName.substring(0, markerIndex) : releaseName;
-        title = normalizeKeyToken(title);
-        return title.equals("") ? null : title;
+        try {
+            return ReleaseCatalogue.identity(releaseName, AutoFreeSpaceSettings.getSettings().getDupeMarkerRegex());
+        } catch (PatternSyntaxException e) {
+            String title = normalizeKeyToken(releaseName);
+            return title.isEmpty() ? null : title;
+        }
+    }
+
+    static Map<String, String> findIndexedKeys(Set<String> keys, String caller) throws IndexException {
+        Map<String, String> results = new java.util.LinkedHashMap<>();
+        for (Set<String> batch : makeIndexKeyBatches(keys)) {
+            results.putAll(findIndexedDirectoriesForKeyBatch(batch, caller));
+        }
+        return results;
     }
 
     static String getKeeperNames(Set<DupeCandidate> keepers) {

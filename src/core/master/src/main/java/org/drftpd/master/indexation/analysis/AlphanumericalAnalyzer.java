@@ -26,7 +26,7 @@ import java.io.Reader;
  * @author fr0w
  * @version $Id$
  */
-public class AlphanumericalAnalyzer extends Analyzer {
+public final class AlphanumericalAnalyzer extends Analyzer {
 
     @Override
     public TokenStream tokenStream(String fieldName, Reader input) {

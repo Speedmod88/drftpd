@@ -592,7 +592,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return _remergeSessionStartedAt;
     }
 
-    long getConnectionGeneration() {
+    public long getConnectionGeneration() {
         return _connectionGeneration.get();
     }
 

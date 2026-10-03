@@ -669,7 +669,9 @@ public class LuceneEngine implements IndexEngineInterface {
                 query.add(makeFullNameReversePrefixQueryFromString(params.getEndsWith()), Occur.MUST);
             }
 
-            if (params.getSortField() != null && params.getSortOrder() != null) {
+            if (params.getAfterPath() != null) {
+                // Cursor scans use their own stable sort and must not mutate the shared FIND sort.
+            } else if (params.getSortField() != null && params.getSortOrder() != null) {
                 if (params.getSortField().equalsIgnoreCase("lastModified") ||
                         params.getSortField().equalsIgnoreCase("size")) {
                     setSortField(params.getSortField(), SortField.LONG, params.getSortOrder());
@@ -702,6 +704,11 @@ public class LuceneEngine implements IndexEngineInterface {
 
             logger.debug("{} query: {}", caller, query);
 
+            if (params.getAfterPath() != null) {
+                query.add(new org.apache.lucene.search.TermRangeQuery("fullPath",
+                        params.getAfterPath(), null, false, false), Occur.MUST);
+            }
+
             iReader = IndexReader.open(_iWriter, true);
             iSearcher = new IndexSearcher(iReader);
             if (limit == 0) {
@@ -713,7 +720,9 @@ public class LuceneEngine implements IndexEngineInterface {
                 }
                 logger.debug("Found {} inode match(es) in the index, using this as limit.", limit);
             }
-            TopFieldCollector topFieldCollector = TopFieldCollector.create(SORT, limit, true, false, false, false);
+            Sort querySort = params.getAfterPath() == null ? SORT
+                    : new Sort(new SortField("fullPath", SortField.STRING, false));
+            TopFieldCollector topFieldCollector = TopFieldCollector.create(querySort, limit, true, false, false, false);
             iSearcher.search(query, topFieldCollector);
 
             for (ScoreDoc scoreDoc : topFieldCollector.topDocs().scoreDocs) {

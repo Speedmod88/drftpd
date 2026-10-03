@@ -5,6 +5,7 @@ import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.master.vfs.FileHandle;
 import org.drftpd.zipscript.common.sfv.SFVInfo;
 import org.drftpd.zipscript.common.zip.DizInfo;
+import org.drftpd.zipscript.master.audit.AuditFailure;
 
 import java.io.FileNotFoundException;
 import java.util.Locale;
@@ -36,6 +37,7 @@ public final class CachedCompletion {
             }
             FileHandle sfv = files.get(info.getSFVFileName().toLowerCase(Locale.ROOT));
             if (sfv == null) return Status.UNKNOWN;
+            if (AuditFailure.isBad(sfv)) return Status.INCOMPLETE;
             if (sfv.isUploading() || sfv.getSize() == 0 || sfv.getXfertime() == -1) return Status.INCOMPLETE;
             long metadataCrc = sfv.getCheckSumCached();
             if (metadataCrc == 0 || metadataCrc != info.getChecksum() || info.getEntries().isEmpty()) return Status.UNKNOWN;
@@ -43,6 +45,7 @@ public final class CachedCompletion {
             for (var entry : info.getEntries().entrySet()) {
                 FileHandle file = files.get(entry.getKey().toLowerCase(Locale.ROOT));
                 if (file == null) return Status.INCOMPLETE;
+                if (AuditFailure.isBad(file)) return Status.INCOMPLETE;
                 if (file.isUploading() || file.getSize() == 0 || file.getXfertime() == -1) return Status.INCOMPLETE;
                 long crc = file.getCheckSumCached();
                 if (crc == 0) unknown = true;
@@ -61,6 +64,7 @@ public final class CachedCompletion {
             int present = 0;
             for (FileHandle file : dir.getFilesUnchecked()) {
                 if (!file.getName().toLowerCase(Locale.ROOT).endsWith(".zip")) continue;
+                if (AuditFailure.isBad(file)) return Status.INCOMPLETE;
                 if (file.isUploading() || file.getSize() == 0 || file.getXfertime() == -1) return Status.INCOMPLETE;
                 present++;
             }
