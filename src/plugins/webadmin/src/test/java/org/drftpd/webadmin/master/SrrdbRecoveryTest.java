@@ -11,6 +11,44 @@ import java.util.function.BooleanSupplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SrrdbRecoveryTest {
+    @Test void missingReleaseIsCountedWithoutErrorOrDownloadAndCountResets() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        try (var recovery = new SrrdbRecovery(temp.resolve("not-found.json"), 100,
+                new SrrdbClient(1024, (uri, limit) -> {
+                    assertEquals("api.srrdb.com", uri.getHost());
+                    return requests.getAndIncrement() == 0 ? SrrdbClientTest.bytes("[]")
+                            : SrrdbClientTest.details("Release-GRP", file);
+                }), library)) {
+            recovery.scan("siteop", "/SECTION/Unknown-GRP", false);
+            waitUntil(() -> recovery.view().get("scanState").equals("completed"));
+            assertEquals(1, recovery.view().get("notFound"));
+            assertEquals(1, recovery.view().get("scanned"));
+            assertEquals(0, recovery.view().get("errors"));
+            assertEquals(List.of(), recovery.view().get("scanErrors"));
+            assertTrue(entries(recovery).isEmpty());
+            assertEquals(0, library.installs.get());
+            scan(recovery);
+            assertEquals(0, recovery.view().get("notFound"));
+            assertEquals(1, entries(recovery).size());
+            assertEquals("pending", entries(recovery).get(0).get("state"));
+            assertEquals(2, requests.get());
+            assertEquals(0, library.installs.get());
+        }
+    }
+
+    @Test void invalidDetailsRemainVisibleAsErrors() throws Exception {
+        try (var recovery = new SrrdbRecovery(temp.resolve("invalid-response.json"), 100,
+                new SrrdbClient(1024, (uri, limit) -> SrrdbClientTest.bytes("[{}]")), library)) {
+            recovery.scan("siteop", "/SECTION/Release-GRP", false);
+            waitUntil(() -> recovery.view().get("scanState").equals("completed"));
+            assertEquals(0, recovery.view().get("notFound"));
+            assertEquals(1, recovery.view().get("errors"));
+            assertFalse(((List<?>) recovery.view().get("scanErrors")).isEmpty());
+            assertTrue(entries(recovery).isEmpty());
+            assertEquals(0, library.installs.get());
+        }
+    }
+
     @Test void fullVfsPathUsesOnlyReleaseNameForApiAndKeepsImportDestination() throws Exception {
         String name = "Amphibia.S03E18.FiNAL.FRENCH.WEB.H264-C0MPL3T3D";
         String destination = "/_INCOMPLETED/TV-SD-FRENCH/" + name;

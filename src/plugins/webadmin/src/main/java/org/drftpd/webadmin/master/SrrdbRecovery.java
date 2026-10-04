@@ -46,6 +46,7 @@ final class SrrdbRecovery implements AutoCloseable {
     private int scanned;
     private int total;
     private int errors;
+    private int notFound;
     private volatile boolean cancelled;
     private volatile boolean closed;
 
@@ -68,7 +69,7 @@ final class SrrdbRecovery implements AutoCloseable {
         }
         return Map.of("files", files, "scanState", scanState, "scanMessage", scanMessage,
                 "scanned", scanned, "total", total, "errors", errors, "scanLimit", scanLimit,
-                "scanErrors", new ArrayList<>(scanErrors));
+                "scanErrors", new ArrayList<>(scanErrors), "notFound", notFound);
     }
 
     synchronized void scan(String username, String path, boolean recursive) {
@@ -79,6 +80,7 @@ final class SrrdbRecovery implements AutoCloseable {
         scanned = 0;
         total = 0;
         errors = 0;
+        notFound = 0;
         scanErrors.clear();
         scanMessage = "";
         worker.execute(() -> scanNow(username, normalizedPath, recursive));
@@ -113,12 +115,16 @@ final class SrrdbRecovery implements AutoCloseable {
                             save();
                         }
                     }
+                } catch (SrrdbClient.ReleaseNotFoundException e) {
+                    synchronized (this) { notFound++; }
+                    logger.info("srrDB release not found: path={} release={}", releasePath, releaseName(releasePath));
                 } catch (Exception e) {
                     synchronized (this) {
                         errors++;
                         if (scanErrors.size() < 20) scanErrors.add(releasePath + ": " + e.getMessage());
                     }
                     logger.warn("srrDB lookup failed: path={} reason={}", releasePath, e.toString());
+                    logger.debug("srrDB lookup failure details: path={}", releasePath, e);
                 }
                 synchronized (this) { scanned++; }
             }
@@ -131,7 +137,8 @@ final class SrrdbRecovery implements AutoCloseable {
             synchronized (this) { scanState = "failed"; scanMessage = String.valueOf(e.getMessage()); }
             logger.warn("srrDB scan failed: user={} path={}", username, path, e);
         }
-        logger.info("srrDB scan ended: user={} state={} scanned={} errors={}", username, scanState, scanned, errors);
+        logger.info("srrDB scan ended: user={} state={} scanned={} notFound={} errors={}",
+                username, scanState, scanned, notFound, errors);
     }
 
     synchronized void cancel() { cancelled = true; }
