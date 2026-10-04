@@ -156,6 +156,7 @@ public class DiskSelectionFilter extends DiskSelectionInterface {
     @Override
     public DiskStatus getDiskStatus() {
         long free = 0;
+        long usable = 0;
         long total = 0;
         boolean configured = false;
         boolean allBelow = !getRootCollection().getRootList().isEmpty();
@@ -176,14 +177,15 @@ public class DiskSelectionFilter extends DiskSelectionInterface {
             }
             configured |= minimum != null;
             // Never call the whole slave full when an unmonitored root remains.
-            allBelow &= minimum != null && available < minimum;
+            allBelow &= minimum != null && available <= minimum;
+            usable += Math.max(0, available - (minimum == null ? 0 : Math.max(0, minimum)));
             if (details.length() > 0) {
                 details.append("; ");
             }
             details.append("root.").append(++index).append(" free=").append(Bytes.formatBytes(available))
                     .append(" min=").append(minimum == null ? "unset" : Bytes.formatBytes(minimum));
         }
-        return new DiskStatus(free, total, allBelow, configured ? details.toString() : null);
+        return new DiskStatus(free, total, allBelow, configured ? details.toString() : null, usable);
     }
 
     private void initFilters() {
