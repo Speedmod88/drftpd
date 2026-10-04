@@ -66,7 +66,8 @@ public class SlaveStatus {
     public SlaveStatus append(SlaveStatus arg) {
         return new SlaveStatus(new DiskStatus(getDiskSpaceAvailable()
                 + arg.getDiskSpaceAvailable(), getDiskSpaceCapacity()
-                + arg.getDiskSpaceCapacity()), getBytesSent()
+                + arg.getDiskSpaceCapacity(), false, null,
+                getDiskSpaceUsable() + arg.getDiskSpaceUsable()), getBytesSent()
                 + arg.getBytesSent(), getBytesReceived()
                 + arg.getBytesReceived(), getThroughputReceiving()
                 + arg.getThroughputReceiving(), getTransfersReceiving()
@@ -89,6 +90,14 @@ public class SlaveStatus {
 
     public long getDiskSpaceCapacity() {
         return _diskStatus.getBytesCapacity();
+    }
+
+    public long getDiskSpaceUsable() {
+        return _diskStatus.getBytesUsable();
+    }
+
+    public boolean isDiskFull() {
+        return getDiskSpaceCapacity() > 0 && getDiskSpaceUsable() == 0;
     }
 
     public long getDiskSpaceUsed() {
