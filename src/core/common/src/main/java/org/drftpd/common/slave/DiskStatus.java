@@ -35,16 +35,23 @@ public class DiskStatus implements Serializable {
     // Optional fields: old peers ignore them; old senders leave details null.
     private final boolean _belowMinimumFreeSpace;
     private final String _minimumFreeSpaceDetails;
+    private final Long _usableFree;
 
     public DiskStatus(long free, long total) {
         this(free, total, false, null);
     }
 
     public DiskStatus(long free, long total, boolean belowMinimumFreeSpace, String minimumFreeSpaceDetails) {
+        this(free, total, belowMinimumFreeSpace, minimumFreeSpaceDetails, null);
+    }
+
+    public DiskStatus(long free, long total, boolean belowMinimumFreeSpace,
+                      String minimumFreeSpaceDetails, Long usableFree) {
         _free = free;
         _total = total;
         _belowMinimumFreeSpace = belowMinimumFreeSpace;
         _minimumFreeSpaceDetails = minimumFreeSpaceDetails;
+        _usableFree = usableFree;
     }
 
     public boolean hasMinimumFreeSpaceStatus() {
@@ -61,6 +68,12 @@ public class DiskStatus implements Serializable {
 
     public long getBytesAvailable() {
         return _free;
+    }
+
+    /** Display capacity above per-root reserves; raw free space remains unchanged. */
+    public long getBytesUsable() {
+        if (_usableFree == null) return isBelowMinimumFreeSpace() ? 0 : Math.max(0, _free);
+        return Math.max(0, Math.min(_free, _usableFree));
     }
 
     public long getBytesCapacity() {

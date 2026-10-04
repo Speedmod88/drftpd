@@ -57,11 +57,17 @@
 
 # minfreespace is measured per physical root, not against the slave's total free space.
 # multiplier=1 penalizes the score below the minimum; it DOES NOT block uploads.
-# multiplier=0 (or remove) excludes that root below the minimum. At equality it is allowed.
+# multiplier=0 (or remove) excludes that root AT OR BELOW the minimum.
 # The master reports FULL (minfreespace) when every root has a configured minimum
-# and every root is below it. Unconfigured roots prevent a whole-slave FULL warning.
+# and every root is at or below it. Unconfigured roots prevent a whole-slave minimum warning.
 # Warnings do not change selection rules, disconnect slaves, or stop downloads.
-# A recovery message is sent when at least one root meets its minimum again.
+# A recovery message is sent when at least one root exceeds its minimum again.
+# !slaves / SITE SLAVES and !df / SITE DF show usable free space:
+# sum(max(0, root free space - highest assigned minimum)), keeping total capacity unchanged.
+# A slave with zero usable space is labelled FULL. Unconfigured roots contribute raw free space.
+# Use multiplier=0 to enforce the reserve; positive multipliers remain scoring-only.
+# This reserve does not stop transfers already in progress or reserve their eventual file sizes.
+# If a root is an Unraid share, the rule sees that share, not each underlying HDD.
 # IRC uses the existing msgslave destination/theme; FTP shows warnings in upload
 # replies and SITE SLAVES. Old slaves without this status keep their existing behavior.
 # Background checks run every diskstatus.interval seconds (slave.conf, default 30),

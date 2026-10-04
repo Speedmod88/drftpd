@@ -829,8 +829,8 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             return;
         }
         publishDiskSpaceMessage((below
-                ? "FULL (minfreespace): all roots are below their configured minimum. "
-                : "SPACE AVAILABLE: a root is back at or above its configured minimum. ")
+                ? "FULL (minfreespace): all roots are at or below their configured minimum. "
+                : "SPACE AVAILABLE: a root is back above its configured minimum. ")
                 + status.getMinimumFreeSpaceDetails());
     }
 

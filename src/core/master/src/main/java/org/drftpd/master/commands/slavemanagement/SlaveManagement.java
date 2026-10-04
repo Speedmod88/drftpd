@@ -92,6 +92,16 @@ public class SlaveManagement extends CommandInterface {
 
     }
 
+    public static void fillEnvWithUsableDiskSpace(Map<String, Object> env, SlaveStatus status) {
+        env.put("diskfreephysical", Bytes.formatBytes(status.getDiskSpaceAvailable()));
+        env.put("diskreserved", Bytes.formatBytes(Math.max(0,
+                status.getDiskSpaceAvailable() - status.getDiskSpaceUsable())));
+        env.put("diskfree", Bytes.formatBytes(status.getDiskSpaceUsable()));
+        env.put("diskfreepercent", status.getDiskSpaceCapacity() == 0 ? "n/a"
+                : ((status.getDiskSpaceUsable() * 100) / status.getDiskSpaceCapacity()) + "%");
+        env.put("diskfull", status.isDiskFull() ? "FULL" : "");
+    }
+
     public CommandResponse doSITE_SLAVESELECT(CommandRequest request) throws ImproperUsageException {
 
         if (!request.hasArgument()) {
@@ -268,7 +278,9 @@ public class SlaveManagement extends CommandInterface {
                 try {
                     SlaveStatus status = rslave.getSlaveStatus();
                     fillEnvWithSlaveStatus(env, status);
-                    env.put("status", rslave.isRemerging() ? "REMERGING" : "ONLINE");
+                    fillEnvWithUsableDiskSpace(env, status);
+                    env.put("status", (rslave.isRemerging() ? "REMERGING" : "ONLINE")
+                            + (status.isDiskFull() ? " FULL" : ""));
                     response.addComment(session.jprintf(_bundle, "slave.online", env, request.getUser()));
                 } catch (SlaveUnavailableException e) {
                     // should never happen since we tested slave status w/ isOnline and isAvaiable.
@@ -589,6 +601,7 @@ public class SlaveManagement extends CommandInterface {
         Map<String, Object> env = new HashMap<>();
         SlaveStatus status = GlobalContext.getGlobalContext().getSlaveManager().getAllStatus();
         fillEnvWithSlaveStatus(env, status);
+        fillEnvWithUsableDiskSpace(env, status);
         CommandResponse response = StandardCommandManager.genericResponse("RESPONSE_200_COMMAND_OK");
         response.addComment(request.getSession().jprintf(_bundle, "diskfree", env, request.getUser()));
         return response;

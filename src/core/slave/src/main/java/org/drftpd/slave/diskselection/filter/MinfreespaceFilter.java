@@ -70,7 +70,7 @@ public class MinfreespaceFilter extends DiskFilter {
 
             long df = o.getDiskSpaceAvailable();
 
-            if (df < _minfreespace) {
+            if (df <= _minfreespace) {
                 if (_multiplier == 0) {
                     sc.removeFromChart(o);
                 } else {
