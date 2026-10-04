@@ -51,15 +51,21 @@ class DiskCapacityTest {
         DiskStatus status = selection.getDiskStatus();
         assertTrue(status.isBelowMinimumFreeSpace());
         assertEquals(1100L, status.getBytesAvailable());
+        assertEquals(0L, status.getBytesUsable());
         assertEquals(30000L, status.getBytesCapacity());
         assertTrue(status.getMinimumFreeSpaceDetails().contains("root.2"));
         assertNotNull(selection.getBestRoot("/upload"), "multiplier=1 must stay a scoring rule");
     }
 
     @Test
-    void equalityOrOneHealthyRootIsNotFull() {
+    void equalityIsFullAndExcludedByHardReserve() {
         minimum(1, "all", 1000, "0");
+        assertTrue(selection.getDiskStatus().isBelowMinimumFreeSpace());
+        assertEquals(0L, selection.getDiskStatus().getBytesUsable());
+        assertNull(selection.getBestRoot("/upload"));
+        when(second.getDiskSpaceAvailable()).thenReturn(1001L);
         assertFalse(selection.getDiskStatus().isBelowMinimumFreeSpace());
+        assertEquals(1L, selection.getDiskStatus().getBytesUsable());
         assertSame(second, selection.getBestRoot("/upload"));
     }
 
@@ -68,11 +74,22 @@ class DiskCapacityTest {
         minimum(1, "1", 200, "1");
         assertFalse(selection.getDiskStatus().isBelowMinimumFreeSpace());
         assertTrue(selection.getDiskStatus().hasMinimumFreeSpaceStatus());
+        assertEquals(1000L, selection.getDiskStatus().getBytesUsable());
     }
 
     @Test
     void noRulesReportsUnknown() {
         assertFalse(selection.getDiskStatus().hasMinimumFreeSpaceStatus());
+        assertEquals(1100L, selection.getDiskStatus().getBytesUsable());
+    }
+
+    @Test
+    void highestAssignedReserveIsSubtractedPerRootNotFromAggregate() {
+        minimum(1, "all", 200, "0");
+        minimum(2, "2", 500, "0");
+        assertEquals(1100L, selection.getDiskStatus().getBytesAvailable());
+        assertEquals(500L, selection.getDiskStatus().getBytesUsable());
+        assertFalse(selection.getDiskStatus().isBelowMinimumFreeSpace());
     }
 
     @Test
