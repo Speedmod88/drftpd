@@ -10,6 +10,30 @@ import java.util.zip.CRC32;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SrrdbClientTest {
+    @Test void emptyDetailsArrayMeansReleaseNotFound() {
+        var client = new SrrdbClient(1024, (uri, limit) -> bytes(" \n[]\n"));
+        var error = assertThrows(SrrdbClient.ReleaseNotFoundException.class,
+                () -> client.details("Chicago.Fire.S02E21.FRENCH.WEB.x265-FREED0M"));
+        assertTrue(error.getMessage().contains("not found"));
+    }
+
+    @Test void malformedResponsesAreNotTreatedAsMissingReleases() {
+        for (String response : List.of("null", "[{}]", "{}", "<html>blocked</html>",
+                "{\"name\":\"Release-GRP\"}",
+                "{\"name\":\"Release-GRP\",\"files\":null}",
+                "{\"name\":\"Release-GRP\",\"files\":[{\"name\":\"release.sfv\"}]}")) {
+            var client = new SrrdbClient(1024, (uri, limit) -> bytes(response));
+            var error = assertThrows(IOException.class, () -> client.details("Release-GRP"), response);
+            assertFalse(error instanceof SrrdbClient.ReleaseNotFoundException, response);
+        }
+    }
+
+    @Test void matchedReleaseWithoutFilesIsNotMissing() throws Exception {
+        var client = new SrrdbClient(1024,
+                (uri, limit) -> bytes("{\"name\":\"Release-GRP\",\"files\":[]}"));
+        assertTrue(client.details("Release-GRP").isEmpty());
+    }
+
     static byte[] bytes(String content) { return content.getBytes(StandardCharsets.ISO_8859_1); }
     static SrrdbClient.RemoteFile file(String name, byte[] data) {
         CRC32 crc = new CRC32();

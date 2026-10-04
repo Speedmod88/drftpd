@@ -356,7 +356,7 @@ function renderRecovery(data) {
   const busy = data.scanState === "queued" || data.scanState === "running";
   $("#scanRecovery").disabled = busy;
   $("#cancelRecovery").disabled = !busy;
-  $("#recoveryProgress").textContent = `${data.scanState}: ${data.scanned}/${data.total} releases, ${data.errors} errors. ${data.scanMessage || ""}`;
+  $("#recoveryProgress").textContent = `${data.scanState}: ${data.scanned}/${data.total} releases, ${data.notFound || 0} not found in srrDB, ${data.errors} errors. ${data.scanMessage || ""}`;
   $("#recoveryErrors").hidden = !data.scanErrors.length;
   $("#recoveryErrorText").textContent = data.scanErrors.join("\n");
   const body = $("#recoveryRows");

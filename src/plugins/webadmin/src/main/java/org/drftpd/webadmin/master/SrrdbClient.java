@@ -16,6 +16,9 @@ import java.util.zip.CRC32;
 final class SrrdbClient {
     interface Transport { byte[] get(URI uri, int maximumBytes) throws IOException; }
     record RemoteFile(String name, long size, String crc) { }
+    static final class ReleaseNotFoundException extends IOException {
+        ReleaseNotFoundException() { super("Release not found in srrDB (empty details result)"); }
+    }
     private final Transport transport;
     private final int maximumBytes;
     private long lastRequest;
@@ -29,11 +32,22 @@ final class SrrdbClient {
     List<RemoteFile> details(String release) throws IOException {
         byte[] bytes = request(URI.create("https://api.srrdb.com/v1/details/" + segment(release)), 4 * 1024 * 1024);
         try {
-            JsonObject result = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject();
+            var response = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8));
+            // The details endpoint returns [] rather than an object for an unknown release.
+            if (response.isJsonArray() && response.getAsJsonArray().isEmpty()) {
+                throw new ReleaseNotFoundException();
+            }
+            if (!response.isJsonObject()) {
+                throw new IOException("Invalid srrDB details response: expected a release object or empty array");
+            }
+            JsonObject result = response.getAsJsonObject();
             if (!result.has("name") || !release.equalsIgnoreCase(result.get("name").getAsString())) {
                 throw new IOException("No exact srrDB release match");
             }
             List<RemoteFile> files = new ArrayList<>();
+            if (!result.has("files") || !result.get("files").isJsonArray()) {
+                throw new IOException("Invalid srrDB details response: missing or invalid files array");
+            }
             for (var value : result.getAsJsonArray("files")) {
                 JsonObject file = value.getAsJsonObject();
                 String name = file.get("name").getAsString();
@@ -46,7 +60,8 @@ final class SrrdbClient {
             }
             return files;
         } catch (RuntimeException e) {
-            throw new IOException("Invalid srrDB details response", e);
+            throw new IOException("Invalid srrDB details response: malformed JSON or file metadata ("
+                    + e.getClass().getSimpleName() + ")", e);
         }
     }
 
