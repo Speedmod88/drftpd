@@ -37,7 +37,6 @@ public class MediaInfo implements Serializable {
     public static final Key<MediaInfo> MEDIAINFO = new Key<>(MediaInfo.class, "mediainfo");
     private static final Logger logger = LogManager.getLogger(MediaInfo.class);
     private static final String MEDIAINFO_COMMAND = "mediainfo";
-    private static final String MKVALIDATOR_COMMAND = "mkvalidator";
     private String _fileName = "";
     private long _checksum;
     private boolean _sampleOk = true;
@@ -59,7 +58,6 @@ public class MediaInfo implements Serializable {
 
     public static boolean hasWorkingMediaInfo() {
         boolean mediainfo_works = false;
-        boolean mkvalidator_works = false;
         try {
             ProcessBuilder builder = new ProcessBuilder(MEDIAINFO_COMMAND, "--version");
             Process proc = builder.start();
@@ -71,18 +69,7 @@ public class MediaInfo implements Serializable {
         } catch(Exception e) {
             logger.fatal("Something went wrong trying to see if " + MEDIAINFO_COMMAND + " binary exists and works", e);
         }
-        try {
-            ProcessBuilder builder = new ProcessBuilder(MKVALIDATOR_COMMAND, "--version");
-            Process proc = builder.start();
-            int status = proc.waitFor();
-            if (status != 0) {
-                throw new RuntimeException("Exist code of " + MKVALIDATOR_COMMAND + " --version yielded exit code " + status);
-            }
-            mkvalidator_works = true;
-        } catch(Exception e) {
-            logger.fatal("Something went wrong trying to see if " + MKVALIDATOR_COMMAND + " binary exists and works", e);
-        }
-        return mediainfo_works && mkvalidator_works;
+        return mediainfo_works;
     }
 
     public static MediaInfo getMediaInfoFromFile(File file) throws IOException {
@@ -91,8 +78,9 @@ public class MediaInfo implements Serializable {
         String filePath = file.getAbsolutePath();
         mediaInfo.setActFileSize(file.length());
 
-        Pattern pSection = Pattern.compile("^(General|Video|Audio|Text|Chapters)( #\\d+)?$", Pattern.CASE_INSENSITIVE);
+        Pattern pSection = Pattern.compile("^(General|Video|Audio|Text|Chapters|Conformance errors)( #\\d+)?$", Pattern.CASE_INSENSITIVE);
         Pattern pValue = Pattern.compile("^(.*?)\\s+: (.*)$", Pattern.CASE_INSENSITIVE);
+        Pattern pExpectedSize = Pattern.compile("expected size at least (\\d+)");
 
         ProcessBuilder builder = new ProcessBuilder(MEDIAINFO_COMMAND, filePath);
         Process pDD = builder.start();
@@ -101,6 +89,7 @@ public class MediaInfo implements Serializable {
         HashMap<String, String> props = new HashMap<>();
         String section = "";
         String line;
+        ArrayList<String> generalComplianceList = new ArrayList<>();
 
         while ((line = stdout.readLine()) != null) {
             if (!line.trim().equals("")) {
@@ -121,6 +110,9 @@ public class MediaInfo implements Serializable {
                 m = pValue.matcher(line);
                 if (m.find()) {
                     props.put(m.group(1), m.group(2));
+                    if (section.equalsIgnoreCase("General") && m.group(1).equals("General compliance")) {
+                        generalComplianceList.add(m.group(2));
+                    }
                 }
             }
         }
@@ -167,28 +159,29 @@ public class MediaInfo implements Serializable {
                 }
             }
             case "MKV" -> {
-                builder = new ProcessBuilder(MKVALIDATOR_COMMAND, "--quiet", "--no-warn", filePath);
-                builder.redirectErrorStream(true);
-                pDD = builder.start();
-                stdout = new BufferedReader(new InputStreamReader(pDD.getInputStream()));
-                while ((line = stdout.readLine()) != null) {
-                    if (line.contains("ERR042")) {
+                // Use the existing MediaInfo output; no second validator process is needed.
+                for (String compliance : generalComplianceList) {
+                    if (compliance.contains("File size") && compliance.contains("less than expected size")) {
                         mediaInfo.setSampleOk(false);
-                        for (String word : line.split("\\s")) {
-                            if (word.matches("^\\d+$")) {
-                                mediaInfo.setCalFileSize(Long.parseLong(word));
-                                break;
+                        logger.warn("MKV: MediaInfo reports incomplete file {}: {}", filePath, compliance);
+                        Matcher expectedSize = pExpectedSize.matcher(compliance);
+                        if (expectedSize.find()) {
+                            try {
+                                mediaInfo.setCalFileSize(Long.parseLong(expectedSize.group(1)));
+                            } catch (NumberFormatException e) {
+                                logger.warn("MKV: Invalid expected file size for {}: {}", filePath, compliance);
                             }
                         }
                     }
                 }
-                stdout.close();
-                try {
-                    pDD.waitFor();
-                } catch (InterruptedException e) {
-                    logger.error("ERROR: {}} process interrupted", MKVALIDATOR_COMMAND);
+                HashMap<String, String> generalInfo = mediaInfo.getGeneralInfo();
+                if (generalInfo != null) {
+                    String errors = generalInfo.get("Conformance errors");
+                    if (errors != null && !errors.equals("0")) {
+                        mediaInfo.setSampleOk(false);
+                        logger.warn("MKV: MediaInfo reports conformance errors for {}: {}", filePath, errors);
+                    }
                 }
-                pDD.destroy();
             }
             case "AVI" -> {
                 if (mediaInfo.getGeneralInfo() != null && mediaInfo.getGeneralInfo().get("File size") != null &&
