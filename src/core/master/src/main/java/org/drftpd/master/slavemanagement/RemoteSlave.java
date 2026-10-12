@@ -111,6 +111,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     private transient ConcurrentHashMap<TransferIndex, RemoteTransfer> _transfers;
     private transient boolean _initRemergeCompleted;
     private final transient Object _commandMonitor;
+    private final transient Object _queueDrainLock = new Object();
     private final transient LinkedBlockingQueue<RemergeMessage> _remergeQueue;
     private final transient LinkedBlockingQueue<FileHandle> _crcQueue;
     private transient RemergeThread _remergeThread;
@@ -617,6 +618,16 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public void processQueue() throws IOException, SlaveUnavailableException {
+        long generation = getConnectionGeneration();
+        synchronized (_queueDrainLock) {
+            if (generation != getConnectionGeneration()) {
+                throw new SlaveUnavailableException("Connection changed before queue processing");
+            }
+            drainQueuedOperations();
+        }
+    }
+
+    private void drainQueuedOperations() throws IOException, SlaveUnavailableException {
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
         int queuedOperations = renameQueue.size();
         if (queuedOperations == 0) {
@@ -635,12 +646,17 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     private void processQueuedOperations() throws IOException, SlaveUnavailableException {
+        long generation = getConnectionGeneration();
         QueuedOperation item;
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
         while ((item = renameQueue.peekFirst()) != null) {
+            if (generation != getConnectionGeneration()) {
+                throw new SlaveUnavailableException("Connection changed during queue processing");
+            }
             executeQueuedOperation(item);
             synchronized (renameQueue) {
-                if (renameQueue.removeFirstOccurrence(item)) {
+                if (renameQueue.peekFirst() == item) {
+                    renameQueue.removeFirst();
                     unindexQueuedOperation(item);
                     scheduleQueuedOperationsCommit();
                 }
@@ -653,21 +669,72 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     protected void executeQueuedOperation(QueuedOperation item) throws IOException, SlaveUnavailableException {
-        String sourceFile = item.getSource();
-        String destFile = item.getDestination();
-        try {
-            if (destFile == null) {
-                fetchResponse(SlaveManager.getBasicIssuer().issueDeleteToSlave(this, sourceFile), 300000);
-                return;
+        long generation = getConnectionGeneration();
+        long delay = 60000L;
+        while (true) {
+            if (generation != getConnectionGeneration()) {
+                throw new SlaveUnavailableException("Connection changed before queued operation retry");
             }
-            String fileName = destFile.substring(destFile.lastIndexOf("/") + 1);
-            String destDir = destFile.substring(0, destFile.lastIndexOf("/"));
-            fetchResponse(SlaveManager.getBasicIssuer().issueRenameToSlave(this, sourceFile, destDir, fileName));
-        } catch (RemoteIOException e) {
-            if (!(e.getCause() instanceof FileNotFoundException)) {
-                throw e.getCause();
+            try {
+                sendQueuedOperation(item);
+                return;
+            } catch (RemoteIOException e) {
+                if (e.getCause() instanceof FileNotFoundException) {
+                    return;
+                }
+                // A filesystem failure is an operation failure, not a broken connection.
+                // Keep the head in place so dependent renames/deletes cannot overtake it.
+                flushQueuedOperationsCommit();
+                reportQueuedOperationRetry(item, e.getCause(), delay);
+                waitForQueuedOperationRetry(generation, delay);
+                if (getOrCreateRenameQueue().peekFirst() != item) {
+                    // An upload retry may have cancelled a queued zero-byte deletion.
+                    return;
+                }
+                delay = Math.min(300000L, delay * 2);
             }
         }
+    }
+
+    protected void reportQueuedOperationRetry(QueuedOperation item, IOException failure, long delay) {
+        logger.warn("Slave {} queued {} failed: source={} destination={}; operation retained, retry in {} seconds",
+                getName(), item.getDestination() == null ? "delete" : "rename",
+                item.getSource(), item.getDestination(), delay / 1000L, failure);
+        GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE",
+                "Queued " + (item.getDestination() == null ? "delete" : "rename")
+                        + " failed; operations retained for retry in " + delay / 1000L
+                        + " seconds. Slave connection preserved; see remoteslave.log.", this));
+    }
+
+    protected void waitForQueuedOperationRetry(long generation, long delay) throws SlaveUnavailableException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(delay);
+        while (true) {
+            if (generation != getConnectionGeneration() || !isOnline()) {
+                throw new SlaveUnavailableException("Connection ended while waiting to retry queued operation");
+            }
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                return;
+            }
+            try {
+                TimeUnit.NANOSECONDS.sleep(Math.min(remaining, TimeUnit.SECONDS.toNanos(1)));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new SlaveUnavailableException("Interrupted while waiting to retry queued operation");
+            }
+        }
+    }
+
+    protected void sendQueuedOperation(QueuedOperation item) throws RemoteIOException, SlaveUnavailableException {
+        String sourceFile = item.getSource();
+        String destFile = item.getDestination();
+        if (destFile == null) {
+            fetchResponse(SlaveManager.getBasicIssuer().issueDeleteToSlave(this, sourceFile), 300000);
+            return;
+        }
+        String fileName = destFile.substring(destFile.lastIndexOf("/") + 1);
+        String destDir = destFile.substring(0, destFile.lastIndexOf("/"));
+        fetchResponse(SlaveManager.getBasicIssuer().issueRenameToSlave(this, sourceFile, destDir, fileName));
     }
 
     public boolean prepareQueuedUploadRetry(String path) throws IOException, SlaveUnavailableException {
@@ -788,6 +855,9 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         if (!processQueueAfterRemerge()) {
             return;
         }
+        if (completionGeneration != getConnectionGeneration()) {
+            return;
+        }
         if (GlobalContext.getConfig().getMainProperties().getProperty("partial.remerge.mode").equalsIgnoreCase("instant")) {
             setRemerging(false);
             String message = formatRemergeCompletionMessage(remergeStartedAt, System.currentTimeMillis());
@@ -849,6 +919,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     }
 
     public boolean processQueueAfterRemerge() {
+        long generation = getConnectionGeneration();
         ConcurrentLinkedDeque<QueuedOperation> renameQueue = getOrCreateRenameQueue();
         int queuedOperations = renameQueue.size();
         if (queuedOperations == 0) {
@@ -863,6 +934,9 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             while (true) {
                 processQueue();
                 synchronized (renameQueue) {
+                    if (generation != getConnectionGeneration()) {
+                        return false;
+                    }
                     if (!renameQueue.isEmpty()) {
                         continue;
                     }
@@ -877,12 +951,10 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
             return true;
         } catch (IOException e) {
             logger.error("IOException while processing queued delete/rename operations after remerge for {}", getName(), e);
-            setRemerging(false);
-            setOffline("IOException processing queued operations after remerge");
+            setOfflineIfCurrent(generation, "IOException processing queued operations after remerge");
         } catch (SlaveUnavailableException e) {
             logger.error("Slave unavailable while processing queued delete/rename operations after remerge for {}", getName(), e);
-            setRemerging(false);
-            setOffline(e);
+            setOfflineIfCurrent(generation, e);
         }
         return false;
     }
@@ -1945,7 +2017,7 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         return _sin;
     }
 
-    public void putRemergeQueue(RemergeMessage message) {
+    public synchronized void putRemergeQueue(RemergeMessage message) {
         if (!message.isCompleted()) {
             logger.debug("REMERGE: putting message into queue. (path: {})", message.getDirectory());
         }
@@ -1981,6 +2053,23 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         }
 
         public void run() {
+            try {
+                processMessages();
+            } finally {
+                synchronized (RemoteSlave.this) {
+                    if (_remergeThread == this) {
+                        _remergeThread = null;
+                        // A reconnect can enqueue work while the old worker leaves its retry wait.
+                        if (!_remergeQueue.isEmpty()) {
+                            _remergeThread = new RemergeThread(RemoteSlave.this.getName());
+                            _remergeThread.start();
+                        }
+                    }
+                }
+            }
+        }
+
+        private void processMessages() {
             while (true) {
                 RemergeMessage msg;
                 try {
