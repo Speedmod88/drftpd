@@ -271,9 +271,10 @@ public class SlaveManagement extends CommandInterface {
             env.put("slaveip", "OFFLINE");
         }
 
+        String statusLine;
         if (rslave.isOnline()) {
             if (!rslave.isAvailable()) {
-                response.addComment(session.jprintf(_bundle, "slave.remerging", env, request.getUser()));
+                statusLine = session.jprintf(_bundle, "slave.remerging", env, request.getUser());
             } else {
                 try {
                     SlaveStatus status = rslave.getSlaveStatus();
@@ -281,20 +282,21 @@ public class SlaveManagement extends CommandInterface {
                     fillEnvWithUsableDiskSpace(env, status);
                     env.put("status", (rslave.isRemerging() ? "REMERGING" : "ONLINE")
                             + (status.isDiskFull() ? " FULL" : ""));
-                    response.addComment(session.jprintf(_bundle, "slave.online", env, request.getUser()));
+                    statusLine = session.jprintf(_bundle, "slave.online", env, request.getUser());
                 } catch (SlaveUnavailableException e) {
                     // should never happen since we tested slave status w/ isOnline and isAvaiable.
                     throw new RuntimeException("There's a bug somewhere in the code, the slave was available now it isn't.", e);
                 }
             }
         } else {
-            response.addComment(session.jprintf(_bundle, "slave.offline", env, request.getUser()));
+            statusLine = session.jprintf(_bundle, "slave.offline", env, request.getUser());
         }
-        String diskWarning = rslave.getDiskSpaceWarning();
-        if (diskWarning != null) {
-            response.addComment(diskWarning);
-        }
+        response.addComment(appendDiskSpaceWarning(statusLine, rslave.getDiskSpaceWarning()));
         return response;
+    }
+
+    static String appendDiskSpaceWarning(String statusLine, String warning) {
+        return warning == null || warning.isEmpty() ? statusLine : statusLine + " | " + warning;
     }
 
     public CommandResponse doSITE_REMERGE(CommandRequest request) {
