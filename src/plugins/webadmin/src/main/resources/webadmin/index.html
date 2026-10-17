@@ -86,10 +86,11 @@
         <form id="dupeForm" class="recovery-controls">
           <label class="recovery-path" for="dupePath">VFS directory<input id="dupePath" required pattern="/.*" placeholder="/MOVIES-HD-MULTI"></label>
           <button id="scanDupe" class="primary" type="submit">Scan directory</button>
+          <label for="dupeLimit">Limit (groups)<input id="dupeLimit" type="number" min="1" max="1000" step="1" value="10" required></label>
           <button id="deleteDupes" class="danger" type="button" disabled>Delete selected (0)</button>
         </form>
         <p id="dupeStatus" class="scan-progress" role="status">No scan started.</p>
-        <div class="table-scroll"><table><thead><tr><th><input id="dupeSelectPage" type="checkbox" aria-label="Select this page"></th><th>Eligible duplicate release</th></tr></thead><tbody id="dupeRows"></tbody></table></div>
+        <div class="table-scroll"><table><thead><tr><th><input id="dupeSelectPage" type="checkbox" aria-label="Select this page"></th><th>Status</th><th>Score</th><th>Release</th></tr></thead><tbody id="dupeRows"></tbody></table></div>
         <div class="dupe-pagination"><button id="dupePrevious" type="button" disabled>Previous</button><span id="dupePage"></span><button id="dupeNext" type="button" disabled>Next</button></div>
         <pre id="dupeOutput" class="dashboard-output" tabindex="0"></pre>
       </section>

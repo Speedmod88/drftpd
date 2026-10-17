@@ -35,7 +35,13 @@ final class WebAdminDupe {
         return current;
     }
 
-    static List<String> scan(String username, String path) throws Exception {
+    static int limit(Integer value) {
+        int limit = value == null ? 10 : value;
+        if (limit < 1 || limit > 1000) throw new IllegalArgumentException("Limit must be between 1 and 1000");
+        return limit;
+    }
+
+    static List<Dupe2Utils.ReviewResult> scan(String username, String path, int limit) throws Exception {
         User user = user(username);
         DirectoryHandle root = directory(user, path);
         AdvancedSearchParams params = new AdvancedSearchParams();
@@ -52,7 +58,12 @@ final class WebAdminDupe {
             }
             if (Thread.currentThread().isInterrupted()) throw new IOException("Scan stopped");
         }
-        return Dupe2Utils.getDupeLoserPaths(candidates).stream().sorted().toList();
+        List<Dupe2Utils.ReviewResult> results = new ArrayList<>();
+        for (var result : Dupe2Utils.reviewDuplicates(candidates, limit)) {
+            try { directory(user, result.path()); results.add(result); }
+            catch (IOException ignored) { }
+        }
+        return results;
     }
 
     static boolean eligible(String username, String path) throws Exception {
