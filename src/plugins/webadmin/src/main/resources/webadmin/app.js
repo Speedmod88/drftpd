@@ -505,13 +505,14 @@ function renderDupes() {
   const visible = state.dupePaths.slice(state.dupePage * pageSize, (state.dupePage + 1) * pageSize);
   const body = $("#dupeRows");
   body.replaceChildren();
-  for (const path of visible) {
+  for (const item of visible) {
+    const path = item.path;
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = state.dupeSelected.has(path);
-    checkbox.disabled = state.dupeBusy;
+    checkbox.disabled = state.dupeBusy || !item.eligible;
     checkbox.setAttribute("aria-label", "Select " + path);
     checkbox.addEventListener("change", () => {
       if (checkbox.checked && state.dupeSelected.size >= 100) {
@@ -523,14 +524,18 @@ function renderDupes() {
       renderDupes();
     });
     cell.append(checkbox);
-    row.append(cell, td(path));
+    const status = td(item.status);
+    status.className = "dupe-status " + (item.status === "KEEP" ? "dupe-keep"
+      : item.status === "Can delete" ? "dupe-delete" : "dupe-incomplete");
+    row.append(cell, status, td(String(item.score)), td(path));
     body.append(row);
   }
   $("#dupePage").textContent = "Page " + (state.dupePage + 1) + " / " + pages + " - " + state.dupePaths.length + " results";
   $("#dupePrevious").disabled = state.dupePage === 0 || state.dupeBusy;
   $("#dupeNext").disabled = state.dupePage + 1 >= pages || state.dupeBusy;
-  $("#dupeSelectPage").disabled = !visible.length || state.dupeBusy;
-  $("#dupeSelectPage").checked = visible.length > 0 && visible.every(path => state.dupeSelected.has(path));
+  const eligible = visible.filter(item => item.eligible);
+  $("#dupeSelectPage").disabled = !eligible.length || state.dupeBusy;
+  $("#dupeSelectPage").checked = eligible.length > 0 && eligible.every(item => state.dupeSelected.has(item.path));
   $("#deleteDupes").disabled = state.dupeBusy || !state.dupeSelected.size;
   $("#deleteDupes").textContent = "Delete selected (" + state.dupeSelected.size + ")";
   $("#scanDupe").disabled = state.dupeBusy;
@@ -549,8 +554,9 @@ async function submitDupe(payload) {
     });
     if (payload.action === "scan" && result.state === "completed") {
       state.dupeJob = result.id;
-      state.dupePaths = result.paths || [];
-      $("#dupeStatus").textContent = state.dupePaths.length + " eligible duplicate releases";
+      state.dupePaths = result.dupeResults || [];
+      $("#dupeStatus").textContent = state.dupePaths.length + " releases; "
+        + (result.paths || []).length + " eligible for deletion";
     }
     if (payload.action === "wipe") {
       // Even partial failures invalidate the review; never repeat a destructive job automatically.
@@ -578,10 +584,12 @@ $("#dupeForm").addEventListener("submit", event => {
   state.dupePaths = [];
   state.dupeSelected.clear();
   state.dupePage = 0;
-  submitDupe({action: "scan", path: $("#dupePath").value.trim().replace(/\/+$/, "") || "/"});
+  submitDupe({action: "scan", path: $("#dupePath").value.trim().replace(/\/+$/, "") || "/",
+    limit: Number($("#dupeLimit").value)});
 });
 $("#dupeSelectPage").addEventListener("change", () => {
-  const visible = state.dupePaths.slice(state.dupePage * 100, (state.dupePage + 1) * 100);
+  const visible = state.dupePaths.slice(state.dupePage * 100, (state.dupePage + 1) * 100)
+    .filter(item => item.eligible).map(item => item.path);
   if ($("#dupeSelectPage").checked) {
     for (const path of visible) {
       if (state.dupeSelected.size >= 100) break;

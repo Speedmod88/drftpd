@@ -29,6 +29,11 @@
 .status-details summary { cursor: pointer; font-weight: 650; }
 .dupe-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 14px 0; }
 #dupeRows td { overflow-wrap: anywhere; }
+#dupeRows .dupe-status { font-weight: 700; min-width: 115px; }
+.dupe-keep { color: #13795b; }
+.dupe-incomplete { color: #a45100; }
+.dupe-delete { color: #b42318; }
+#dupeLimit { width: 110px; }
 #dupeRows input, #dupeSelectPage { width: 18px; height: 18px; min-height: 18px; }
 #configScope, #logScope { width: auto; max-width: 180px; }
 .metric strong { overflow-wrap: anywhere; }
