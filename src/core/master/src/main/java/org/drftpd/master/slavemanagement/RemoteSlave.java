@@ -774,11 +774,24 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
 
     protected void deleteZeroByteUploadPath(String path) throws IOException, SlaveUnavailableException {
         try {
+            if (!supportsZeroByteDelete()) {
+                throw new IOException("Slave " + getName()
+                        + " does not support safe zero-byte upload retry; queued delete retained until remerge completes");
+            }
             fetchResponseWithoutDisconnect(
                     SlaveManager.getBasicIssuer().issueDeleteZeroByteToSlave(this, path), 30000);
         } catch (RemoteIOException e) {
             throw e.getCause();
         }
+    }
+
+    protected boolean supportsZeroByteDelete() throws RemoteIOException, SlaveUnavailableException {
+        // Legacy slaves understand MAXPATH and return their normal path limit.
+        String index = fetchIndex();
+        sendCommand(new AsyncCommandArgument(index, "maxpath", "delete-zero-byte-v1"));
+        AsyncResponse response = fetchResponseWithoutDisconnect(index, 30000);
+        return response instanceof AsyncResponseMaxPath
+                && ((AsyncResponseMaxPath) response).getMaxPath() == -24003;
     }
 
     private void removeQueuedOperation(QueuedOperation operation) {
