@@ -35,21 +35,25 @@ class RemoteSlaveCapacityTest {
         DiskStatus available = new DiskStatus(300, 1000, false, "root.1 free=300B min=200B");
         slave.updateDiskStatus(available);
         assertTrue(slave.announcements.isEmpty());
+        assertFalse(slave.isUploadBlockedByCapacity());
         slave.updateDiskStatus(full);
         slave.updateDiskStatus(full);
         assertEquals(1, slave.announcements.size());
         assertTrue(slave.getDiskSpaceWarning().contains("FULL"));
+        assertTrue(slave.isUploadBlockedByCapacity());
         slave.updateDiskStatus(available);
         slave.updateDiskStatus(available);
         assertEquals(2, slave.announcements.size());
         assertTrue(slave.announcements.get(1).contains("SPACE AVAILABLE"));
         assertNull(slave.getDiskSpaceWarning());
+        assertFalse(slave.isUploadBlockedByCapacity());
     }
 
     @Test
     void fullOnConnectIsReportedButLegacyStatusIsNotInvented() {
         TestSlave slave = new TestSlave();
         slave.updateDiskStatus(new DiskStatus(0, 1000));
+        assertFalse(slave.isUploadBlockedByCapacity());
         assertTrue(slave.announcements.isEmpty());
         assertNull(slave.getDiskSpaceWarning());
         slave.setAvailable(false);
