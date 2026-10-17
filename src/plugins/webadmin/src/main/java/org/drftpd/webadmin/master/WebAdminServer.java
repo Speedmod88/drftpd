@@ -473,6 +473,7 @@ final class WebAdminServer {
         }
         if (!settings.allowedCommands.contains("site dupe2")) throw new ApiException(403, "DUPE2 is disabled");
         boolean scan = payload.action.equals("scan");
+        int resultLimit = scan ? WebAdminDupe.limit(payload.limit) : 10;
         if (jobs.values().stream().anyMatch(job -> job.username.equals(session.username)
                 && job.command.startsWith("DUPE2 ") && (job.state.equals("queued") || job.state.equals("running")))) {
             throw new ApiException(409, "A Dupe2 job is already running for this user");
@@ -502,7 +503,10 @@ final class WebAdminServer {
                 try {
                     WebAdminDupe.user(job.username);
                     if (scan) {
-                        job.paths = WebAdminDupe.scan(job.username, payload.path);
+                        job.dupeResults = WebAdminDupe.scan(job.username, payload.path, resultLimit);
+                        job.paths = job.dupeResults.stream().filter(item -> item.eligible())
+                                .map(item -> item.path()).toList();
+                        job.addOutput("Duplicate group limit: " + resultLimit);
                         job.addOutput("Found " + job.paths.size() + " eligible duplicate releases.");
                     } else {
                         for (String path : selection) {
@@ -767,6 +771,7 @@ final class WebAdminServer {
         view.put("output", job.snapshotOutput());
         view.put("paths", job.paths);
         view.put("dupeScan", job.dupeScan);
+        view.put("dupeResults", job.dupeResults);
         view.put("truncated", job.truncated);
         return view;
     }
@@ -1162,6 +1167,7 @@ final class WebAdminServer {
         private volatile String error;
         private volatile boolean truncated;
         private volatile boolean dupeScan;
+        private volatile List<org.drftpd.autofreespace.master.Dupe2Utils.ReviewResult> dupeResults = List.of();
         private volatile List<String> paths = List.of();
 
         private CommandJob(String id, String username, String command) {
@@ -1201,6 +1207,7 @@ final class WebAdminServer {
     }
 
     private static final class DupePayload {
+        private Integer limit;
         private String action;
         private String path;
         private String scanId;
