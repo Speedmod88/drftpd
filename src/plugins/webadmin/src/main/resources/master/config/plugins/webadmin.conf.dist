@@ -68,6 +68,24 @@ command.allowed.8=site addslave
 command.allowed.9=site slave
 command.allowed.10=site slaves
 command.allowed.11=site reload
+command.allowed.12=site status
+command.allowed.13=site swho
+
+# Dashboard metrics refresh every 5 seconds; STATUS ALL/SWHO every 30 seconds.
+# Existing webadmin.conf files with command.allowed entries must add the two
+# commands above using the next consecutive unused numbers.
+#
+# Optional slave files: paths must already be mounted on the MASTER host/container.
+# These are filesystem mounts, not FTP paths. No remote shell or new slave protocol
+# is used. Grant the master OS user read access to logs and write access to configs
+# only where editing is intended. Saves create .webadmin-backups beside configs.
+# Saving a slave config does not automatically reload or restart that slave.
+# Names must be unique and cannot be "master"; numbering starts at 1.
+#slave.1.name=EvoI
+#slave.1.config.root=/mnt/slave-admin/EvoI/config
+#slave.1.logs.root=/mnt/slave-admin/EvoI/logs
+#slave.2.name=EvoFAST
+#slave.2.logs.root=/mnt/slave-admin/EvoFAST/logs
 
 # Restart performs GlobalContext.shutdown(). Run the master under systemd or
 # another supervisor configured to restart it after a clean process exit.

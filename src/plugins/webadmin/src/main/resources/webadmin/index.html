@@ -35,7 +35,8 @@
 
     <aside id="sidebar" class="sidebar">
       <nav aria-label="Administration">
-        <button class="nav-item active" data-view="overview" type="button">Overview</button>
+        <button class="nav-item active" data-view="overview" type="button">Dashboard</button>
+        <button class="nav-item" data-view="dupe2" type="button">Dupe2</button>
         <button class="nav-item" data-view="timers" type="button">Timers</button>
         <button class="nav-item" data-view="config" type="button">Configuration</button>
         <button class="nav-item" data-view="logs" type="button">Logs</button>
@@ -48,7 +49,7 @@
     <main class="workspace">
       <section id="view-overview" class="view active">
         <div class="view-header">
-          <div><p class="eyebrow">Runtime</p><h2>Overview</h2></div>
+          <div><p class="eyebrow">Runtime</p><h2>Dashboard</h2></div>
           <button id="refreshOverview" type="button">Refresh</button>
         </div>
         <div class="metric-grid">
@@ -56,9 +57,16 @@
           <article class="metric"><span>Remerging</span><strong id="metricRemerging">-</strong></article>
           <article class="metric"><span>Storage free</span><strong id="metricStorage">-</strong></article>
           <article class="metric"><span>Heap used</span><strong id="metricHeap">-</strong></article>
-          <article class="metric"><span>CPU workers</span><strong id="metricCpu">-</strong></article>
+          <article class="metric"><span>Logical CPUs</span><strong id="metricCpu">-</strong></article>
           <article class="metric"><span>Uptime</span><strong id="metricUptime">-</strong></article>
+          <article class="metric"><span>System / JVM CPU</span><strong id="metricCpuUsage">-</strong></article>
+          <article class="metric"><span>System RAM used / total</span><strong id="metricRam">-</strong></article>
+          <article class="metric"><span>Load: 1 / 5 / 15 min</span><strong id="metricLoad">-</strong></article>
+          <article class="metric"><span>JVM threads</span><strong id="metricThreads">-</strong></article>
         </div>
+        <div class="band-header"><h3>CPU and JVM heap</h3><span id="dashboardUpdated" role="status"></span></div>
+        <canvas id="runtimeChart" height="130" aria-label="Recent system CPU and JVM heap utilization" role="img"></canvas>
+        <div class="chart-legend"><span>System CPU</span><span>JVM heap</span></div>
         <div class="table-band">
           <div class="band-header"><h3>Slaves</h3><span id="slaveCount"></span></div>
           <div class="table-scroll">
@@ -68,6 +76,22 @@
             </table>
           </div>
         </div>
+        <div class="band-header"><h3>Active sessions and transfers</h3><button id="refreshDashboardCommands" type="button">Refresh status</button></div>
+        <pre id="dashboardWho" class="dashboard-output" tabindex="0"></pre>
+        <details class="status-details" open><summary>STATUS ALL</summary><pre id="dashboardStatus" class="dashboard-output" tabindex="0"></pre></details>
+      </section>
+
+      <section id="view-dupe2" class="view">
+        <div class="view-header"><div><p class="eyebrow">Duplicate releases</p><h2>Dupe2</h2></div></div>
+        <form id="dupeForm" class="recovery-controls">
+          <label class="recovery-path" for="dupePath">VFS directory<input id="dupePath" required pattern="/.*" placeholder="/MOVIES-HD-MULTI"></label>
+          <button id="scanDupe" class="primary" type="submit">Scan directory</button>
+          <button id="deleteDupes" class="danger" type="button" disabled>Delete selected (0)</button>
+        </form>
+        <p id="dupeStatus" class="scan-progress" role="status">No scan started.</p>
+        <div class="table-scroll"><table><thead><tr><th><input id="dupeSelectPage" type="checkbox" aria-label="Select this page"></th><th>Eligible duplicate release</th></tr></thead><tbody id="dupeRows"></tbody></table></div>
+        <div class="dupe-pagination"><button id="dupePrevious" type="button" disabled>Previous</button><span id="dupePage"></span><button id="dupeNext" type="button" disabled>Next</button></div>
+        <pre id="dupeOutput" class="dashboard-output" tabindex="0"></pre>
       </section>
 
       <section id="view-timers" class="view">
@@ -93,6 +117,7 @@
         <div class="view-header">
           <div><p class="eyebrow">Files</p><h2>Configuration</h2></div>
           <div class="button-row">
+            <select id="configScope" aria-label="Configuration server"><option value="master">Master</option></select>
             <button id="reloadConfigList" type="button">Refresh</button>
             <button id="reloadMasterConfig" class="warning" type="button">SITE RELOAD</button>
             <button id="saveConfig" class="primary" type="button" disabled>Save</button>
@@ -115,6 +140,7 @@
         <div class="view-header">
           <div><p class="eyebrow">Runtime</p><h2>Logs</h2></div>
           <div class="log-controls">
+            <select id="logScope" aria-label="Log server"><option value="master">Master</option></select>
             <select id="logFile" aria-label="Log file"></select>
             <input id="logLines" type="number" min="10" max="2000" value="500" aria-label="Lines">
             <label class="toggle"><input id="logFollow" type="checkbox"><span>Follow</span></label>
@@ -134,7 +160,6 @@
             <div class="preset-grid">
               <button type="button" data-command="SITE SEARCH ">Search</button>
               <button type="button" data-command="SITE FIND ">Find</button>
-              <button type="button" data-command="SITE DUPE2 ">Dupe2</button>
               <button type="button" data-command="SITE NUKE ">Nuke</button>
               <button type="button" data-command="SITE WIPE ">Wipe</button>
               <button type="button" data-command="SITE ADDSLAVE ">Add slave</button>
