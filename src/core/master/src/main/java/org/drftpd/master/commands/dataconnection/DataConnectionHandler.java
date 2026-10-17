@@ -896,6 +896,12 @@ public class DataConnectionHandler extends CommandInterface {
 
             if (isStor) {
                 //setup upload
+                // PASV may have selected a slave before its latest capacity report arrived.
+                // Do not switch an already advertised data endpoint; reset() closes it in finally.
+                if (ts.getTransferSlave().isUploadBlockedByCapacity()) {
+                    return new CommandResponse(452, "Upload refused: "
+                            + ts.getTransferSlave().getName() + " FULL (minfreespace). Retry on an available slave.");
+                }
                 FileHandle fh = ts.getTransferFile();
                 // cannot use this FileHandle for anything but name, parent, and path
                 // it doesn't exist in the VFS yet!
