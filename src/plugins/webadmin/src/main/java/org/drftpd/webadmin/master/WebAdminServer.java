@@ -90,6 +90,7 @@ final class WebAdminServer {
             "/styles.css", "text/css; charset=utf-8");
 
     private final WebAdminSettings settings;
+    private final SlaveLogs slaveLogs = new SlaveLogs();
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private final SecureRandom random = new SecureRandom();
     private final Map<String, LoginAttempt> loginAttempts = new ConcurrentHashMap<>();
@@ -421,7 +422,38 @@ final class WebAdminServer {
         scopes.add(Map.of("name", "master", "config", true, "logs", true));
         settings.slaveFiles.forEach((name, roots) -> scopes.add(Map.of("name", name,
                 "config", roots.config() != null, "logs", roots.logs() != null)));
+        for (RemoteSlave slave : GlobalContext.getGlobalContext().getSlaveManager().getSlaves()) {
+            scopes.add(Map.of("name", "remote:" + slave.getName(), "label", slave.getName() + " (remote)",
+                    "config", false, "logs", true));
+        }
         sendJson(exchange, 200, Map.of("scopes", scopes));
+    }
+
+    private boolean remoteLogs(HttpExchange exchange, boolean tail) throws IOException {
+        Map<String, String> params = query(exchange.getRequestURI());
+        String scope = params.getOrDefault("scope", "master");
+        if (!scope.startsWith("remote:")) return false;
+        try {
+            RemoteSlave slave = GlobalContext.getGlobalContext().getSlaveManager().getRemoteSlave(scope.substring(7));
+            if (tail) {
+                int lines = Integer.parseInt(params.getOrDefault("lines", String.valueOf(settings.defaultLogLines)));
+                lines = Math.max(1, Math.min(Math.min(settings.maximumLogLines, 2000), lines));
+                String file = params.getOrDefault("file", "");
+                var response = slaveLogs.request(slave, "tail", file, String.valueOf(lines));
+                sendJson(exchange, 200, Map.of("file", file, "content", response.getContent()));
+            } else {
+                var response = slaveLogs.request(slave, "list");
+                sendJson(exchange, 200, Map.of("files", response.getFiles().stream().map(file -> Map.of("path", file)).toList(),
+                        "maximumLines", Math.min(settings.maximumLogLines, 2000),
+                        "defaultLines", Math.min(settings.defaultLogLines, 2000)));
+            }
+            return true;
+        } catch (NumberFormatException e) {
+            throw new ApiException(400, "Invalid line count");
+        } catch (Exception e) {
+            logger.warn("Remote log read failed for {}: {}", scope, e.toString());
+            throw new ApiException(503, e.getMessage() == null ? "Slave logs unavailable" : e.getMessage());
+        }
     }
 
     private Path fileRoot(HttpExchange exchange, boolean config) {
@@ -606,6 +638,7 @@ final class WebAdminServer {
 
     private void logFiles(HttpExchange exchange) throws IOException {
         requireMethod(exchange, "GET");
+        if (remoteLogs(exchange, false)) return;
         Path logsRoot = fileRoot(exchange, false);
         List<Map<String, Object>> files = new ArrayList<>();
         try (Stream<Path> stream = Files.walk(logsRoot, 2)) {
@@ -630,6 +663,7 @@ final class WebAdminServer {
 
     private void logTail(HttpExchange exchange) throws IOException {
         requireMethod(exchange, "GET");
+        if (remoteLogs(exchange, true)) return;
         Path logsRoot = fileRoot(exchange, false);
         Map<String, String> query = query(exchange.getRequestURI());
         String relative = query.get("file");

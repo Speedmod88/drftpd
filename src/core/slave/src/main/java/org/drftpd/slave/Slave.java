@@ -167,6 +167,13 @@ public class Slave extends SslConfigurationLoader {
         thread.setPriority(Thread.MIN_PRIORITY);
         return thread;
     }, new ThreadPoolExecutor.AbortPolicy());
+    private final ThreadPoolExecutor remoteLogExecutor = new ThreadPoolExecutor(1, 1, 0L,
+            TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(4), task -> {
+        Thread thread = new Thread(task, "Slave Remote Logs");
+        thread.setDaemon(true);
+        thread.setPriority(Thread.MIN_PRIORITY);
+        return thread;
+    }, new ThreadPoolExecutor.AbortPolicy());
     private int passiveListenerTimeoutSeconds = 180;
 
     public int getPassiveListenerTimeoutSeconds() {
@@ -731,6 +738,7 @@ public class Slave extends SslConfigurationLoader {
     }
 
     private ExecutorService getCommandExecutor(String commandName) {
+        if ("remotelog".equals(commandName)) return remoteLogExecutor;
         if ("idlecrc".equals(commandName)) return idleChecksumExecutor;
         return switch (getCommandExecutorType(commandName)) {
             case REMERGE -> _remergeCommandExecutor;
@@ -784,6 +792,7 @@ public class Slave extends SslConfigurationLoader {
     }
 
     private void stopCommandExecutors() {
+        stopCommandExecutor(remoteLogExecutor);
         stopCommandExecutor(idleChecksumExecutor);
         stopCommandExecutor(_remergeCommandExecutor);
         stopCommandExecutor(_checksumCommandExecutor);

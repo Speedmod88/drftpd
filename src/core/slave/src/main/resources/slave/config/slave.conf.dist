@@ -136,3 +136,11 @@ master.ssl.verification_mode=none
 master.ssl.client_authentication=optional
 master.ssl.keystore.path=config/drftpd.key
 master.ssl.keystore.password=drftpd
+
+# Read-only WebAdmin log access over the existing master/slave connection.
+# Requires updated master WebAdmin and slave JARs. No extra port or mount.
+# Opt in only for trusted masters. Restart the slave after changing these values.
+# Only regular .log files directly in this directory are exposed, not configs.
+# Limits: 100 filenames, 2000 lines / 256 KiB per read; one worker, four queued reads.
+remote.logs.enabled=false
+remote.logs.root=logs
