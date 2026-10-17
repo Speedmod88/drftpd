@@ -144,7 +144,17 @@ public class SlaveSelectionManager extends SlaveSelectionManagerInterface {
 
     private RemoteSlave process(String filterchain, ScoreChart sc, BaseFtpConnection conn, char direction, InodeHandle file,
                                 RemoteSlave sourceSlave) throws NoAvailableSlaveException {
+        excludeFullUploadSlaves(filterchain, sc);
         return getFilterChain(filterchain).getBestSlave(sc, conn, direction, file, sourceSlave);
+    }
+
+    static void excludeFullUploadSlaves(String filterchain, ScoreChart chart) throws NoAvailableSlaveException {
+        // Job uploads use the legacy download direction value; select by chain, not direction.
+        if (!filterchain.equals("up") && !filterchain.equals("jobup")) return;
+        chart.getSlaveScores().removeIf(score -> score.getRSlave().isUploadBlockedByCapacity());
+        if (chart.isEmpty()) {
+            throw new NoAvailableSlaveException("No upload slaves available: all candidates report FULL (minfreespace)");
+        }
     }
 
     public void reload() throws IOException {

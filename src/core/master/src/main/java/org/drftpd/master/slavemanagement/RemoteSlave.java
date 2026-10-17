@@ -909,13 +909,18 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
         GlobalContext.publishSlaveEvent(new SlaveEvent("MSGSLAVE", message, this));
     }
 
+    public boolean isUploadBlockedByCapacity() {
+        DiskStatus status = _status;
+        return status != null && status.isBelowMinimumFreeSpace();
+    }
+
     public String getDiskSpaceWarning() {
         DiskStatus status = _status;
         if (!isOnline() || status == null || !status.isBelowMinimumFreeSpace()) {
             return null;
         }
         return getName() + " FULL (minfreespace): " + status.getMinimumFreeSpaceDetails()
-                + ". Upload disk-selection rules still apply.";
+                + ". New uploads are blocked by the master.";
     }
 
     public boolean processQueueAfterRemerge() {
