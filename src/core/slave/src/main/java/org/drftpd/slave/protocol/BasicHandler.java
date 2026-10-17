@@ -158,6 +158,10 @@ public class BasicHandler extends AbstractHandler {
 
     // MAXPATH
     public AsyncResponse handleMaxpath(AsyncCommandArgument ac) {
+        if (org.drftpd.slave.RemoteLogReader.PROBE.equals(ac.getArgs())) {
+            return new AsyncResponseMaxPath(ac.getIndex(), org.drftpd.slave.RemoteLogReader.enabled(getSlaveObject().getConfig())
+                    ? org.drftpd.slave.RemoteLogReader.SUPPORTED : org.drftpd.slave.RemoteLogReader.DISABLED);
+        }
         if ("idle-crc-audit-v1".equals(ac.getArgs())) {
             return new AsyncResponseMaxPath(ac.getIndex(), org.drftpd.slave.IdleChecksumScanner.CAPABILITY);
         }
@@ -172,6 +176,10 @@ public class BasicHandler extends AbstractHandler {
     }
 
     // PING
+    public AsyncResponse handleRemotelog(AsyncCommandArgument ac) {
+        return org.drftpd.slave.RemoteLogReader.read(ac.getIndex(), ac.getArgsArray(), getSlaveObject().getConfig());
+    }
+
     public AsyncResponse handlePing(AsyncCommandArgument ac) {
         return new AsyncResponse(ac.getIndex());
     }
