@@ -22,7 +22,8 @@ import java.util.Set;
 final class WebAdminSettings {
     private static final Set<String> DEFAULT_COMMANDS = Set.of(
             "site search", "site find", "site dupe2", "site nuke", "site unnuke",
-            "site wipe", "site delete", "site addslave", "site slave", "site slaves", "site reload");
+            "site wipe", "site delete", "site addslave", "site slave", "site slaves", "site reload",
+            "site status", "site swho");
 
     final boolean enabled;
     final InetAddress bindAddress;
@@ -39,6 +40,7 @@ final class WebAdminSettings {
     final int maximumConfigBytes;
     final Path configRoot;
     final Path logsRoot;
+    final java.util.Map<String, FileRoots> slaveFiles;
     final Path srrdbState;
     final int srrdbScanLimit;
     final int srrdbMaximumBytes;
@@ -60,6 +62,22 @@ final class WebAdminSettings {
                 16 * 1024 * 1024);
         configRoot = rootPath(properties.getProperty("config.root", "config"));
         logsRoot = rootPath(properties.getProperty("logs.root", "logs"));
+        java.util.Map<String, FileRoots> roots = new java.util.LinkedHashMap<>();
+        for (int i = 1; properties.containsKey("slave." + i + ".name"); i++) {
+            String prefix = "slave." + i + ".";
+            String name = properties.getProperty(prefix + "name").trim();
+            if (name.isEmpty() || name.equals("master") || roots.containsKey(name)) {
+                throw new IllegalArgumentException("Invalid or duplicate slave file scope: " + name);
+            }
+            String config = properties.getProperty(prefix + "config.root");
+            String logs = properties.getProperty(prefix + "logs.root");
+            if ((config != null && config.isBlank()) || (logs != null && logs.isBlank())) {
+                throw new IllegalArgumentException("Slave file roots cannot be empty");
+            }
+            roots.put(name, new FileRoots(config == null ? null : rootPath(config),
+                    logs == null ? null : rootPath(logs)));
+        }
+        slaveFiles = java.util.Collections.unmodifiableMap(roots);
         srrdbState = rootPath(properties.getProperty("srrdb.state.file", "userdata/webadmin/srrdb.json"));
         srrdbScanLimit = intValue(properties, "srrdb.scan.limit", 100, 1, 1000);
         srrdbMaximumBytes = intValue(properties, "srrdb.maximum.bytes", 1048576, 1024, 4194304);
@@ -70,6 +88,8 @@ final class WebAdminSettings {
     static WebAdminSettings load() {
         return new WebAdminSettings(ConfigLoader.loadPluginConfig("webadmin.conf"));
     }
+
+    record FileRoots(Path config, Path logs) { }
 
     private static Set<String> loadAllowedCommands(Properties properties) {
         Set<String> commands = new LinkedHashSet<>();
