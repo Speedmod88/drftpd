@@ -158,6 +158,9 @@ public class BasicHandler extends AbstractHandler {
 
     // MAXPATH
     public AsyncResponse handleMaxpath(AsyncCommandArgument ac) {
+        if ("delete-zero-byte-v1".equals(ac.getArgs())) {
+            return new AsyncResponseMaxPath(ac.getIndex(), -24003);
+        }
         if (org.drftpd.slave.RemoteLogReader.PROBE.equals(ac.getArgs())) {
             return new AsyncResponseMaxPath(ac.getIndex(), org.drftpd.slave.RemoteLogReader.enabled(getSlaveObject().getConfig())
                     ? org.drftpd.slave.RemoteLogReader.SUPPORTED : org.drftpd.slave.RemoteLogReader.DISABLED);
