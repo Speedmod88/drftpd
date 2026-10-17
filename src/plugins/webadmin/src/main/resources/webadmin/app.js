@@ -6,6 +6,7 @@ const state = {
   configFiles: [],
   config: null,
   logTimer: null,
+  logBusy: false,
   jobTimer: null,
   expiryTimer: null,
   recoveryTimer: null,
@@ -255,7 +256,7 @@ async function loadFileScopes() {
       data.scopes.filter(scope => scope[kind]).forEach(scope => {
         const option = document.createElement("option");
         option.value = scope.name;
-        option.textContent = scope.name === "master" ? "Master" : scope.name;
+        option.textContent = scope.label || (scope.name === "master" ? "Master" : scope.name);
         $(target).append(option);
       });
     }
@@ -382,13 +383,22 @@ async function loadLogFiles() {
     }
     if (selected && data.files.some(file => file.path === selected)) select.value = selected;
     if (select.value) await loadLog();
-  } catch (error) { showError(error); }
+  } catch (error) {
+    if (scope !== $("#logScope").value) return;
+    $("#logFile").replaceChildren();
+    $("#logOutput").textContent = error.message;
+    $("#logFollow").checked = false;
+    updateLogFollow();
+    showError(error);
+  }
 }
 
 async function loadLog() {
+  if (state.logBusy) return;
   const scope = $("#logScope").value;
   const file = $("#logFile").value;
   if (!file) return;
+  state.logBusy = true;
   try {
     const lines = $("#logLines").value || 500;
     const data = await api(fileApi(`/api/logs/tail?file=${encodeURIComponent(file)}&lines=${encodeURIComponent(lines)}`, "logs", scope));
@@ -397,13 +407,23 @@ async function loadLog() {
     const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 35;
     output.textContent = data.content;
     if (atBottom || $("#logFollow").checked) output.scrollTop = output.scrollHeight;
-  } catch (error) { showError(error); }
+  } catch (error) {
+    if (scope !== $("#logScope").value || file !== $("#logFile").value) return;
+    $("#logOutput").textContent = error.message;
+    $("#logFollow").checked = false;
+    updateLogFollow();
+    showError(error);
+  } finally {
+    state.logBusy = false;
+    if (state.csrf && state.view === "logs"
+        && (scope !== $("#logScope").value || file !== $("#logFile").value)) loadLog();
+  }
 }
 
 function updateLogFollow() {
   clearInterval(state.logTimer);
   state.logTimer = null;
-  if ($("#logFollow").checked) state.logTimer = setInterval(loadLog, 3000);
+  if ($("#logFollow").checked && state.view === "logs") state.logTimer = setInterval(loadLog, 3000);
 }
 
 function dangerousCommand(command) {
@@ -463,6 +483,7 @@ async function restartMaster() {
 
 function selectView(name) {
   state.view = name;
+  updateLogFollow();
   clearTimeout(state.dashboardTimer);
   clearTimeout(state.dashboardCommandsTimer);
   clearTimeout(state.recoveryTimer);
