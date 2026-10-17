@@ -20,6 +20,20 @@
   --sidebar: #242b29;
 }
 
+#runtimeChart { display: block; width: 100%; height: 130px; background: #fff; border-bottom: 1px solid var(--line); }
+.chart-legend { display: flex; gap: 24px; margin: 10px 0 22px; font-size: 13px; }
+.chart-legend span:first-child { color: #13795b; }
+.chart-legend span:last-child { color: #1769aa; }
+.dashboard-output { background: #fff; color: var(--ink); padding: 16px; border: 1px solid var(--line); border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow: auto; font-size: 12px; line-height: 1.6; }
+.status-details { margin-top: 20px; }
+.status-details summary { cursor: pointer; font-weight: 650; }
+.dupe-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 14px 0; }
+#dupeRows td { overflow-wrap: anywhere; }
+#dupeRows input, #dupeSelectPage { width: 18px; height: 18px; min-height: 18px; }
+#configScope, #logScope { width: auto; max-width: 180px; }
+.metric strong { overflow-wrap: anywhere; }
+@media (max-width: 700px) { .view-header, .button-row, .log-controls { flex-wrap: wrap; } .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { min-height: 100%; margin: 0; }
@@ -287,6 +301,7 @@ tbody tr:last-child td { border-bottom: 0; }
 dialog { width: min(430px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 7px; padding: 20px; }
 dialog::backdrop { background: rgba(19, 25, 23, .55); }
 dialog h3 { margin-top: 0; }
+#confirmText { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 
 .recovery-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-bottom: 18px; }

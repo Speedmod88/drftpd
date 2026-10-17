@@ -191,6 +191,8 @@ final class WebAdminServer {
                 case "/api/session" -> session(exchange, session);
                 case "/api/logout" -> logout(exchange, session);
                 case "/api/overview" -> overview(exchange, session);
+                case "/api/file-scopes" -> fileScopes(exchange);
+                case "/api/dupe2" -> dupe2(exchange, session);
                 case "/api/timers" -> timers(exchange);
                 case "/api/config/files" -> configFiles(exchange);
                 case "/api/config/file" -> configFile(exchange, session);
@@ -213,6 +215,8 @@ final class WebAdminServer {
             logger.warn("WebAdmin request queue full: method={} path={} remote={}",
                     exchange.getRequestMethod(), requestPath, exchange.getRemoteAddress());
             sendError(exchange, 503, "The web administration queue is full");
+        } catch (IllegalArgumentException e) {
+            sendError(exchange, 400, e.getMessage());
         } catch (Exception e) {
             logger.error("Web administration request failed: {} {}", exchange.getRequestMethod(),
                     requestPath, e);
@@ -376,13 +380,14 @@ final class WebAdminServer {
                 }
                 try {
                     SlaveStatus status = slave.getSlaveStatus();
-                    item.put("freeBytes", status.getDiskSpaceAvailable());
+                    item.put("freeBytes", status.getDiskSpaceUsable());
+                    item.put("full", status.isDiskFull());
                     item.put("capacityBytes", status.getDiskSpaceCapacity());
                     item.put("uploadTransfers", status.getTransfersReceiving());
                     item.put("downloadTransfers", status.getTransfersSending());
                     item.put("uploadBytesPerSecond", status.getThroughputReceiving());
                     item.put("downloadBytesPerSecond", status.getThroughputSending());
-                    free += status.getDiskSpaceAvailable();
+                    free += status.getDiskSpaceUsable();
                     capacity += status.getDiskSpaceCapacity();
                 } catch (SlaveUnavailableException ignored) {
                     item.put("online", false);
@@ -406,7 +411,89 @@ final class WebAdminServer {
         response.put("capacityBytes", capacity);
         response.put("slaves", slaves);
         response.put("allowedCommands", settings.allowedCommands);
+        response.putAll(WebAdminMetrics.snapshot());
         sendJson(exchange, 200, response);
+    }
+
+    private void fileScopes(HttpExchange exchange) throws IOException {
+        requireMethod(exchange, "GET");
+        List<Map<String, Object>> scopes = new ArrayList<>();
+        scopes.add(Map.of("name", "master", "config", true, "logs", true));
+        settings.slaveFiles.forEach((name, roots) -> scopes.add(Map.of("name", name,
+                "config", roots.config() != null, "logs", roots.logs() != null)));
+        sendJson(exchange, 200, Map.of("scopes", scopes));
+    }
+
+    private Path fileRoot(HttpExchange exchange, boolean config) {
+        String scope = query(exchange.getRequestURI()).getOrDefault("scope", "master");
+        if (scope.equals("master")) return config ? settings.configRoot : settings.logsRoot;
+        WebAdminSettings.FileRoots roots = settings.slaveFiles.get(scope);
+        Path root = roots == null ? null : config ? roots.config() : roots.logs();
+        if (root == null) throw new ApiException(404, "Slave file scope is not configured");
+        return root;
+    }
+
+    private synchronized void dupe2(HttpExchange exchange, WebSessionToken session) throws IOException {
+        requireMethod(exchange, "POST");
+        DupePayload payload = readJson(exchange, DupePayload.class, MAX_COMMAND_BODY);
+        if (payload == null || !("scan".equals(payload.action) || "wipe".equals(payload.action))) {
+            throw new ApiException(400, "Expected scan or wipe action");
+        }
+        if (!settings.allowedCommands.contains("site dupe2")) throw new ApiException(403, "DUPE2 is disabled");
+        boolean scan = payload.action.equals("scan");
+        if (jobs.values().stream().anyMatch(job -> job.username.equals(session.username)
+                && job.command.startsWith("DUPE2 ") && (job.state.equals("queued") || job.state.equals("running")))) {
+            throw new ApiException(409, "A Dupe2 job is already running for this user");
+        }
+        List<String> selected = List.of();
+        if (scan) {
+            if (blank(payload.path)) throw new ApiException(400, "Directory path is required");
+            SrrdbRecovery.validatePath(payload.path);
+        } else {
+            if (!"wipe".equals(payload.confirm)) throw new ApiException(400, "Explicit wipe confirmation required");
+            if (!settings.allowedCommands.contains("site wipe")) throw new ApiException(403, "WIPE is disabled");
+            CommandJob source = payload.scanId == null ? null : jobs.get(payload.scanId);
+            if (source == null || !source.dupeScan || !source.username.equals(session.username)
+                    || !source.state.equals("completed")) throw new ApiException(409, "Completed scan not found; scan again");
+            selected = WebAdminDupe.selection(source.paths, payload.paths);
+        }
+        pruneJobs();
+        CommandJob job = new CommandJob(UUID.randomUUID().toString(), session.username,
+                scan ? "DUPE2 scan " + payload.path : "DUPE2 selected WIPE");
+        job.dupeScan = scan;
+        List<String> selection = selected;
+        jobs.put(job.id, job);
+        try {
+            commandExecutor.execute(() -> {
+                job.state = "running";
+                job.started = System.currentTimeMillis();
+                try {
+                    WebAdminDupe.user(job.username);
+                    if (scan) {
+                        job.paths = WebAdminDupe.scan(job.username, payload.path);
+                        job.addOutput("Found " + job.paths.size() + " eligible duplicate releases.");
+                    } else {
+                        for (String path : selection) {
+                            if (!WebAdminDupe.eligible(job.username, path)) {
+                                job.addOutput("SKIP: no longer an eligible duplicate: " + path);
+                                continue;
+                            }
+                            job.addOutput("WIPE: " + path);
+                            int code = executeCommand(job, new ResolvedCommand("site wipe", "-r " + path));
+                            if (code >= 400) throw new IOException("WIPE failed for " + path + "; remaining selections were not attempted");
+                        }
+                    }
+                    job.state = "completed";
+                } catch (Exception | LinkageError e) {
+                    job.state = "failed";
+                    job.error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                    logger.error("WebAdmin Dupe2 job failed for {}", job.username, e);
+                } finally {
+                    job.finished = System.currentTimeMillis();
+                }
+            });
+        } catch (RejectedExecutionException e) { jobs.remove(job.id); throw e; }
+        sendJson(exchange, 202, jobView(job));
     }
 
     private void timers(HttpExchange exchange) throws IOException {
@@ -432,20 +519,21 @@ final class WebAdminServer {
 
     private void configFiles(HttpExchange exchange) throws IOException {
         requireMethod(exchange, "GET");
+        Path configRoot = fileRoot(exchange, true);
         List<Map<String, Object>> files = new ArrayList<>();
-        try (Stream<Path> stream = Files.walk(settings.configRoot)) {
+        try (Stream<Path> stream = Files.walk(configRoot)) {
             stream.filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
                     .filter(path -> !Files.isSymbolicLink(path))
                     .filter(path -> {
                         String name = path.getFileName().toString();
                         return name.endsWith(".conf") || name.endsWith(".conf.dist");
                     })
-                    .filter(path -> !settings.configRoot.relativize(path).startsWith(".webadmin-backups"))
+                    .filter(path -> !configRoot.relativize(path).startsWith(".webadmin-backups"))
                     .sorted()
                     .forEach(path -> {
                         try {
                             Map<String, Object> item = new LinkedHashMap<>();
-                            item.put("path", portable(settings.configRoot.relativize(path)));
+                            item.put("path", portable(configRoot.relativize(path)));
                             item.put("size", Files.size(path));
                             item.put("modified", Files.getLastModifiedTime(path).toMillis());
                             files.add(item);
@@ -457,16 +545,17 @@ final class WebAdminServer {
         sendJson(exchange, 200, Map.of("files", files));
     }
 
-    private void configFile(HttpExchange exchange, WebSessionToken session) throws IOException {
+    private synchronized void configFile(HttpExchange exchange, WebSessionToken session) throws IOException {
+        Path configRoot = fileRoot(exchange, true);
         if ("GET".equals(exchange.getRequestMethod())) {
             String relative = requiredQuery(exchange.getRequestURI(), "path");
-            Path target = safeExistingFile(settings.configRoot, relative);
+            Path target = safeConfigFile(configRoot, relative);
             byte[] bytes = Files.readAllBytes(target);
             if (bytes.length > settings.maximumConfigBytes) {
                 throw new ApiException(413, "Configuration file is too large");
             }
             sendJson(exchange, 200, Map.of(
-                    "path", portable(settings.configRoot.relativize(target)),
+                    "path", portable(configRoot.relativize(target)),
                     "content", new String(bytes, StandardCharsets.UTF_8),
                     "version", digest(bytes),
                     "modified", Files.getLastModifiedTime(target).toMillis()));
@@ -478,7 +567,7 @@ final class WebAdminServer {
         if (payload == null || blank(payload.path) || payload.content == null || blank(payload.version)) {
             throw new ApiException(400, "path, content and version are required");
         }
-        Path target = safeExistingFile(settings.configRoot, payload.path);
+        Path target = safeConfigFile(configRoot, payload.path);
         byte[] existing = Files.readAllBytes(target);
         if (!MessageDigest.isEqual(digest(existing).getBytes(StandardCharsets.US_ASCII),
                 payload.version.getBytes(StandardCharsets.US_ASCII))) {
@@ -489,10 +578,10 @@ final class WebAdminServer {
             throw new ApiException(413, "Configuration file is too large");
         }
 
-        Path relative = settings.configRoot.relativize(target);
-        Path backup = settings.configRoot.resolve(".webadmin-backups")
+        Path relative = configRoot.relativize(target);
+        Path backup = configRoot.resolve(".webadmin-backups")
                 .resolve(BACKUP_FORMAT.format(Instant.now())).resolve(relative).normalize();
-        if (!backup.startsWith(settings.configRoot.resolve(".webadmin-backups"))) {
+        if (!backup.startsWith(configRoot.resolve(".webadmin-backups"))) {
             throw new ApiException(400, "Invalid configuration path");
         }
         Files.createDirectories(backup.getParent());
@@ -510,15 +599,16 @@ final class WebAdminServer {
             Files.deleteIfExists(temporary);
         }
         logger.info("Webadmin user [{}] updated config [{}]; backup [{}]",
-                session.username, portable(relative), portable(settings.configRoot.relativize(backup)));
+                session.username, target, backup);
         sendJson(exchange, 200, Map.of("path", portable(relative), "version", digest(updated),
                 "modified", Files.getLastModifiedTime(target).toMillis()));
     }
 
     private void logFiles(HttpExchange exchange) throws IOException {
         requireMethod(exchange, "GET");
+        Path logsRoot = fileRoot(exchange, false);
         List<Map<String, Object>> files = new ArrayList<>();
-        try (Stream<Path> stream = Files.walk(settings.logsRoot, 2)) {
+        try (Stream<Path> stream = Files.walk(logsRoot, 2)) {
             stream.filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
                     .filter(path -> !Files.isSymbolicLink(path))
                     .filter(path -> path.getFileName().toString().endsWith(".log"))
@@ -526,7 +616,7 @@ final class WebAdminServer {
                     .forEach(path -> {
                         try {
                             files.add(Map.of(
-                                    "path", portable(settings.logsRoot.relativize(path)),
+                                    "path", portable(logsRoot.relativize(path)),
                                     "size", Files.size(path),
                                     "modified", Files.getLastModifiedTime(path).toMillis()));
                         } catch (IOException e) {
@@ -540,6 +630,7 @@ final class WebAdminServer {
 
     private void logTail(HttpExchange exchange) throws IOException {
         requireMethod(exchange, "GET");
+        Path logsRoot = fileRoot(exchange, false);
         Map<String, String> query = query(exchange.getRequestURI());
         String relative = query.get("file");
         if (blank(relative)) {
@@ -554,9 +645,10 @@ final class WebAdminServer {
             }
         }
         lines = Math.max(1, Math.min(settings.maximumLogLines, lines));
-        Path target = safeExistingFile(settings.logsRoot, relative);
+        Path target = safeExistingFile(logsRoot, relative);
+        if (!target.getFileName().toString().endsWith(".log")) throw new ApiException(400, "Only log files are supported");
         sendJson(exchange, 200, Map.of(
-                "file", portable(settings.logsRoot.relativize(target)),
+                "file", portable(logsRoot.relativize(target)),
                 "content", tail(target, lines),
                 "modified", Files.getLastModifiedTime(target).toMillis()));
     }
@@ -589,6 +681,19 @@ final class WebAdminServer {
         job.state = "running";
         job.started = System.currentTimeMillis();
         try {
+            executeCommand(job, resolved);
+            job.state = "completed";
+        } catch (Throwable e) {
+            job.state = "failed";
+            job.error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            logger.error("Webadmin command failed for user [{}]: {}", job.username, job.command, e);
+        } finally {
+            job.finished = System.currentTimeMillis();
+        }
+    }
+
+    private int executeCommand(CommandJob job, ResolvedCommand resolved) throws Exception {
+            WebAdminDupe.user(job.username);
             HashMap<String, Properties> commands = GlobalContext.getConnectionManager().getCommands();
             Properties properties = commands.get(resolved.name);
             if (properties == null) {
@@ -603,15 +708,8 @@ final class WebAdminServer {
             if (response != null) {
                 session.printOutput(new FtpReply(response));
             }
-            job.state = "completed";
-            logger.info("Webadmin user [{}] ran command [{}]", job.username, job.command);
-        } catch (Throwable e) {
-            job.state = "failed";
-            job.error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            logger.error("Webadmin command failed for user [{}]: {}", job.username, job.command, e);
-        } finally {
-            job.finished = System.currentTimeMillis();
-        }
+            logger.info("Webadmin user [{}] ran command [{} {}]", job.username, resolved.name, resolved.argument);
+            return response == null ? 500 : response.getCode();
     }
 
     private void commandJob(HttpExchange exchange, WebSessionToken session, String id) throws IOException {
@@ -633,6 +731,8 @@ final class WebAdminServer {
         view.put("finished", job.finished);
         view.put("error", job.error);
         view.put("output", job.snapshotOutput());
+        view.put("paths", job.paths);
+        view.put("dupeScan", job.dupeScan);
         view.put("truncated", job.truncated);
         return view;
     }
@@ -710,6 +810,15 @@ final class WebAdminServer {
             exchange.sendResponseHeaders(200, content.length);
             exchange.getResponseBody().write(content);
         }
+    }
+
+    private Path safeConfigFile(Path root, String relative) {
+        Path file = safeExistingFile(root, relative);
+        String name = file.getFileName().toString();
+        if (!name.endsWith(".conf") && !name.endsWith(".conf.dist")) {
+            throw new ApiException(400, "Only .conf and .conf.dist files are supported");
+        }
+        return file;
     }
 
     private Path safeExistingFile(Path root, String relative) {
@@ -1018,6 +1127,8 @@ final class WebAdminServer {
         private volatile long finished;
         private volatile String error;
         private volatile boolean truncated;
+        private volatile boolean dupeScan;
+        private volatile List<String> paths = List.of();
 
         private CommandJob(String id, String username, String command) {
             this.id = id;
@@ -1053,6 +1164,14 @@ final class WebAdminServer {
 
     private static final class CommandPayload {
         private String command;
+    }
+
+    private static final class DupePayload {
+        private String action;
+        private String path;
+        private String scanId;
+        private List<String> paths;
+        private String confirm;
     }
 
     private static final class RestartPayload {

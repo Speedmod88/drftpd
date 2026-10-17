@@ -9,6 +9,16 @@ const state = {
   jobTimer: null,
   expiryTimer: null,
   recoveryTimer: null,
+  dashboardTimer: null,
+  dashboardCommandsTimer: null,
+  overviewBusy: false,
+  dashboardBusy: false,
+  samples: [],
+  dupeJob: null,
+  dupePaths: [],
+  dupeSelected: new Set(),
+  dupePage: 0,
+  dupeBusy: false,
   view: "overview"
 };
 
@@ -38,6 +48,11 @@ function showLogin(expired = false) {
   clearInterval(state.jobTimer);
   clearTimeout(state.expiryTimer);
   clearTimeout(state.recoveryTimer);
+  clearTimeout(state.dashboardTimer);
+  clearTimeout(state.dashboardCommandsTimer);
+  state.dupeJob = null;
+  state.dupePaths = [];
+  state.dupeSelected.clear();
   if ($("#confirmDialog").open) $("#confirmDialog").close("cancel");
   if (location.pathname === "/home") {
     location.replace(expired ? "/login?expired=1" : "/login");
@@ -57,6 +72,7 @@ function showApp(session) {
   clearTimeout(state.expiryTimer);
   state.expiryTimer = setTimeout(() => showLogin(true), Math.max(0, session.expiresAt - session.serverTime));
   selectView("overview");
+  loadFileScopes();
 }
 
 function toast(message) {
@@ -126,6 +142,9 @@ function stateBadge(text, kind) {
 }
 
 async function loadOverview() {
+  clearTimeout(state.dashboardTimer);
+  if (state.overviewBusy || !state.csrf) return;
+  state.overviewBusy = true;
   try {
     const data = await api("/api/overview");
     $("#metricSlaves").textContent = `${data.onlineSlaves} / ${data.totalSlaves}`;
@@ -134,6 +153,16 @@ async function loadOverview() {
     $("#metricHeap").textContent = `${formatBytes(data.heapUsedBytes)} / ${formatBytes(data.heapMaximumBytes)}`;
     $("#metricCpu").textContent = data.processors;
     $("#metricUptime").textContent = formatDuration(data.uptimeMillis);
+    const percent = value => Number.isFinite(value) && value >= 0 ? (value * 100).toFixed(1) + "%" : "-";
+    $("#metricCpuUsage").textContent = percent(data.systemCpu) + " / " + percent(data.processCpu);
+    $("#metricRam").textContent = data.memoryTotalBytes >= 0
+      ? formatBytes(data.memoryTotalBytes - data.memoryFreeBytes) + " / " + formatBytes(data.memoryTotalBytes) : "-";
+    $("#metricLoad").textContent = (data.loadAverages || []).map(v => v < 0 ? "-" : v.toFixed(2)).join(" / ");
+    $("#metricThreads").textContent = data.threads;
+    $("#dashboardUpdated").textContent = "Updated " + new Date(data.sampledAt).toLocaleTimeString();
+    state.samples.push([data.systemCpu, data.heapUsedBytes / data.heapMaximumBytes]);
+    if (state.samples.length > 60) state.samples.shift();
+    drawRuntimeChart();
     $("#slaveCount").textContent = `${data.slaves.length} configured`;
     const body = $("#slaveRows");
     body.replaceChildren();
@@ -142,7 +171,7 @@ async function loadOverview() {
       row.append(td(slave.name));
       const statusCell = document.createElement("td");
       const kind = !slave.online ? "offline" : slave.remerging ? "remerging" : "online";
-      const label = !slave.online ? "Offline" : slave.remerging ? "Remerging" : "Online";
+      const label = (!slave.online ? "Offline" : slave.remerging ? "Remerging" : "Online") + (slave.full ? " FULL" : "");
       statusCell.append(stateBadge(label, kind));
       row.append(statusCell);
       row.append(td(slave.online ? `${slave.uploadTransfers || 0} up / ${slave.downloadTransfers || 0} down` : "-"));
@@ -154,6 +183,88 @@ async function loadOverview() {
       body.append(row);
     }
   } catch (error) { showError(error); }
+  finally {
+    state.overviewBusy = false;
+    if (state.csrf && state.view === "overview") state.dashboardTimer = setTimeout(loadOverview, 5000);
+  }
+}
+
+function drawRuntimeChart() {
+  const canvas = $("#runtimeChart");
+  const width = Math.max(1, canvas.clientWidth);
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = width * ratio;
+  canvas.height = 130 * ratio;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(ratio, ratio);
+  ctx.strokeStyle = "#d8ddda";
+  for (const y of [10, 65, 120]) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
+  ["#13795b", "#1769aa"].forEach((color, series) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    let drawing = false;
+    state.samples.forEach((sample, i) => {
+      if (!Number.isFinite(sample[series]) || sample[series] < 0) { drawing = false; return; }
+      const x = i * width / 59;
+      const y = 120 - Math.max(0, Math.min(1, sample[series])) * 110;
+      if (drawing) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+      drawing = true;
+    });
+    ctx.stroke();
+  });
+}
+
+async function waitForJob(id, update) {
+  const token = state.csrf;
+  while (token && state.csrf === token) {
+    const job = await api("/api/jobs/" + encodeURIComponent(id));
+    if (state.csrf !== token) throw new Error("Session ended");
+    update(job);
+    if (job.state === "completed" || job.state === "failed") return job;
+    await new Promise(resolve => setTimeout(resolve, 1200));
+  }
+  throw new Error("Session ended");
+}
+
+async function loadDashboardCommands() {
+  clearTimeout(state.dashboardCommandsTimer);
+  if (state.dashboardBusy || !state.csrf) return;
+  state.dashboardBusy = true;
+  try {
+    for (const [command, target] of [["SITE SWHO", "#dashboardWho"], ["SITE STATUS ALL", "#dashboardStatus"]]) {
+      try {
+        const job = await api("/api/commands", {method: "POST", body: JSON.stringify({command})});
+        await waitForJob(job.id, result => {
+          $(target).textContent = (result.output || []).join("\n") + (result.error ? "\n" + result.error : "");
+        });
+      } catch (error) { $(target).textContent = error.message; }
+      if (!state.csrf) break;
+    }
+  } finally {
+    state.dashboardBusy = false;
+    if (state.csrf && state.view === "overview") state.dashboardCommandsTimer = setTimeout(loadDashboardCommands, 30000);
+  }
+}
+
+async function loadFileScopes() {
+  try {
+    const data = await api("/api/file-scopes");
+    for (const [target, kind] of [["#configScope", "config"], ["#logScope", "logs"]]) {
+      $(target).replaceChildren();
+      data.scopes.filter(scope => scope[kind]).forEach(scope => {
+        const option = document.createElement("option");
+        option.value = scope.name;
+        option.textContent = scope.name === "master" ? "Master" : scope.name;
+        $(target).append(option);
+      });
+    }
+  } catch (error) { showError(error); }
+}
+
+function fileApi(path, kind, selectedScope) {
+  const scope = selectedScope || $(kind === "config" ? "#configScope" : "#logScope").value;
+  return path + (path.includes("?") ? "&" : "?") + "scope=" + encodeURIComponent(scope);
 }
 
 async function loadTimers() {
@@ -185,8 +296,10 @@ async function loadTimers() {
 }
 
 async function loadConfigFiles() {
+  const scope = $("#configScope").value;
   try {
-    const data = await api("/api/config/files");
+    const data = await api(fileApi("/api/config/files", "config", scope));
+    if (scope !== $("#configScope").value) return;
     state.configFiles = data.files;
     renderConfigFiles();
   } catch (error) { showError(error); }
@@ -209,9 +322,11 @@ function renderConfigFiles() {
 }
 
 async function openConfig(path) {
+  const scope = $("#configScope").value;
   try {
-    const data = await api(`/api/config/file?path=${encodeURIComponent(path)}`);
-    state.config = data;
+    const data = await api(fileApi(`/api/config/file?path=${encodeURIComponent(path)}`, "config", scope));
+    if (scope !== $("#configScope").value) return;
+    state.config = { ...data, scope };
     $("#configPath").textContent = data.path;
     $("#configModified").textContent = formatTime(data.modified);
     $("#configEditor").disabled = false;
@@ -225,19 +340,22 @@ async function openConfig(path) {
 async function saveConfig() {
   if (!state.config) return;
   try {
-    const response = await api("/api/config/file", {
+    const config = state.config;
+    const content = $("#configEditor").value;
+    const response = await api(fileApi("/api/config/file", "config", config.scope), {
       method: "PUT",
       body: JSON.stringify({
         path: state.config.path,
-        content: $("#configEditor").value,
+        content,
         version: state.config.version
       })
     });
+    if (state.config !== config) return;
     state.config.version = response.version;
     state.config.modified = response.modified;
-    state.config.content = $("#configEditor").value;
+    state.config.content = content;
     $("#configModified").textContent = formatTime(response.modified);
-    $("#saveConfig").disabled = true;
+    $("#saveConfig").disabled = $("#configEditor").value === content;
     $("#configStatus").textContent = "Saved. A timestamped backup was created.";
     toast("Configuration saved");
   } catch (error) {
@@ -247,8 +365,10 @@ async function saveConfig() {
 }
 
 async function loadLogFiles() {
+  const scope = $("#logScope").value;
   try {
-    const data = await api("/api/logs/files");
+    const data = await api(fileApi("/api/logs/files", "logs", scope));
+    if (scope !== $("#logScope").value) return;
     $("#logLines").max = data.maximumLines;
     $("#logLines").value = data.defaultLines;
     const select = $("#logFile");
@@ -266,11 +386,13 @@ async function loadLogFiles() {
 }
 
 async function loadLog() {
+  const scope = $("#logScope").value;
   const file = $("#logFile").value;
   if (!file) return;
   try {
     const lines = $("#logLines").value || 500;
-    const data = await api(`/api/logs/tail?file=${encodeURIComponent(file)}&lines=${encodeURIComponent(lines)}`);
+    const data = await api(fileApi(`/api/logs/tail?file=${encodeURIComponent(file)}&lines=${encodeURIComponent(lines)}`, "logs", scope));
+    if (scope !== $("#logScope").value || file !== $("#logFile").value) return;
     const output = $("#logOutput");
     const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 35;
     output.textContent = data.content;
@@ -341,16 +463,121 @@ async function restartMaster() {
 
 function selectView(name) {
   state.view = name;
+  clearTimeout(state.dashboardTimer);
+  clearTimeout(state.dashboardCommandsTimer);
   clearTimeout(state.recoveryTimer);
   $$(".nav-item").forEach(button => button.classList.toggle("active", button.dataset.view === name));
   $$(".view").forEach(view => view.classList.toggle("active", view.id === `view-${name}`));
   $("#sidebar").classList.remove("open");
-  if (name === "overview") loadOverview();
+  if (name === "overview") { loadOverview(); loadDashboardCommands(); }
+  if (name === "dupe2") renderDupes();
   if (name === "timers") loadTimers();
   if (name === "config" && state.configFiles.length === 0) loadConfigFiles();
   if (name === "logs" && $("#logFile").options.length === 0) loadLogFiles();
   if (name === "srrdb") loadRecovery();
 }
+
+function renderDupes() {
+  const pageSize = 100;
+  const pages = Math.max(1, Math.ceil(state.dupePaths.length / pageSize));
+  state.dupePage = Math.min(state.dupePage, pages - 1);
+  const visible = state.dupePaths.slice(state.dupePage * pageSize, (state.dupePage + 1) * pageSize);
+  const body = $("#dupeRows");
+  body.replaceChildren();
+  for (const path of visible) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.dupeSelected.has(path);
+    checkbox.disabled = state.dupeBusy;
+    checkbox.setAttribute("aria-label", "Select " + path);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked && state.dupeSelected.size >= 100) {
+        checkbox.checked = false;
+        toast("Maximum 100 selected releases per deletion.");
+        return;
+      }
+      if (checkbox.checked) state.dupeSelected.add(path); else state.dupeSelected.delete(path);
+      renderDupes();
+    });
+    cell.append(checkbox);
+    row.append(cell, td(path));
+    body.append(row);
+  }
+  $("#dupePage").textContent = "Page " + (state.dupePage + 1) + " / " + pages + " - " + state.dupePaths.length + " results";
+  $("#dupePrevious").disabled = state.dupePage === 0 || state.dupeBusy;
+  $("#dupeNext").disabled = state.dupePage + 1 >= pages || state.dupeBusy;
+  $("#dupeSelectPage").disabled = !visible.length || state.dupeBusy;
+  $("#dupeSelectPage").checked = visible.length > 0 && visible.every(path => state.dupeSelected.has(path));
+  $("#deleteDupes").disabled = state.dupeBusy || !state.dupeSelected.size;
+  $("#deleteDupes").textContent = "Delete selected (" + state.dupeSelected.size + ")";
+  $("#scanDupe").disabled = state.dupeBusy;
+}
+
+async function submitDupe(payload) {
+  state.dupeBusy = true;
+  renderDupes();
+  $("#dupeStatus").textContent = "Submitting";
+  $("#dupeOutput").textContent = "";
+  try {
+    const job = await api("/api/dupe2", {method: "POST", body: JSON.stringify(payload)});
+    const result = await waitForJob(job.id, current => {
+      $("#dupeStatus").textContent = current.state;
+      $("#dupeOutput").textContent = (current.output || []).join("\n") + (current.error ? "\n" + current.error : "");
+    });
+    if (payload.action === "scan" && result.state === "completed") {
+      state.dupeJob = result.id;
+      state.dupePaths = result.paths || [];
+      $("#dupeStatus").textContent = state.dupePaths.length + " eligible duplicate releases";
+    }
+    if (payload.action === "wipe") {
+      // Even partial failures invalidate the review; never repeat a destructive job automatically.
+      state.dupeJob = null;
+      state.dupePaths = [];
+      state.dupeSelected.clear();
+    }
+  } catch (error) {
+    $("#dupeStatus").textContent = error.message;
+    if (payload.action === "wipe") {
+      state.dupeJob = null;
+      state.dupePaths = [];
+      state.dupeSelected.clear();
+    }
+    showError(error);
+  } finally {
+    state.dupeBusy = false;
+    renderDupes();
+  }
+}
+
+$("#dupeForm").addEventListener("submit", event => {
+  event.preventDefault();
+  state.dupeJob = null;
+  state.dupePaths = [];
+  state.dupeSelected.clear();
+  state.dupePage = 0;
+  submitDupe({action: "scan", path: $("#dupePath").value.trim().replace(/\/+$/, "") || "/"});
+});
+$("#dupeSelectPage").addEventListener("change", () => {
+  const visible = state.dupePaths.slice(state.dupePage * 100, (state.dupePage + 1) * 100);
+  if ($("#dupeSelectPage").checked) {
+    for (const path of visible) {
+      if (state.dupeSelected.size >= 100) break;
+      state.dupeSelected.add(path);
+    }
+  } else { visible.forEach(path => state.dupeSelected.delete(path)); }
+  renderDupes();
+});
+$("#dupePrevious").addEventListener("click", () => { state.dupePage--; renderDupes(); });
+$("#dupeNext").addEventListener("click", () => { state.dupePage++; renderDupes(); });
+$("#deleteDupes").addEventListener("click", async () => {
+  const paths = Array.from(state.dupeSelected);
+  if (!paths.length || state.dupeBusy || !state.dupeJob) return;
+  if (!await confirmAction("Permanently wipe " + paths.length + " releases?",
+    paths.join("\n") + "\n\nThis deletes the selected releases recursively.")) return;
+  await submitDupe({action: "wipe", scanId: state.dupeJob, paths, confirm: "wipe"});
+});
 
 function renderRecovery(data) {
   const busy = data.scanState === "queued" || data.scanState === "running";
@@ -474,6 +701,18 @@ $("#logoutButton").addEventListener("click", async () => {
 $$(".nav-item").forEach(button => button.addEventListener("click", () => selectView(button.dataset.view)));
 $("#menuButton").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
 $("#refreshOverview").addEventListener("click", loadOverview);
+$("#refreshDashboardCommands").addEventListener("click", loadDashboardCommands);
+$("#configScope").addEventListener("change", () => {
+  state.config = null;
+  state.configFiles = [];
+  $("#configEditor").value = "";
+  $("#configEditor").disabled = true;
+  $("#saveConfig").disabled = true;
+  $("#configPath").textContent = "Select a file";
+  $("#reloadMasterConfig").disabled = $("#configScope").value !== "master";
+  loadConfigFiles();
+});
+$("#logScope").addEventListener("change", () => { $("#logOutput").textContent = ""; loadLogFiles(); });
 $("#refreshTimers").addEventListener("click", loadTimers);
 $("#reloadConfigList").addEventListener("click", loadConfigFiles);
 $("#configFilter").addEventListener("input", renderConfigFiles);
