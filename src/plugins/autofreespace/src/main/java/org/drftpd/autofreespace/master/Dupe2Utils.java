@@ -86,6 +86,38 @@ public final class Dupe2Utils {
         return loserPaths;
     }
 
+    public record ReviewResult(String path, String key, String status, int score, boolean eligible) { }
+
+    public static List<ReviewResult> reviewDuplicates(Collection<String> paths, int groupLimit)
+            throws IndexException {
+        if (groupLimit < 1 || groupLimit > 1000) throw new IllegalArgumentException("Limit must be between 1 and 1000");
+        Map<String, List<DupeCandidate>> selected = getSelectedCandidatesByKey(paths, null, true);
+        Map<String, List<DupeCandidate>> all = getIndexedCandidatesForKeys(selected.keySet());
+        Set<String> selectedPaths = getCandidatePaths(selected);
+        List<ReviewResult> results = new ArrayList<>();
+        int groups = 0;
+        for (String key : selected.keySet().stream().sorted().toList()) {
+            List<DupeCandidate> candidates = all.getOrDefault(key, Collections.emptyList());
+            if (candidates.size() < 2) continue;
+            Set<String> keepers = getCandidatePaths(getDupeKeepers(getCompletedCandidates(candidates)));
+            for (DupeCandidate candidate : candidates.stream()
+                    .sorted(java.util.Comparator.comparing(c -> c.getDirectory().getPath())).toList()) {
+                String path = candidate.getDirectory().getPath();
+                String status = reviewStatus(candidate.getStatus(), keepers.contains(path));
+                results.add(new ReviewResult(path, key, status, candidate.getScore(),
+                        status.equals("Can delete") && selectedPaths.contains(path)));
+            }
+            if (++groups >= groupLimit) break;
+        }
+        return results;
+    }
+
+    static String reviewStatus(String completion, boolean keeper) {
+        if (completion.equals("unknown")) return "UNKNOWN";
+        if (!completion.equals("completed")) return "NOT COMPLETED";
+        return keeper ? "KEEP" : "Can delete";
+    }
+
     public static Set<String> getTaggedDupePaths(Collection<String> candidateIndexedPaths, String requiredText,
                                                  Collection<String> replacementTexts)
             throws IndexException {
@@ -180,6 +212,11 @@ public final class Dupe2Utils {
 
     private static Map<String, List<DupeCandidate>> getSelectedCandidatesByKey(Collection<String> candidateIndexedPaths,
                                                                                String requiredText) {
+        return getSelectedCandidatesByKey(candidateIndexedPaths, requiredText, false);
+    }
+
+    private static Map<String, List<DupeCandidate>> getSelectedCandidatesByKey(Collection<String> candidateIndexedPaths,
+                                                                               String requiredText, boolean includeIncomplete) {
         Map<String, List<DupeCandidate>> selectedCandidatesByKey = new HashMap<>();
         Map<String, Set<String>> releaseParentPathCache = new HashMap<>();
         Set<String> seenPaths = new HashSet<>();
@@ -198,7 +235,7 @@ public final class Dupe2Utils {
                 continue;
             }
             DupeCandidate candidate = makeDupeCandidate(directory, section.getName(), true);
-            if (candidate == null || !candidate.isComplete()) {
+            if (candidate == null || (!includeIncomplete && !candidate.isComplete())) {
                 continue;
             }
             selectedCandidatesByKey.computeIfAbsent(candidate.getKey(), k -> new ArrayList<>()).add(candidate);
