@@ -18,13 +18,12 @@
 package org.drftpd.archive.master.archivetypes;
 
 import org.drftpd.archive.master.Archive;
-import org.drftpd.master.GlobalContext;
 import org.drftpd.master.sections.SectionInterface;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.vfs.DirectoryHandle;
 
 import java.io.FileNotFoundException;
-import java.util.HashSet;
+import java.util.Collections;
 import java.util.Properties;
 import java.util.Set;
 
@@ -53,17 +52,7 @@ public class MoveReleaseToMostFreeSlaves extends ArchiveType {
      */
     @Override
     public Set<RemoteSlave> findDestinationSlaves() {
-        HashSet<RemoteSlave> destSlaves = new HashSet<>();
-        for (RemoteSlave freeslave : GlobalContext.getGlobalContext().getSlaveManager().findSlavesBySpace(_numOfSlaves, new HashSet<>(), false)) {
-            for (RemoteSlave confslave : _slaveList) {
-                if (freeslave.getName().equals(confslave.getName())) {
-                    destSlaves.add(confslave);
-                    break;
-                }
-            }
-        }
-
-        return destSlaves;
+        return ArchiveDestinationSelection.mostFree(_slaveList, Collections.emptySet(), _numOfSlaves);
     }
 
     /*

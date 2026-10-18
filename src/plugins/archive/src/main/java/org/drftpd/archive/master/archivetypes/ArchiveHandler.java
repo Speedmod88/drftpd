@@ -136,13 +136,15 @@ public class ArchiveHandler implements Runnable {
                 if (!_archiveType.moveReleaseOnly()) {
                     Set<RemoteSlave> destSlaves = _archiveType.findDestinationSlaves();
 
-                    if (destSlaves == null) {
+                    if (destSlaves == null || destSlaves.isEmpty() || destSlaves.size() < _archiveType._numOfSlaves) {
                         _archiveType.setDirectory(null);
-                        logger.warn("Unable to allocate destination Slaves, nothing we can do.");
+                        logger.warn("Archive rule {} section {}: insufficient destination slaves (available={}, required={}); retry next cycle",
+                                _archiveType.getConfNum(), _archiveType.getSection().getName(),
+                                destSlaves == null ? 0 : destSlaves.size(), _archiveType._numOfSlaves);
                         break; // no available slaves to use
                     }
 
-                    _jobs = _archiveType.send();
+                    _jobs = _archiveType.send(destSlaves);
                 }
 
                 GlobalContext.getEventService().publish(new ArchiveStartEvent(_archiveType, _jobs));
