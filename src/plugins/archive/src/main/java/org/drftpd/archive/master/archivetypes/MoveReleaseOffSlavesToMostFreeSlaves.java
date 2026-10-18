@@ -75,7 +75,7 @@ public class MoveReleaseOffSlavesToMostFreeSlaves extends ArchiveType {
             String slavename = null;
 
             try {
-                slavename = PropertyHelper.getProperty(props, confnum + ".offofslave." + i);
+                slavename = PropertyHelper.getProperty(props, confnum + ".offofslave." + i).trim();
             } catch (NullPointerException e) {
                 break; // done
             }
@@ -84,9 +84,11 @@ public class MoveReleaseOffSlavesToMostFreeSlaves extends ArchiveType {
                 RemoteSlave rslave = GlobalContext.getGlobalContext().getSlaveManager().getRemoteSlave(slavename);
                 if (!_slaveList.contains(rslave)) {
                     offOfSlaves.add(rslave);
+                } else {
+                    logger.warn("Archive rule {} ignores source slave {} because it is also a destination", confnum, slavename);
                 }
             } catch (ObjectNotFoundException e) {
-                // slave not found
+                logger.warn("Archive rule {} references unknown source slave [{}] in offofslave.{}", confnum, slavename, i);
             }
         }
         return offOfSlaves;
@@ -98,17 +100,7 @@ public class MoveReleaseOffSlavesToMostFreeSlaves extends ArchiveType {
      */
     @Override
     public Set<RemoteSlave> findDestinationSlaves() {
-        HashSet<RemoteSlave> destSlaves = new HashSet<>();
-        for (RemoteSlave freeslave : GlobalContext.getGlobalContext().getSlaveManager().findSlavesBySpace(_numOfSlaves, _offOfSlaves, false)) {
-            for (RemoteSlave confslave : _slaveList) {
-                if (freeslave.getName().equals(confslave.getName())) {
-                    destSlaves.add(confslave);
-                    break;
-                }
-            }
-        }
-
-        return destSlaves;
+        return ArchiveDestinationSelection.mostFree(_slaveList, _offOfSlaves, _numOfSlaves);
     }
 
     /*

@@ -438,7 +438,14 @@ public abstract class ArchiveType {
      * @throws FileNotFoundException If the requested directory is not found
      */
     public ArrayList<Job> send() throws FileNotFoundException {
-        ArrayList<Job> jobs = recursiveSend(getDirectory());
+        return send(findDestinationSlaves());
+    }
+
+    public ArrayList<Job> send(Set<RemoteSlave> destinations) throws FileNotFoundException {
+        if (destinations == null || destinations.isEmpty() || destinations.size() < _numOfSlaves) {
+            throw new IllegalStateException("Insufficient archive destination slaves for rule " + _confNum);
+        }
+        ArrayList<Job> jobs = recursiveSend(getDirectory(), new HashSet<>(destinations));
         JobManager jm = getJobManager();
         jm.addJobsToQueue(jobs);
         return jobs;
@@ -448,14 +455,18 @@ public abstract class ArchiveType {
      * Adds the files in the directory (and subdirs) to the job manager to be archived
      */
     protected ArrayList<Job> recursiveSend(DirectoryHandle lrf) throws FileNotFoundException {
+        return recursiveSend(lrf, findDestinationSlaves());
+    }
+
+    private ArrayList<Job> recursiveSend(DirectoryHandle lrf, Set<RemoteSlave> destinations) throws FileNotFoundException {
         ArrayList<Job> jobQueue = new ArrayList<>();
 
         for (DirectoryHandle directoryHandle : lrf.getDirectoriesUnchecked()) {
-            jobQueue.addAll(recursiveSend(directoryHandle));
+            jobQueue.addAll(recursiveSend(directoryHandle, destinations));
         }
         for (FileHandle file : lrf.getFilesUnchecked()) {
             logger.info("Adding {} to the job queue", file.getPath());
-            Job job = new Job(file, _priority, _numOfSlaves, findDestinationSlaves());
+            Job job = new Job(file, _priority, _numOfSlaves, new HashSet<>(destinations));
             jobQueue.add(job);
         }
 
