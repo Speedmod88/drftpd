@@ -90,22 +90,41 @@ public final class Dupe2Utils {
 
     public static List<ReviewResult> reviewDuplicates(Collection<String> paths, int groupLimit)
             throws IndexException {
+        return reviewDuplicates(paths, groupLimit, false);
+    }
+
+    public static List<ReviewResult> reviewDuplicates(Collection<String> paths, int groupLimit, boolean includeSingle)
+            throws IndexException {
         if (groupLimit < 1 || groupLimit > 1000) throw new IllegalArgumentException("Limit must be between 1 and 1000");
         Map<String, List<DupeCandidate>> selected = getSelectedCandidatesByKey(paths, null, true);
-        Map<String, List<DupeCandidate>> all = getIndexedCandidatesForKeys(selected.keySet());
-        Set<String> selectedPaths = getCandidatePaths(selected);
+        return reviewKeys(selected.keySet(), groupLimit, includeSingle);
+    }
+
+    public static List<ReviewResult> reviewRelease(String release, int groupLimit) throws IndexException {
+        String key = makeDupeKey(release);
+        if (key == null || key.isBlank()) throw new IllegalArgumentException("Unable to build release key");
+        return reviewKeys(Set.of(key), groupLimit, true);
+    }
+
+    private static List<ReviewResult> reviewKeys(Set<String> keys, int groupLimit) throws IndexException {
+        return reviewKeys(keys, groupLimit, false);
+    }
+
+    private static List<ReviewResult> reviewKeys(Set<String> keys, int groupLimit, boolean includeSingle) throws IndexException {
+        if (groupLimit < 1 || groupLimit > 1000) throw new IllegalArgumentException("Limit must be between 1 and 1000");
+        Map<String, List<DupeCandidate>> all = getIndexedCandidatesForKeys(keys);
         List<ReviewResult> results = new ArrayList<>();
         int groups = 0;
-        for (String key : selected.keySet().stream().sorted().toList()) {
+        for (String key : keys.stream().sorted().toList()) {
             List<DupeCandidate> candidates = all.getOrDefault(key, Collections.emptyList());
-            if (candidates.size() < 2) continue;
+            if (candidates.isEmpty() || (!includeSingle && candidates.size() < 2)) continue;
             Set<String> keepers = getCandidatePaths(getDupeKeepers(getCompletedCandidates(candidates)));
             for (DupeCandidate candidate : candidates.stream()
                     .sorted(java.util.Comparator.comparing(c -> c.getDirectory().getPath())).toList()) {
                 String path = candidate.getDirectory().getPath();
                 String status = reviewStatus(candidate.getStatus(), keepers.contains(path));
                 results.add(new ReviewResult(path, key, status, candidate.getScore(),
-                        status.equals("Can delete") && selectedPaths.contains(path)));
+                        status.equals("Can delete")));
             }
             if (++groups >= groupLimit) break;
         }
