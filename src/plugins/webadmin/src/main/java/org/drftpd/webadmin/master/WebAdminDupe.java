@@ -43,6 +43,14 @@ final class WebAdminDupe {
 
     static List<Dupe2Utils.ReviewResult> scan(String username, String path, int limit) throws Exception {
         User user = user(username);
+        if (!path.startsWith("/")) {
+            List<Dupe2Utils.ReviewResult> visible = new ArrayList<>();
+            for (var result : Dupe2Utils.reviewRelease(path, limit)) {
+                try { directory(user, result.path()); visible.add(result); }
+                catch (IOException ignored) { }
+            }
+            return visible;
+        }
         DirectoryHandle root = directory(user, path);
         AdvancedSearchParams params = new AdvancedSearchParams();
         params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
@@ -69,6 +77,38 @@ final class WebAdminDupe {
     static boolean eligible(String username, String path) throws Exception {
         directory(user(username), path);
         return Dupe2Utils.getDupeLoserPaths(List.of(path)).contains(path);
+    }
+
+    static void checkWipe(String username, String path) throws Exception {
+        DirectoryHandle root = directory(user(username), path);
+        if (root.isRoot()) throw new IOException("Root cannot be wiped");
+        for (var section : GlobalContext.getGlobalContext().getSectionManager().getSections()) {
+            if (section.getBaseDirectory().equals(root)) throw new IOException("Section roots cannot be wiped");
+        }
+        java.util.ArrayDeque<DirectoryHandle> pending = new java.util.ArrayDeque<>();
+        pending.add(root);
+        while (!pending.isEmpty()) {
+            user(username);
+            for (var inode : pending.removeFirst().getInodeHandlesUnchecked()) {
+                if (inode.isLink()) throw new IOException("Selection contains a symlink");
+                if (inode instanceof org.drftpd.master.vfs.FileHandle file && file.isTransferring())
+                    throw new IOException("Selection contains an active transfer");
+                if (inode instanceof DirectoryHandle dir) pending.add(dir);
+            }
+        }
+    }
+
+    static List<java.util.Map<String, String>> sections(String username) throws Exception {
+        User user = user(username);
+        List<java.util.Map<String, String>> result = new ArrayList<>();
+        for (var section : GlobalContext.getGlobalContext().getSectionManager().getSections()) {
+            try {
+                String path = directory(user, section.getBaseDirectory().getPath()).getPath();
+                result.add(java.util.Map.of("name", section.getName(), "path", path));
+            } catch (IOException ignored) { }
+        }
+        result.sort(java.util.Comparator.comparing(item -> item.get("name")));
+        return result;
     }
 
     static List<String> selection(Collection<String> offered, List<String> selected) {

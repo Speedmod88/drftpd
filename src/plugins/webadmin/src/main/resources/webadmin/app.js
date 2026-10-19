@@ -491,7 +491,7 @@ function selectView(name) {
   $$(".view").forEach(view => view.classList.toggle("active", view.id === `view-${name}`));
   $("#sidebar").classList.remove("open");
   if (name === "overview") { loadOverview(); loadDashboardCommands(); }
-  if (name === "dupe2") renderDupes();
+  if (name === "dupe2") { renderDupes(); loadDupeSections(); }
   if (name === "archive") loadArchiveRules();
   if (name === "timers") loadTimers();
   if (name === "config" && state.configFiles.length === 0) loadConfigFiles();
@@ -539,21 +539,48 @@ $("#archiveForm").addEventListener("submit", async event => {
   finally { $("#archivePreview").disabled = false; }
 });
 
+async function loadDupeSections() {
+  try {
+    const sections = await api("/api/dupe2/sections");
+    const select = $("#dupeSection"), previous = select.value;
+    select.replaceChildren(new Option("Choose a section", ""));
+    sections.forEach(section => select.append(new Option(section.name + " - " + section.path, section.path)));
+    select.value = previous;
+  } catch (error) { showError(error); }
+}
+
+function dupeGroups() {
+  return Array.from(new Set(state.dupePaths.map(item => item.key)));
+}
+function visibleDupes() {
+  const keys = new Set(dupeGroups().slice(state.dupePage * 10, (state.dupePage + 1) * 10));
+  return state.dupePaths.filter(item => keys.has(item.key));
+}
+
 function renderDupes() {
-  const pageSize = 100;
-  const pages = Math.max(1, Math.ceil(state.dupePaths.length / pageSize));
+  const pages = Math.max(1, Math.ceil(dupeGroups().length / 10));
   state.dupePage = Math.min(state.dupePage, pages - 1);
-  const visible = state.dupePaths.slice(state.dupePage * pageSize, (state.dupePage + 1) * pageSize);
+  const visible = visibleDupes();
   const body = $("#dupeRows");
   body.replaceChildren();
+  let previousKey;
   for (const item of visible) {
+    if (item.key !== previousKey) {
+      const heading = document.createElement("tr");
+      heading.className = "dupe-group";
+      const label = td(item.key);
+      label.colSpan = 4;
+      heading.append(label);
+      body.append(heading);
+      previousKey = item.key;
+    }
     const path = item.path;
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = state.dupeSelected.has(path);
-    checkbox.disabled = state.dupeBusy || !item.eligible;
+    checkbox.disabled = state.dupeBusy;
     checkbox.setAttribute("aria-label", "Select " + path);
     checkbox.addEventListener("change", () => {
       if (checkbox.checked && state.dupeSelected.size >= 100) {
@@ -580,6 +607,7 @@ function renderDupes() {
   $("#deleteDupes").disabled = state.dupeBusy || !state.dupeSelected.size;
   $("#deleteDupes").textContent = "Delete selected (" + state.dupeSelected.size + ")";
   $("#scanDupe").disabled = state.dupeBusy;
+  $("#verifyDupes").disabled = state.dupeBusy || !state.dupePaths.some(item => item.status === "UNKNOWN" && state.dupeSelected.has(item.path));
 }
 
 async function submitDupe(payload) {
@@ -593,11 +621,13 @@ async function submitDupe(payload) {
       $("#dupeStatus").textContent = current.state;
       $("#dupeOutput").textContent = (current.output || []).join("\n") + (current.error ? "\n" + current.error : "");
     });
-    if (payload.action === "scan" && result.state === "completed") {
+    if ((payload.action === "scan" || payload.action === "verify") && result.state === "completed") {
       state.dupeJob = result.id;
       state.dupePaths = result.dupeResults || [];
       $("#dupeStatus").textContent = state.dupePaths.length + " releases; "
-        + (result.paths || []).length + " eligible for deletion";
+        + dupeGroups().length + " duplicate groups";
+      state.dupeSelected.clear();
+      state.dupePage = 0;
     }
     if (payload.action === "wipe") {
       // Even partial failures invalidate the review; never repeat a destructive job automatically.
@@ -625,11 +655,13 @@ $("#dupeForm").addEventListener("submit", event => {
   state.dupePaths = [];
   state.dupeSelected.clear();
   state.dupePage = 0;
-  submitDupe({action: "scan", path: $("#dupePath").value.trim().replace(/\/+$/, "") || "/",
+  const query = $("#dupePath").value.trim() || $("#dupeSection").value;
+  if (!query) { toast("Choose a section or enter a release name."); return; }
+  submitDupe({action: "scan", path: query,
     limit: Number($("#dupeLimit").value)});
 });
 $("#dupeSelectPage").addEventListener("change", () => {
-  const visible = state.dupePaths.slice(state.dupePage * 100, (state.dupePage + 1) * 100)
+  const visible = visibleDupes()
     .filter(item => item.eligible).map(item => item.path);
   if ($("#dupeSelectPage").checked) {
     for (const path of visible) {
@@ -645,8 +677,16 @@ $("#deleteDupes").addEventListener("click", async () => {
   const paths = Array.from(state.dupeSelected);
   if (!paths.length || state.dupeBusy || !state.dupeJob) return;
   if (!await confirmAction("Permanently wipe " + paths.length + " releases?",
-    paths.join("\n") + "\n\nThis deletes the selected releases recursively.")) return;
-  await submitDupe({action: "wipe", scanId: state.dupeJob, paths, confirm: "wipe"});
+    paths.map(path => (state.dupePaths.find(item => item.path === path)?.status || "UNKNOWN") + ": " + path).join("\n")
+      + "\n\nPermanent recursive deletion, including any selected KEEP or UNKNOWN releases. This can remove your only valid copy.")) return;
+  await submitDupe({action: "wipe", scanId: state.dupeJob, paths, confirm: "wipe-any-status"});
+});
+
+$("#verifyDupes").addEventListener("click", async () => {
+  const paths = state.dupePaths.filter(item => item.status === "UNKNOWN" && state.dupeSelected.has(item.path)).map(item => item.path);
+  if (!paths.length || !state.dupeJob || state.dupeBusy) return;
+  if (!await confirmAction("Verify selected releases", "Fetch missing SFV/DIZ metadata and scan missing CRCs in the background? This reads slave disks; no files are deleted.\n\n" + paths.join("\n"))) return;
+  await submitDupe({action: "verify", scanId: state.dupeJob, paths});
 });
 
 function renderRecovery(data) {
@@ -658,6 +698,22 @@ function renderRecovery(data) {
   $("#recoveryErrorText").textContent = data.scanErrors.join("\n");
   const body = $("#recoveryRows");
   body.replaceChildren();
+  const comparisons = $("#recoveryComparisons");
+  comparisons.replaceChildren();
+  for (const item of data.comparisons || []) {
+    const row = document.createElement("tr");
+    const target = td(item.releasePath + "/" + item.file);
+    const source = document.createElement("a");
+    source.textContent = item.source;
+    source.href = item.source;
+    source.target = "_blank";
+    source.rel = "noopener noreferrer";
+    target.append(document.createElement("br"), source);
+    const local = item.local || {};
+    row.append(target, td(local.exists ? (local.name || item.file) + " | " + formatBytes(local.size) + " | CRC " + (local.crc || "UNKNOWN") : "MISSING"),
+      td(formatBytes(item.size) + " | CRC " + item.crc), td(item.status));
+    comparisons.append(row);
+  }
   if (!data.files.length) {
     const row = document.createElement("tr");
     const cell = td("No files awaiting review.");
