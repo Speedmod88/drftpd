@@ -29,6 +29,11 @@
 .status-details summary { cursor: pointer; font-weight: 650; }
 .dupe-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 14px 0; }
 #dupeRows td { overflow-wrap: anywhere; }
+#archiveRows td { overflow-wrap: anywhere; }
+#view-archive table { table-layout: fixed; white-space: normal; }
+#view-archive th:last-child { width: 150px; }
+#archiveRule { width: 100%; }
+#archiveRows td { vertical-align: top; }
 #dupeRows .dupe-status { font-weight: 700; min-width: 115px; }
 .dupe-keep { color: #13795b; }
 .dupe-incomplete { color: #a45100; }

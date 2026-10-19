@@ -103,6 +103,49 @@ public abstract class ArchiveType {
 
     // Used for scanning subdirs of archived dir, instead of just the parent dir
     private boolean _scansubdirs;
+    private boolean _recursive;
+    private boolean _preview;
+    private Iterator<DirectoryHandle> _recursiveScan;
+
+    public boolean isPreviewOnly() { return _preview; }
+    public record ReorganizationRow(String source, String destination, String status) { }
+
+    public ReorganizationRow review(DirectoryHandle dir) {
+        String destination = "";
+        try {
+            String unsafe = ReleaseOrganization.unsafeReason(dir);
+            if (unsafe != null) return new ReorganizationRow(dir.getPath(), "", unsafe);
+            if (!dir.getName().matches(getArchiveRegex())) return new ReorganizationRow(dir.getPath(), "", "FILTERED");
+            long age = System.currentTimeMillis() - dir.creationTime();
+            if (age <= getArchiveAfter() || (getIgnoreAfter() != -1 && age >= getIgnoreAfter()))
+                return new ReorganizationRow(dir.getPath(), "", "AGE FILTER");
+            String type = getDirType(_archiveDirType, dir);
+            if (type != null && (type.contains("UNKNOWN") || type.contains("${") || type.startsWith("/")
+                    || type.indexOf('\\') >= 0 || type.chars().anyMatch(Character::isISOControl)
+                    || Arrays.stream(type.split("/", -1)).anyMatch(p -> p.isEmpty() || p.equals(".") || p.equals(".."))))
+                return new ReorganizationRow(dir.getPath(), "", "UNKNOWN DESTINATION");
+            destination = (_archiveToFolder.isRoot() ? "" : _archiveToFolder.getPath())
+                    + (type == null ? "" : "/" + type) + "/" + dir.getName();
+            if (destination.equals(dir.getPath())) return new ReorganizationRow(dir.getPath(), destination, "ALREADY SORTED");
+            if (destination.startsWith(dir.getPath() + "/")) return new ReorganizationRow(dir.getPath(), destination, "UNSAFE DESTINATION");
+            DirectoryHandle target = new DirectoryHandle(destination);
+            for (DirectoryHandle parent = target.getParent(); !parent.isRoot(); parent = parent.getParent()) {
+                if (parent.exists() && parent.isLink()) return new ReorganizationRow(dir.getPath(), destination, "SYMLINK DESTINATION");
+            }
+            if (target.exists()) return new ReorganizationRow(dir.getPath(), destination, "COLLISION");
+            return new ReorganizationRow(dir.getPath(), destination, "READY");
+        } catch (FileNotFoundException e) { return new ReorganizationRow(dir.getPath(), destination, "MISSING"); }
+    }
+
+    public List<ReorganizationRow> previewReorganization(int limit, org.drftpd.master.usermanager.User user) {
+        if (!_recursive || !(this instanceof MoveReleaseToSpecificFolder))
+            throw new IllegalArgumentException("Preview requires a recursive MoveReleaseToSpecificFolder rule");
+        if (limit < 1 || limit > 1000) throw new IllegalArgumentException("Limit must be 1-1000");
+        List<ReorganizationRow> rows = new ArrayList<>();
+        var scan = ReleaseOrganization.releases(getSection().getBaseDirectory(), user);
+        while (rows.size() < limit && scan.hasNext()) rows.add(review(scan.next()));
+        return rows;
+    }
 
     /**
      * Sets _slaveList, _numOfSlaves, _section, _parent, and _archiveAfter Each
@@ -299,6 +342,7 @@ public abstract class ArchiveType {
         if (checkFailedDir(lrf.getPath())) {
             return;
         }
+        if (ReleaseOrganization.unsafeReason(lrf) != null) return;
 
         try {
             // Checks regex to see if dir should be archived or not
@@ -334,6 +378,17 @@ public abstract class ArchiveType {
      * Checks dir by regex, and by creationTime.
      */
     public final DirectoryHandle getOldestNonArchivedDir() {
+        if (_recursive) {
+            if (_recursiveScan == null) _recursiveScan = ReleaseOrganization.releases(getSection().getBaseDirectory(), null);
+            while (_recursiveScan.hasNext()) {
+                DirectoryHandle dir = _recursiveScan.next();
+                if (checkFailedDir(dir.getPath())) continue;
+                ReorganizationRow row = review(dir);
+                if (row.status().equals("READY")) return dir;
+                logger.debug("Archive reorganization skip {}: {}", dir.getPath(), row.status());
+            }
+            return null;
+        }
         ArrayList<DirectoryHandle> oldDirs = new ArrayList<>();
 
         try {
@@ -445,6 +500,8 @@ public abstract class ArchiveType {
         if (destinations == null || destinations.isEmpty() || destinations.size() < _numOfSlaves) {
             throw new IllegalStateException("Insufficient archive destination slaves for rule " + _confNum);
         }
+        String unsafe = ReleaseOrganization.unsafeReason(getDirectory());
+        if (unsafe != null) throw new IllegalStateException("Archive skipped: " + unsafe);
         ArrayList<Job> jobs = recursiveSend(getDirectory(), new HashSet<>(destinations));
         JobManager jm = getJobManager();
         jm.addJobsToQueue(jobs);
@@ -518,6 +575,12 @@ public abstract class ArchiveType {
         _numOfSlaves = Integer.parseInt(properties.getProperty(_confNum + ".numofslaves", "0").trim());
         _repeat = Integer.parseInt(properties.getProperty(_confNum + ".repeat", "1").trim());
         _scansubdirs = properties.getProperty(_confNum + ".scansubdirs", "0").trim().equals("1");
+        _recursive = Boolean.parseBoolean(properties.getProperty(_confNum + ".recursive", "false").trim());
+        _preview = Boolean.parseBoolean(properties.getProperty(_confNum + ".preview", _recursive ? "true" : "false").trim());
+        if (_recursive && !(this instanceof MoveReleaseToSpecificFolder))
+            throw new IllegalArgumentException("recursive is only supported for MoveReleaseToSpecificFolder");
+        if (_preview && !_recursive)
+            throw new IllegalArgumentException("preview requires recursive=true");
 
         // Guard that repeat is not negative
         if (_repeat < 1) {
@@ -537,6 +600,7 @@ public abstract class ArchiveType {
         try {
             Pattern.compile(_archiveRegex);
         } catch (PatternSyntaxException e) {
+            if (_recursive) throw new IllegalArgumentException("Invalid recursive archive regex", e);
             logger.error("Regex Entry for {} is invalid", _confNum);
             _archiveRegex = ".*";
         }
@@ -614,6 +678,8 @@ public abstract class ArchiveType {
         _moveReleaseOnly = ((_slaveList.isEmpty()) && (_moveRelease));
 
         _priority = Integer.parseInt(properties.getProperty(_confNum + ".priority", "3").trim());
+        if (_recursive && _archiveToFolder == null)
+            throw new IllegalArgumentException("Recursive archive requires a valid todirectory");
     }
 
     /*
@@ -705,6 +771,19 @@ public abstract class ArchiveType {
      * It will check if it exists, if not it will create all its parent directories
      */
     public boolean moveRelease(DirectoryHandle fromDir) {
+        if (_preview) return false;
+        String unsafe = ReleaseOrganization.unsafeReason(fromDir);
+        if (unsafe != null) {
+            logger.warn("Archive skipped {}: {}", fromDir.getPath(), unsafe);
+            return false;
+        }
+        if (_recursive) {
+            ReorganizationRow row = review(fromDir);
+            if (!row.status().equals("READY")) {
+                logger.warn("Archive reorganization skipped {}: {}", fromDir.getPath(), row.status());
+                return false;
+            }
+        }
         if (_moveRelease) {
             if (!_archiveToFolder.exists()) {
                 // dir doesn't exist.  Lets check if Parent does
@@ -795,6 +874,12 @@ public abstract class ArchiveType {
                 }
 
                 // Copy modifiedTime
+                if (_recursive) {
+                    ReorganizationRow checked = review(fromDir);
+                    if (!checked.status().equals("READY")) return false;
+                    toInode = new DirectoryHandle(checked.destination());
+                }
+                if (ReleaseOrganization.unsafeReason(fromDir) != null) return false;
                 long time = fromDir.lastModified();
                 fromDir.renameToUnchecked(toInode);
                 toInode.setLastModified(time);
@@ -840,11 +925,8 @@ public abstract class ArchiveType {
             if (splittype.length() > 1) {
                 String retstr = splittype;
                 if (retstr.contains("${rls}")) {
-                    Pattern pattern = Pattern.compile("(?i)(.*)(\\.|-|_)S\\d.*");
-                    Matcher matcher = pattern.matcher(inode.getName());
-                    if (matcher.matches()) {
-                        retstr = retstr.replaceAll("\\$\\{rls\\}", matcher.group(1));
-                    }
+                    String show = ReleaseOrganization.showName(inode.getName());
+                    if (show != null) retstr = retstr.replace("${rls}", show);
                 }
                 if (retstr.contains("${rls}")) {
                     return "UNKNOWN";

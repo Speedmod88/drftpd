@@ -163,6 +163,20 @@
 ####################################################################################################
 
 # Default [30]
+# Recursive, directory-only reorganization (replace x with next rule number).
+# Source section must point at the archive tree. Preview never moves files.
+# x.type=MoveReleaseToSpecificFolder
+# x.section=ARCHIVE-TV-FR
+# x.recursive=true
+# x.preview=true
+# x.archiveafter=0
+# x.todirectory=/ARCHIVES/TV-FR
+# x.todirectorytype=rls:${rls}
+# x.repeat=30
+# Set preview=false after reviewing the WebAdmin Archive preview.
+# Unknown/incomplete/nuked releases and active transfers are skipped.
+#
+# Default [30]
 cycletime=30
 
 # Default [10]
