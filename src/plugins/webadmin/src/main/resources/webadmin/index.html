@@ -37,6 +37,7 @@
       <nav aria-label="Administration">
         <button class="nav-item active" data-view="overview" type="button">Dashboard</button>
         <button class="nav-item" data-view="dupe2" type="button">Dupe2</button>
+        <button class="nav-item" data-view="archive" type="button">Archive</button>
         <button class="nav-item" data-view="timers" type="button">Timers</button>
         <button class="nav-item" data-view="config" type="button">Configuration</button>
         <button class="nav-item" data-view="logs" type="button">Logs</button>
@@ -93,6 +94,16 @@
         <div class="table-scroll"><table><thead><tr><th><input id="dupeSelectPage" type="checkbox" aria-label="Select this page"></th><th>Status</th><th>Score</th><th>Release</th></tr></thead><tbody id="dupeRows"></tbody></table></div>
         <div class="dupe-pagination"><button id="dupePrevious" type="button" disabled>Previous</button><span id="dupePage"></span><button id="dupeNext" type="button" disabled>Next</button></div>
         <pre id="dupeOutput" class="dashboard-output" tabindex="0"></pre>
+      </section>
+      <section id="view-archive" class="view">
+        <h2>Archive reorganization</h2>
+        <form id="archiveForm" class="recovery-controls">
+          <label class="recovery-path" for="archiveRule">Rule<select id="archiveRule" required></select></label>
+          <label for="archiveLimit">Limit<input id="archiveLimit" type="number" min="1" max="1000" value="100" required></label>
+          <button id="archivePreview" type="submit">Preview</button>
+        </form>
+        <p id="archiveStatus" role="status"></p>
+        <div class="table-scroll"><table><thead><tr><th>Source</th><th>Destination</th><th>Status</th></tr></thead><tbody id="archiveRows"></tbody></table></div>
       </section>
 
       <section id="view-timers" class="view">

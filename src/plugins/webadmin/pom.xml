@@ -14,6 +14,12 @@
     <dependencies>
         <dependency>
             <groupId>org.drftpd</groupId>
+            <artifactId>drftpd-archive-master</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.drftpd</groupId>
             <artifactId>drftpd-autofreespace-master</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
