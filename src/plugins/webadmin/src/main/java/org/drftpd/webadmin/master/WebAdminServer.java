@@ -194,6 +194,8 @@ final class WebAdminServer {
                 case "/api/overview" -> overview(exchange, session);
                 case "/api/file-scopes" -> fileScopes(exchange);
                 case "/api/dupe2" -> dupe2(exchange, session);
+                case "/api/archive/rules" -> { requireMethod(exchange, "GET"); sendJson(exchange, 200, WebAdminArchive.rules()); }
+                case "/api/archive/preview" -> archivePreview(exchange, session);
                 case "/api/timers" -> timers(exchange);
                 case "/api/config/files" -> configFiles(exchange);
                 case "/api/config/file" -> configFile(exchange, session);
@@ -463,6 +465,35 @@ final class WebAdminServer {
         Path root = roots == null ? null : config ? roots.config() : roots.logs();
         if (root == null) throw new ApiException(404, "Slave file scope is not configured");
         return root;
+    }
+
+    private synchronized void archivePreview(HttpExchange exchange, WebSessionToken session) throws IOException {
+        requireMethod(exchange, "POST");
+        ArchivePreviewPayload payload = readJson(exchange, ArchivePreviewPayload.class, MAX_COMMAND_BODY);
+        if (payload == null || payload.rule < 1 || payload.limit < 1 || payload.limit > 1000)
+            throw new ApiException(400, "Select a rule and a limit between 1 and 1000");
+        if (jobs.values().stream().anyMatch(job -> job.username.equals(session.username)
+                && job.command.startsWith("ARCHIVE PREVIEW") && (job.state.equals("queued") || job.state.equals("running"))))
+            throw new ApiException(409, "An archive preview is already running");
+        pruneJobs();
+        CommandJob job = new CommandJob(UUID.randomUUID().toString(), session.username, "ARCHIVE PREVIEW " + payload.rule);
+        jobs.put(job.id, job);
+        try {
+            commandExecutor.execute(() -> {
+                job.state = "running";
+                job.started = System.currentTimeMillis();
+                try {
+                    job.archiveRows = WebAdminArchive.preview(job.username, payload.rule, payload.limit);
+                    job.addOutput("Reviewed " + job.archiveRows.size() + " releases (limit " + payload.limit + "). No files moved.");
+                    job.state = "completed";
+                } catch (Exception | LinkageError e) {
+                    job.error = e.getMessage();
+                    job.state = "failed";
+                    logger.error("Archive preview failed for {}", job.username, e);
+                } finally { job.finished = System.currentTimeMillis(); }
+            });
+        } catch (RejectedExecutionException e) { jobs.remove(job.id); throw e; }
+        sendJson(exchange, 202, jobView(job));
     }
 
     private synchronized void dupe2(HttpExchange exchange, WebSessionToken session) throws IOException {
@@ -771,6 +802,7 @@ final class WebAdminServer {
         view.put("output", job.snapshotOutput());
         view.put("paths", job.paths);
         view.put("dupeScan", job.dupeScan);
+        view.put("archiveRows", job.archiveRows);
         view.put("dupeResults", job.dupeResults);
         view.put("truncated", job.truncated);
         return view;
@@ -1167,6 +1199,7 @@ final class WebAdminServer {
         private volatile String error;
         private volatile boolean truncated;
         private volatile boolean dupeScan;
+        private volatile List<org.drftpd.archive.master.archivetypes.ArchiveType.ReorganizationRow> archiveRows = List.of();
         private volatile List<org.drftpd.autofreespace.master.Dupe2Utils.ReviewResult> dupeResults = List.of();
         private volatile List<String> paths = List.of();
 
@@ -1213,6 +1246,11 @@ final class WebAdminServer {
         private String scanId;
         private List<String> paths;
         private String confirm;
+    }
+
+    private static final class ArchivePreviewPayload {
+        private int rule;
+        private int limit = 100;
     }
 
     private static final class RestartPayload {

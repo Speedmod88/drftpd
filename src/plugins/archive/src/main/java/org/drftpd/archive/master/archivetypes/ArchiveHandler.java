@@ -133,6 +133,12 @@ public class ArchiveHandler implements Runnable {
                         break;
                     }
                 }
+                if (_archiveType.isPreviewOnly()) {
+                    logger.info("Archive PREVIEW rule {}: {}", _archiveType.getConfNum(),
+                            _archiveType.review(_archiveType.getDirectory()));
+                    _archiveType.addFailedDir(_archiveType.getDirectory().getPath());
+                    continue;
+                }
                 if (!_archiveType.moveReleaseOnly()) {
                     Set<RemoteSlave> destSlaves = _archiveType.findDestinationSlaves();
 
