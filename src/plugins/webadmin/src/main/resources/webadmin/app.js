@@ -492,11 +492,52 @@ function selectView(name) {
   $("#sidebar").classList.remove("open");
   if (name === "overview") { loadOverview(); loadDashboardCommands(); }
   if (name === "dupe2") renderDupes();
+  if (name === "archive") loadArchiveRules();
   if (name === "timers") loadTimers();
   if (name === "config" && state.configFiles.length === 0) loadConfigFiles();
   if (name === "logs" && $("#logFile").options.length === 0) loadLogFiles();
   if (name === "srrdb") loadRecovery();
 }
+
+async function loadArchiveRules() {
+  try {
+    const rules = await api("/api/archive/rules");
+    const select = $("#archiveRule");
+    select.replaceChildren();
+    rules.forEach(rule => {
+      const option = document.createElement("option");
+      option.value = rule.id;
+      option.textContent = rule.id + ": " + rule.section + " -> " + rule.destination + " (" + rule.template + ")";
+      select.append(option);
+    });
+    $("#archiveStatus").textContent = rules.length ? "" : "No recursive archive rules configured.";
+    $("#archivePreview").disabled = !rules.length;
+  } catch (error) { showError(error); }
+}
+
+$("#archiveForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  $("#archivePreview").disabled = true;
+  $("#archiveRows").replaceChildren();
+  try {
+    const job = await api("/api/archive/preview", {method: "POST", body: JSON.stringify({
+      rule: Number($("#archiveRule").value), limit: Number($("#archiveLimit").value)
+    })});
+    const result = await waitForJob(job.id, current => { $("#archiveStatus").textContent = current.state; });
+    $("#archiveStatus").textContent = result.error || (result.output || []).join("\n");
+    (result.archiveRows || []).forEach(item => {
+      const row = document.createElement("tr");
+      [item.source, item.destination, item.status].forEach(value => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.append(cell);
+      });
+      row.lastChild.className = item.status === "READY" ? "dupe-keep" : "dupe-incomplete";
+      $("#archiveRows").append(row);
+    });
+  } catch (error) { showError(error); }
+  finally { $("#archivePreview").disabled = false; }
+});
 
 function renderDupes() {
   const pageSize = 100;
