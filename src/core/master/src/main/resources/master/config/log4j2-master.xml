@@ -144,8 +144,21 @@
                 </Delete>
             </DefaultRolloverStrategy>
         </RollingFile>
+        <RollingFile name="srrdb" fileName="${baseDir}/srrdb.log" filePattern="${baseDir}/$${date:yyyy-MM}/srrdb-%d{yyyy-MM-dd}.log.gz">
+            <PatternLayout pattern="%p %d{ISO8601} [%t] %c %x - %m%n" />
+            <CronTriggeringPolicy schedule="0 0 0 * * ?" />
+            <DefaultRolloverStrategy>
+                <Delete basePath="${baseDir}" maxDepth="2">
+                    <IfFileName glob="*/srrdb-*.log.gz" />
+                    <IfLastModified age="90d" />
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
     </Appenders>
     <Loggers>
+        <Logger name="org.drftpd.webadmin.srrdb" level="debug" additivity="false">
+            <AppenderRef ref="srrdb" />
+        </Logger>
         <Logger name="org.drftpd.webadmin" level="debug" additivity="false">
             <AppenderRef ref="webadmin" />
         </Logger>

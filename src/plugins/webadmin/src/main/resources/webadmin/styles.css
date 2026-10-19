@@ -29,6 +29,13 @@
 .status-details summary { cursor: pointer; font-weight: 650; }
 .dupe-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 14px 0; }
 #dupeRows td { overflow-wrap: anywhere; }
+#view-dupe2 table { table-layout: fixed; white-space: normal; }
+#view-dupe2 th:first-child { width: 48px; }
+#view-dupe2 th:nth-child(2) { width: 145px; }
+#view-dupe2 th:nth-child(3) { width: 70px; }
+.dupe-group td { background: #e4ece8; font-weight: 700; border-top: 2px solid #899c92; }
+#dupeSection { width: 100%; }
+@media (max-width: 760px) { #view-dupe2 table { min-width: 680px; } }
 #archiveRows td { overflow-wrap: anywhere; }
 #view-archive table { table-layout: fixed; white-space: normal; }
 #view-archive th:last-child { width: 150px; }
