@@ -98,6 +98,7 @@ final class WebAdminServer {
     private final Map<String, CommandJob> jobs = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor requestExecutor;
     private final ThreadPoolExecutor commandExecutor;
+    private final ThreadPoolExecutor dupeExecutor = executor(1, 4, "WebAdmin-DupeReview");
 
     private HttpsServer server;
     private SrrdbRecovery recovery;
@@ -163,6 +164,7 @@ final class WebAdminServer {
         }
         requestExecutor.shutdownNow();
         commandExecutor.shutdownNow();
+        dupeExecutor.shutdownNow();
         sessions.clear();
         logger.info("HTTPS web administration server stopped");
     }
@@ -194,6 +196,7 @@ final class WebAdminServer {
                 case "/api/overview" -> overview(exchange, session);
                 case "/api/file-scopes" -> fileScopes(exchange);
                 case "/api/dupe2" -> dupe2(exchange, session);
+                case "/api/dupe2/sections" -> { requireMethod(exchange, "GET"); sendJson(exchange, 200, WebAdminDupe.sections(session.username)); }
                 case "/api/archive/rules" -> { requireMethod(exchange, "GET"); sendJson(exchange, 200, WebAdminArchive.rules()); }
                 case "/api/archive/preview" -> archivePreview(exchange, session);
                 case "/api/timers" -> timers(exchange);
@@ -499,11 +502,12 @@ final class WebAdminServer {
     private synchronized void dupe2(HttpExchange exchange, WebSessionToken session) throws IOException {
         requireMethod(exchange, "POST");
         DupePayload payload = readJson(exchange, DupePayload.class, MAX_COMMAND_BODY);
-        if (payload == null || !("scan".equals(payload.action) || "wipe".equals(payload.action))) {
-            throw new ApiException(400, "Expected scan or wipe action");
+        if (payload == null || !("scan".equals(payload.action) || "wipe".equals(payload.action) || "verify".equals(payload.action))) {
+            throw new ApiException(400, "Expected scan, verify or wipe action");
         }
         if (!settings.allowedCommands.contains("site dupe2")) throw new ApiException(403, "DUPE2 is disabled");
         boolean scan = payload.action.equals("scan");
+        boolean verify = payload.action.equals("verify");
         int resultLimit = scan ? WebAdminDupe.limit(payload.limit) : 10;
         if (jobs.values().stream().anyMatch(job -> job.username.equals(session.username)
                 && job.command.startsWith("DUPE2 ") && (job.state.equals("queued") || job.state.equals("running")))) {
@@ -511,11 +515,13 @@ final class WebAdminServer {
         }
         List<String> selected = List.of();
         if (scan) {
-            if (blank(payload.path)) throw new ApiException(400, "Directory path is required");
-            SrrdbRecovery.validatePath(payload.path);
+            if (blank(payload.path)) throw new ApiException(400, "Section, directory path or release name is required");
+            if (payload.path.startsWith("/")) SrrdbRecovery.validatePath(payload.path);
+            else if (payload.path.length() > 1024 || payload.path.contains("/") || payload.path.chars().anyMatch(Character::isISOControl))
+                throw new ApiException(400, "Enter a release name or an absolute VFS path");
         } else {
-            if (!"wipe".equals(payload.confirm)) throw new ApiException(400, "Explicit wipe confirmation required");
-            if (!settings.allowedCommands.contains("site wipe")) throw new ApiException(403, "WIPE is disabled");
+            if (!verify && !"wipe-any-status".equals(payload.confirm)) throw new ApiException(400, "Explicit all-status wipe confirmation required");
+            if (!verify && !settings.allowedCommands.contains("site wipe")) throw new ApiException(403, "WIPE is disabled");
             CommandJob source = payload.scanId == null ? null : jobs.get(payload.scanId);
             if (source == null || !source.dupeScan || !source.username.equals(session.username)
                     || !source.state.equals("completed")) throw new ApiException(409, "Completed scan not found; scan again");
@@ -523,28 +529,39 @@ final class WebAdminServer {
         }
         pruneJobs();
         CommandJob job = new CommandJob(UUID.randomUUID().toString(), session.username,
-                scan ? "DUPE2 scan " + payload.path : "DUPE2 selected WIPE");
-        job.dupeScan = scan;
+                scan ? "DUPE2 scan " + payload.path : verify ? "DUPE2 verify selected" : "DUPE2 selected WIPE");
+        job.dupeScan = scan || verify;
         List<String> selection = selected;
         jobs.put(job.id, job);
         try {
-            commandExecutor.execute(() -> {
+            dupeExecutor.execute(() -> {
                 job.state = "running";
                 job.started = System.currentTimeMillis();
                 try {
                     WebAdminDupe.user(job.username);
                     if (scan) {
                         job.dupeResults = WebAdminDupe.scan(job.username, payload.path, resultLimit);
-                        job.paths = job.dupeResults.stream().filter(item -> item.eligible())
+                        job.paths = job.dupeResults.stream()
                                 .map(item -> item.path()).toList();
                         job.addOutput("Duplicate group limit: " + resultLimit);
-                        job.addOutput("Found " + job.paths.size() + " eligible duplicate releases.");
+                        job.addOutput("Found " + job.paths.size() + " releases. Manual selection includes KEEP and UNKNOWN.");
+                    } else if (verify) {
+                        for (String path : selection) {
+                            try { WebAdminDupeVerification.verify(job.username, path, job::addOutput); }
+                            catch (Exception e) { job.addOutput("Verification deferred: " + path + ": " + e.getMessage()); }
+                        }
+                        job.dupeResults = org.drftpd.autofreespace.master.Dupe2Utils.reviewDuplicates(selection, 1000, true);
+                        List<org.drftpd.autofreespace.master.Dupe2Utils.ReviewResult> visible = new ArrayList<>();
+                        for (var item : job.dupeResults) {
+                            try { WebAdminDupe.directory(WebAdminDupe.user(job.username), item.path()); visible.add(item); }
+                            catch (IOException ignored) { }
+                        }
+                        job.dupeResults = visible;
+                        job.paths = visible.stream().map(item -> item.path()).toList();
                     } else {
                         for (String path : selection) {
-                            if (!WebAdminDupe.eligible(job.username, path)) {
-                                job.addOutput("SKIP: no longer an eligible duplicate: " + path);
-                                continue;
-                            }
+                            WebAdminDupe.checkWipe(job.username, path);
+                            logger.warn("Manual Dupe2 WIPE: user={} path={} (explicit all-status selection)", job.username, path);
                             job.addOutput("WIPE: " + path);
                             int code = executeCommand(job, new ResolvedCommand("site wipe", "-r " + path));
                             if (code >= 400) throw new IOException("WIPE failed for " + path + "; remaining selections were not attempted");

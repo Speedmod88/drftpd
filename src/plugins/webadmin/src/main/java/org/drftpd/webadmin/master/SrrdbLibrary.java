@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 
 /** VFS adapter. No local filesystem assumptions and no slave protocol additions. */
 final class SrrdbLibrary implements SrrdbRecovery.Library {
-    private static final Logger logger = LogManager.getLogger(SrrdbLibrary.class);
+    private static final Logger logger = LogManager.getLogger("org.drftpd.webadmin.srrdb");
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "WebAdmin-srrDB-deadline");
         thread.setDaemon(true);
@@ -99,6 +99,27 @@ final class SrrdbLibrary implements SrrdbRecovery.Library {
             if (inode.getName().toLowerCase(Locale.ROOT).endsWith(extension)) return false;
         }
         return true;
+    }
+
+    @Override public SrrdbRecovery.LocalFile compare(String username, String releasePath, String relativeFile) throws Exception {
+        User user = user(username);
+        directory(user, releasePath);
+        if (!SrrdbClient.metadataPath(relativeFile)) throw new IOException("Invalid remote filename");
+        String full = releasePath + "/" + relativeFile;
+        DirectoryHandle parent;
+        try { parent = directory(user, full.substring(0, full.lastIndexOf('/'))); }
+        catch (FileNotFoundException e) { return new SrrdbRecovery.LocalFile(false, "", -1, ""); }
+        FileHandle found = null;
+        String extension = relativeFile.substring(relativeFile.length() - 4);
+        for (var inode : parent.getInodeHandlesUnchecked()) {
+            if (inode.isHidden(user) || inode.isLink() || !(inode instanceof FileHandle file)) continue;
+            if (file.getName().equalsIgnoreCase(full.substring(full.lastIndexOf('/') + 1))) { found = file; break; }
+            if (found == null && file.getName().toLowerCase(Locale.ROOT).endsWith(extension.toLowerCase(Locale.ROOT))) found = file;
+        }
+        if (found == null) return new SrrdbRecovery.LocalFile(false, "", -1, "");
+        long crc = found.isUploading() ? 0 : found.getCheckSumCached();
+        return new SrrdbRecovery.LocalFile(true, found.getName(), found.getSize(),
+                crc == 0 ? "" : String.format(Locale.ROOT, "%08X", crc));
     }
 
     @Override public String install(String username, String releasePath, SrrdbClient.RemoteFile remote, byte[] content) throws Exception {

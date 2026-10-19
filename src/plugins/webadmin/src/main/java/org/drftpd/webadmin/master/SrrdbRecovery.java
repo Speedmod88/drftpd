@@ -21,13 +21,26 @@ import java.util.concurrent.TimeUnit;
 /** Bounded background review workflow, separated from HTTP for later plugin reuse. */
 final class SrrdbRecovery implements AutoCloseable {
     interface Library extends AutoCloseable {
+        default LocalFile compare(String username, String releasePath, String relativeFile) throws Exception {
+            return new LocalFile(!missing(username, releasePath, relativeFile), "", -1, "");
+        }
         List<String> releases(String username, String path, boolean recursive, int limit) throws Exception;
         boolean missing(String username, String releasePath, String relativeFile) throws Exception;
         String install(String username, String releasePath, SrrdbClient.RemoteFile file, byte[] content) throws Exception;
         @Override default void close() { }
     }
     static final int MAX_ENTRIES = 500;
-    private static final Logger logger = LogManager.getLogger(SrrdbRecovery.class);
+    private static final Logger logger = LogManager.getLogger("org.drftpd.webadmin.srrdb");
+    record LocalFile(boolean exists, String name, long size, String crc) { }
+    record Comparison(String releasePath, String file, LocalFile local, long size, String crc, String status, String source) { }
+    private final List<Comparison> comparisons = new ArrayList<>();
+
+    static String comparisonStatus(LocalFile local, SrrdbClient.RemoteFile remote) {
+        if (!local.exists()) return "MISSING";
+        if (local.size() >= 0 && local.size() != remote.size()) return "MISMATCH";
+        if (local.size() < 0 || local.crc().isEmpty()) return "PRESENT - CRC UNKNOWN";
+        return local.size() == remote.size() && local.crc().equalsIgnoreCase(remote.crc()) ? "MATCH" : "MISMATCH";
+    }
     private final Gson gson = new Gson();
     private final Path stateFile;
     private final int scanLimit;
@@ -69,7 +82,8 @@ final class SrrdbRecovery implements AutoCloseable {
         }
         return Map.of("files", files, "scanState", scanState, "scanMessage", scanMessage,
                 "scanned", scanned, "total", total, "errors", errors, "scanLimit", scanLimit,
-                "scanErrors", new ArrayList<>(scanErrors), "notFound", notFound);
+                "scanErrors", new ArrayList<>(scanErrors), "notFound", notFound,
+                "comparisons", new ArrayList<>(comparisons));
     }
 
     synchronized void scan(String username, String path, boolean recursive) {
@@ -82,6 +96,7 @@ final class SrrdbRecovery implements AutoCloseable {
         errors = 0;
         notFound = 0;
         scanErrors.clear();
+        comparisons.clear();
         scanMessage = "";
         worker.execute(() -> scanNow(username, normalizedPath, recursive));
         scanState = "queued";
@@ -100,6 +115,15 @@ final class SrrdbRecovery implements AutoCloseable {
                 try {
                     for (SrrdbClient.RemoteFile file : client.details(releaseName(releasePath))) {
                         if (cancelled || closed || Thread.currentThread().isInterrupted()) break;
+                        LocalFile local = library.compare(username, releasePath, file.name());
+                        String status = comparisonStatus(local, file);
+                        String source = SrrdbClient.downloadUri(releaseName(releasePath), file.name()).toString();
+                        synchronized (this) {
+                            if (comparisons.size() < 2000)
+                                comparisons.add(new Comparison(releasePath, file.name(), local, file.size(), file.crc(), status, source));
+                        }
+                        logger.info("srrDB comparison: path={} file={} local={} remoteSize={} remoteCRC={} status={} source={}",
+                                releasePath, file.name(), local, file.size(), file.crc(), status, source);
                         if (!library.missing(username, releasePath, file.name())) continue;
                         synchronized (this) {
                             boolean duplicate = entries.values().stream().anyMatch(item ->
