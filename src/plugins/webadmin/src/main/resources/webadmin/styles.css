@@ -28,6 +28,7 @@
 .status-details { margin-top: 20px; }
 .status-details summary { cursor: pointer; font-weight: 650; }
 .dupe-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 14px 0; }
+.dupe-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 #dupeRows td { overflow-wrap: anywhere; }
 #view-dupe2 table { table-layout: fixed; white-space: normal; }
 #view-dupe2 th:first-child { width: 48px; }
@@ -40,6 +41,10 @@
 #view-archive table { table-layout: fixed; white-space: normal; }
 #view-archive th:last-child { width: 150px; }
 #archiveRule { width: 100%; }
+#archiveSection { width: 100%; }
+#moveDialog label { display: grid; gap: 6px; margin-bottom: 12px; }
+#moveDialog select { width: 100%; min-width: 0; }
+#moveDestination { overflow-wrap: anywhere; }
 #archiveRows td { vertical-align: top; }
 #dupeRows .dupe-status { font-weight: 700; min-width: 115px; }
 .dupe-keep { color: #13795b; }
