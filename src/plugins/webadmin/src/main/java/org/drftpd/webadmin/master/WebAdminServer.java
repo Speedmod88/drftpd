@@ -197,6 +197,10 @@ final class WebAdminServer {
                 case "/api/file-scopes" -> fileScopes(exchange);
                 case "/api/dupe2" -> dupe2(exchange, session);
                 case "/api/dupe2/sections" -> { requireMethod(exchange, "GET"); sendJson(exchange, 200, WebAdminDupe.sections(session.username)); }
+                case "/api/dupe2/folders" -> {
+                    requireMethod(exchange, "GET");
+                    sendJson(exchange, 200, WebAdminDupe.folders(session.username, query(exchange.getRequestURI()).getOrDefault("path", "/")));
+                }
                 case "/api/archive/rules" -> { requireMethod(exchange, "GET"); sendJson(exchange, 200, WebAdminArchive.rules()); }
                 case "/api/archive/preview" -> archivePreview(exchange, session);
                 case "/api/timers" -> timers(exchange);
@@ -473,7 +477,7 @@ final class WebAdminServer {
     private synchronized void archivePreview(HttpExchange exchange, WebSessionToken session) throws IOException {
         requireMethod(exchange, "POST");
         ArchivePreviewPayload payload = readJson(exchange, ArchivePreviewPayload.class, MAX_COMMAND_BODY);
-        if (payload == null || payload.rule < 1 || payload.limit < 1 || payload.limit > 1000)
+        if (payload == null || payload.rule < 0 || payload.limit < 1 || payload.limit > 1000)
             throw new ApiException(400, "Select a rule and a limit between 1 and 1000");
         if (jobs.values().stream().anyMatch(job -> job.username.equals(session.username)
                 && job.command.startsWith("ARCHIVE PREVIEW") && (job.state.equals("queued") || job.state.equals("running"))))
@@ -486,7 +490,8 @@ final class WebAdminServer {
                 job.state = "running";
                 job.started = System.currentTimeMillis();
                 try {
-                    job.archiveRows = WebAdminArchive.preview(job.username, payload.rule, payload.limit);
+                    job.archiveRows = WebAdminArchive.preview(job.username, payload.rule, payload.limit,
+                            payload.section, payload.destination, payload.template);
                     job.addOutput("Reviewed " + job.archiveRows.size() + " releases (limit " + payload.limit + "). No files moved.");
                     job.state = "completed";
                 } catch (Exception | LinkageError e) {
@@ -501,13 +506,15 @@ final class WebAdminServer {
 
     private synchronized void dupe2(HttpExchange exchange, WebSessionToken session) throws IOException {
         requireMethod(exchange, "POST");
-        DupePayload payload = readJson(exchange, DupePayload.class, MAX_COMMAND_BODY);
-        if (payload == null || !("scan".equals(payload.action) || "wipe".equals(payload.action) || "verify".equals(payload.action))) {
+        DupePayload payload = readJson(exchange, DupePayload.class, 2 * 1024 * 1024);
+        if (payload == null || !List.of("scan", "wipe", "verify", "verify-section", "verify-all", "move").contains(payload.action == null ? "" : payload.action)) {
             throw new ApiException(400, "Expected scan, verify or wipe action");
         }
         if (!settings.allowedCommands.contains("site dupe2")) throw new ApiException(403, "DUPE2 is disabled");
         boolean scan = payload.action.equals("scan");
-        boolean verify = payload.action.equals("verify");
+        boolean bulk = payload.action.equals("verify-section") || payload.action.equals("verify-all");
+        boolean verify = payload.action.equals("verify") || bulk;
+        boolean move = payload.action.equals("move");
         int resultLimit = scan ? WebAdminDupe.limit(payload.limit) : 10;
         if (jobs.values().stream().anyMatch(job -> job.username.equals(session.username)
                 && job.command.startsWith("DUPE2 ") && (job.state.equals("queued") || job.state.equals("running")))) {
@@ -519,17 +526,24 @@ final class WebAdminServer {
             if (payload.path.startsWith("/")) SrrdbRecovery.validatePath(payload.path);
             else if (payload.path.length() > 1024 || payload.path.contains("/") || payload.path.chars().anyMatch(Character::isISOControl))
                 throw new ApiException(400, "Enter a release name or an absolute VFS path");
+        } else if (bulk) {
+            if (!"verify-scope".equals(payload.confirm)) throw new ApiException(400, "Background scan confirmation required");
+            if (payload.action.equals("verify-section") && blank(payload.path)) throw new ApiException(400, "Choose a section");
         } else {
-            if (!verify && !"wipe-any-status".equals(payload.confirm)) throw new ApiException(400, "Explicit all-status wipe confirmation required");
-            if (!verify && !settings.allowedCommands.contains("site wipe")) throw new ApiException(403, "WIPE is disabled");
+            if (!verify && !(move ? "move-selected" : "wipe-any-status").equals(payload.confirm)) throw new ApiException(400, "Explicit confirmation required");
+            if (!verify && !move && !settings.allowedCommands.contains("site wipe")) throw new ApiException(403, "WIPE is disabled");
+            if (move) {
+                if (blank(payload.destination)) throw new ApiException(400, "Destination is required");
+                SrrdbRecovery.validatePath(payload.destination);
+            }
             CommandJob source = payload.scanId == null ? null : jobs.get(payload.scanId);
             if (source == null || !source.dupeScan || !source.username.equals(session.username)
                     || !source.state.equals("completed")) throw new ApiException(409, "Completed scan not found; scan again");
-            selected = WebAdminDupe.selection(source.paths, payload.paths);
+            selected = WebAdminDupe.selection(source.paths, payload.paths, verify ? 10000 : 100);
         }
         pruneJobs();
         CommandJob job = new CommandJob(UUID.randomUUID().toString(), session.username,
-                scan ? "DUPE2 scan " + payload.path : verify ? "DUPE2 verify selected" : "DUPE2 selected WIPE");
+                scan ? "DUPE2 scan " + payload.path : verify ? "DUPE2 verify " + payload.action : move ? "DUPE2 selected MOVE" : "DUPE2 selected WIPE");
         job.dupeScan = scan || verify;
         List<String> selection = selected;
         jobs.put(job.id, job);
@@ -546,11 +560,18 @@ final class WebAdminServer {
                         job.addOutput("Duplicate group limit: " + resultLimit);
                         job.addOutput("Found " + job.paths.size() + " releases. Manual selection includes KEEP and UNKNOWN.");
                     } else if (verify) {
-                        for (String path : selection) {
+                        List<String> targets = bulk ? WebAdminDupe.unknown(job.username,
+                                payload.action.equals("verify-all") ? null : payload.path) : selection;
+                        job.addOutput("UNKNOWN verification targets: " + targets.size());
+                        int done = 0;
+                        for (String path : targets) {
+                            if (Thread.currentThread().isInterrupted()) throw new IOException("Verification stopped");
                             try { WebAdminDupeVerification.verify(job.username, path, job::addOutput); }
                             catch (Exception e) { job.addOutput("Verification deferred: " + path + ": " + e.getMessage()); }
+                            job.addOutput("Progress: " + (++done) + "/" + targets.size());
                         }
-                        job.dupeResults = org.drftpd.autofreespace.master.Dupe2Utils.reviewDuplicates(selection, 1000, true);
+                        job.dupeResults = org.drftpd.autofreespace.master.Dupe2Utils.reviewDuplicates(targets, 1000, true);
+                        job.addOutput("Verification complete. Display limited to 1000 groups; all discovered targets were attempted.");
                         List<org.drftpd.autofreespace.master.Dupe2Utils.ReviewResult> visible = new ArrayList<>();
                         for (var item : job.dupeResults) {
                             try { WebAdminDupe.directory(WebAdminDupe.user(job.username), item.path()); visible.add(item); }
@@ -558,6 +579,18 @@ final class WebAdminServer {
                         }
                         job.dupeResults = visible;
                         job.paths = visible.stream().map(item -> item.path()).toList();
+                    } else if (move) {
+                        for (String path : selection) {
+                            String target = WebAdminDupe.moveTarget(job.username, path, payload.destination);
+                            WebCommandSession moveSession = new WebCommandSession(job);
+                            if (executeCommand(job, new ResolvedCommand("rnfr", path), moveSession) != 350)
+                                throw new IOException("RNFR refused; remaining moves stopped");
+                            // Recheck after RNFR and before the permission-checked RNTO.
+                            WebAdminDupe.moveTarget(job.username, path, payload.destination);
+                            if (executeCommand(job, new ResolvedCommand("rnto", target), moveSession) >= 400)
+                                throw new IOException("RNTO failed; remaining moves stopped");
+                            job.addOutput("MOVED: " + path + " -> " + target);
+                        }
                     } else {
                         for (String path : selection) {
                             WebAdminDupe.checkWipe(job.username, path);
@@ -779,13 +812,16 @@ final class WebAdminServer {
     }
 
     private int executeCommand(CommandJob job, ResolvedCommand resolved) throws Exception {
+        return executeCommand(job, resolved, new WebCommandSession(job));
+    }
+
+    private int executeCommand(CommandJob job, ResolvedCommand resolved, WebCommandSession session) throws Exception {
             WebAdminDupe.user(job.username);
             HashMap<String, Properties> commands = GlobalContext.getConnectionManager().getCommands();
             Properties properties = commands.get(resolved.name);
             if (properties == null) {
                 throw new IllegalStateException("Command disappeared after reload: " + resolved.name);
             }
-            WebCommandSession session = new WebCommandSession(job);
             session.setCommands(commands);
             CommandManagerInterface manager = GlobalContext.getConnectionManager().getCommandManager();
             CommandRequestInterface request = manager.newRequest(resolved.name, resolved.argument,
@@ -1257,6 +1293,7 @@ final class WebAdminServer {
     }
 
     private static final class DupePayload {
+        private String destination;
         private Integer limit;
         private String action;
         private String path;
@@ -1266,6 +1303,9 @@ final class WebAdminServer {
     }
 
     private static final class ArchivePreviewPayload {
+        private String section;
+        private String destination;
+        private String template;
         private int rule;
         private int limit = 100;
     }

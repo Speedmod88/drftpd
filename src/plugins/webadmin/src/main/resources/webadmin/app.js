@@ -503,17 +503,31 @@ async function loadArchiveRules() {
   try {
     const rules = await api("/api/archive/rules");
     const select = $("#archiveRule");
-    select.replaceChildren();
+    select.replaceChildren(new Option("Custom folder rule", "0"));
     rules.forEach(rule => {
       const option = document.createElement("option");
       option.value = rule.id;
+      option.dataset.rule = JSON.stringify(rule);
       option.textContent = rule.id + ": " + rule.section + " -> " + rule.destination + " (" + rule.template + ")";
       select.append(option);
     });
-    $("#archiveStatus").textContent = rules.length ? "" : "No recursive archive rules configured.";
-    $("#archivePreview").disabled = !rules.length;
+    if (rules.length) select.value = rules[0].id;
+    const sections = await api("/api/dupe2/sections");
+    $("#archiveSection").replaceChildren(...sections.map(section => new Option(section.name + " - " + section.path, section.name)));
+    applyArchiveRule();
+    $("#archiveStatus").textContent = "";
+    $("#archivePreview").disabled = !sections.length;
   } catch (error) { showError(error); }
 }
+
+function applyArchiveRule() {
+  const encoded = $("#archiveRule").selectedOptions[0]?.dataset.rule;
+  const rule = encoded ? JSON.parse(encoded) : null;
+  if (rule) $("#archiveSection").value = rule.section;
+  $("#archiveDestination").value = rule?.destination || "";
+  $("#archiveTemplate").value = rule?.template || "rls:${rls}";
+}
+$("#archiveRule").addEventListener("change", applyArchiveRule);
 
 $("#archiveForm").addEventListener("submit", async event => {
   event.preventDefault();
@@ -521,7 +535,9 @@ $("#archiveForm").addEventListener("submit", async event => {
   $("#archiveRows").replaceChildren();
   try {
     const job = await api("/api/archive/preview", {method: "POST", body: JSON.stringify({
-      rule: Number($("#archiveRule").value), limit: Number($("#archiveLimit").value)
+      rule: Number($("#archiveRule").value), limit: Number($("#archiveLimit").value),
+      section: $("#archiveSection").value, destination: $("#archiveDestination").value.trim(),
+      template: $("#archiveTemplate").value.trim()
     })});
     const result = await waitForJob(job.id, current => { $("#archiveStatus").textContent = current.state; });
     $("#archiveStatus").textContent = result.error || (result.output || []).join("\n");
@@ -583,9 +599,9 @@ function renderDupes() {
     checkbox.disabled = state.dupeBusy;
     checkbox.setAttribute("aria-label", "Select " + path);
     checkbox.addEventListener("change", () => {
-      if (checkbox.checked && state.dupeSelected.size >= 100) {
+      if (checkbox.checked && state.dupeSelected.size >= 10000) {
         checkbox.checked = false;
-        toast("Maximum 100 selected releases per deletion.");
+        toast("Maximum 10000 selected releases.");
         return;
       }
       if (checkbox.checked) state.dupeSelected.add(path); else state.dupeSelected.delete(path);
@@ -608,6 +624,10 @@ function renderDupes() {
   $("#deleteDupes").textContent = "Delete selected (" + state.dupeSelected.size + ")";
   $("#scanDupe").disabled = state.dupeBusy;
   $("#verifyDupes").disabled = state.dupeBusy || !state.dupePaths.some(item => item.status === "UNKNOWN" && state.dupeSelected.has(item.path));
+  $("#selectUnknown").disabled = state.dupeBusy || !state.dupePaths.some(item => item.status === "UNKNOWN");
+  $("#verifySection").disabled = state.dupeBusy;
+  $("#verifyAllSections").disabled = state.dupeBusy;
+  $("#moveDupes").disabled = state.dupeBusy || !state.dupeSelected.size;
 }
 
 async function submitDupe(payload) {
@@ -621,7 +641,7 @@ async function submitDupe(payload) {
       $("#dupeStatus").textContent = current.state;
       $("#dupeOutput").textContent = (current.output || []).join("\n") + (current.error ? "\n" + current.error : "");
     });
-    if ((payload.action === "scan" || payload.action === "verify") && result.state === "completed") {
+    if ((payload.action === "scan" || payload.action.startsWith("verify")) && result.state === "completed") {
       state.dupeJob = result.id;
       state.dupePaths = result.dupeResults || [];
       $("#dupeStatus").textContent = state.dupePaths.length + " releases; "
@@ -629,7 +649,7 @@ async function submitDupe(payload) {
       state.dupeSelected.clear();
       state.dupePage = 0;
     }
-    if (payload.action === "wipe") {
+    if (payload.action === "wipe" || payload.action === "move") {
       // Even partial failures invalidate the review; never repeat a destructive job automatically.
       state.dupeJob = null;
       state.dupePaths = [];
@@ -637,7 +657,7 @@ async function submitDupe(payload) {
     }
   } catch (error) {
     $("#dupeStatus").textContent = error.message;
-    if (payload.action === "wipe") {
+    if (payload.action === "wipe" || payload.action === "move") {
       state.dupeJob = null;
       state.dupePaths = [];
       state.dupeSelected.clear();
@@ -675,6 +695,7 @@ $("#dupePrevious").addEventListener("click", () => { state.dupePage--; renderDup
 $("#dupeNext").addEventListener("click", () => { state.dupePage++; renderDupes(); });
 $("#deleteDupes").addEventListener("click", async () => {
   const paths = Array.from(state.dupeSelected);
+  if (paths.length > 100) { toast("Delete at most 100 releases per confirmation."); return; }
   if (!paths.length || state.dupeBusy || !state.dupeJob) return;
   if (!await confirmAction("Permanently wipe " + paths.length + " releases?",
     paths.map(path => (state.dupePaths.find(item => item.path === path)?.status || "UNKNOWN") + ": " + path).join("\n")
@@ -687,6 +708,61 @@ $("#verifyDupes").addEventListener("click", async () => {
   if (!paths.length || !state.dupeJob || state.dupeBusy) return;
   if (!await confirmAction("Verify selected releases", "Fetch missing SFV/DIZ metadata and scan missing CRCs in the background? This reads slave disks; no files are deleted.\n\n" + paths.join("\n"))) return;
   await submitDupe({action: "verify", scanId: state.dupeJob, paths});
+});
+
+$("#selectUnknown").addEventListener("click", () => {
+  const unknown = state.dupePaths.filter(item => item.status === "UNKNOWN").map(item => item.path);
+  state.dupeSelected = new Set(unknown.slice(0, 10000));
+  if (unknown.length > 10000) toast("Selected 10000 UNKNOWN releases. Use section verification for the entire section.");
+  renderDupes();
+});
+async function verifyScope(all) {
+  const path = $("#dupeSection").value;
+  if (!all && !path) { toast("Choose a section first."); return; }
+  if (!await confirmAction("Verify UNKNOWN releases", (all ? "All configured visible sections" : path)
+    + "\nScan missing metadata and CRCs in the background. This may take a long time and reads slave disks. No files are deleted.")) return;
+  await submitDupe({action: all ? "verify-all" : "verify-section", path, confirm: "verify-scope"});
+}
+$("#verifySection").addEventListener("click", () => verifyScope(false));
+$("#verifyAllSections").addEventListener("click", () => verifyScope(true));
+
+let moveDestination = "";
+let moveBrowseRequest = 0;
+async function browseMove(path) {
+  const request = ++moveBrowseRequest;
+  $("#moveConfirm").disabled = true;
+  const folders = await api("/api/dupe2/folders?path=" + encodeURIComponent(path));
+  if (request !== moveBrowseRequest) return;
+  moveDestination = path;
+  $("#moveDestination").textContent = path;
+  $("#moveFolder").replaceChildren(new Option("This folder", ""), ...folders.map(folder => new Option(folder.split("/").pop(), folder)));
+  $("#moveUp").disabled = path === $("#moveSection").value;
+  $("#moveConfirm").disabled = false;
+}
+$("#moveDupes").addEventListener("click", async () => {
+  if (state.dupeSelected.size > 100) { toast("Move at most 100 releases per confirmation."); return; }
+  try {
+    const sections = await api("/api/dupe2/sections");
+    $("#moveSection").replaceChildren(...sections.map(section => new Option(section.name + " - " + section.path, section.path)));
+    if (!sections.length) { toast("No visible sections."); return; }
+    await browseMove($("#moveSection").value);
+    $("#moveDialog").showModal();
+  } catch (error) { showError(error); }
+});
+$("#moveSection").addEventListener("change", () => browseMove($("#moveSection").value).catch(showError));
+$("#moveOpen").addEventListener("click", () => { if ($("#moveFolder").value) browseMove($("#moveFolder").value).catch(showError); });
+$("#moveUp").addEventListener("click", () => {
+  const root = $("#moveSection").value;
+  const parent = moveDestination.substring(0, moveDestination.lastIndexOf("/")) || "/";
+  browseMove(parent.startsWith(root + "/") || parent === root ? parent : root).catch(showError);
+});
+$("#moveCancel").addEventListener("click", () => $("#moveDialog").close());
+$("#moveForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const paths = Array.from(state.dupeSelected), destination = $("#moveFolder").value || moveDestination;
+  $("#moveDialog").close();
+  if (!await confirmAction("Move " + paths.length + " releases?", paths.join("\n") + "\n\nDestination: " + destination)) return;
+  await submitDupe({action: "move", scanId: state.dupeJob, paths, destination, confirm: "move-selected"});
 });
 
 function renderRecovery(data) {
