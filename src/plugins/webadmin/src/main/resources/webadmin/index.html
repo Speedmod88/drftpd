@@ -92,7 +92,13 @@
           <button id="deleteDupes" class="danger" type="button" disabled>Delete selected (0)</button>
         </form>
         <p id="dupeStatus" class="scan-progress" role="status">No scan started.</p>
+        <div class="dupe-actions">
         <button id="verifyDupes" type="button" disabled>Verify selected UNKNOWN</button>
+        <button id="selectUnknown" type="button">Select all UNKNOWN</button>
+        <button id="verifySection" type="button">Verify UNKNOWN in section</button>
+        <button id="verifyAllSections" type="button">Verify UNKNOWN in all sections</button>
+        <button id="moveDupes" type="button" disabled>Move selected</button>
+        </div>
         <div class="table-scroll"><table><thead><tr><th><input id="dupeSelectPage" type="checkbox" aria-label="Select this page"></th><th>Status</th><th>Score</th><th>Release</th></tr></thead><tbody id="dupeRows"></tbody></table></div>
         <div class="dupe-pagination"><button id="dupePrevious" type="button" disabled>Previous</button><span id="dupePage"></span><button id="dupeNext" type="button" disabled>Next</button></div>
         <pre id="dupeOutput" class="dashboard-output" tabindex="0"></pre>
@@ -101,6 +107,10 @@
         <h2>Archive reorganization</h2>
         <form id="archiveForm" class="recovery-controls">
           <label class="recovery-path" for="archiveRule">Rule<select id="archiveRule" required></select></label>
+          <label class="recovery-path" for="archiveSection">Source section<select id="archiveSection" required></select></label>
+          <label class="recovery-path" for="archiveDestination">Destination<input id="archiveDestination" placeholder="/ARCHIVES/TV-FR" required></label>
+          <label class="recovery-path" for="archiveTemplate">Folder rule<input id="archiveTemplate" placeholder="rls:${rls}" list="archiveTemplates"></label>
+          <datalist id="archiveTemplates"><option value="rls:${rls}"></option><option value="rls:${rls}/${rls}.Season.${season}"></option><option value="alpha"></option><option value="dated:yyyy-MM"></option></datalist>
           <label for="archiveLimit">Limit<input id="archiveLimit" type="number" min="1" max="1000" value="100" required></label>
           <button id="archivePreview" type="submit">Preview</button>
         </form>
@@ -229,6 +239,16 @@
         <button value="cancel">Cancel</button>
         <button id="confirmAccept" value="confirm" class="danger">Confirm</button>
       </div>
+    </form>
+  </dialog>
+  <dialog id="moveDialog">
+    <form id="moveForm">
+      <h3>Move selected releases</h3>
+      <label for="moveSection">Section<select id="moveSection" required></select></label>
+      <label for="moveFolder">Subfolder<select id="moveFolder"></select></label>
+      <div class="dialog-actions"><button id="moveUp" type="button">Parent folder</button><button id="moveOpen" type="button">Open folder</button></div>
+      <p id="moveDestination"></p>
+      <div class="dialog-actions"><button id="moveCancel" type="button">Cancel</button><button id="moveConfirm" type="submit">Move here</button></div>
     </form>
   </dialog>
 </body>
