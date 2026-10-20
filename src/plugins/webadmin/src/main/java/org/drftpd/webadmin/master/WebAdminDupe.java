@@ -51,6 +51,17 @@ final class WebAdminDupe {
             }
             return visible;
         }
+        List<String> candidates = indexedDirectories(username, path);
+        List<Dupe2Utils.ReviewResult> results = new ArrayList<>();
+        for (var result : Dupe2Utils.reviewDuplicates(candidates, limit)) {
+            try { directory(user, result.path()); results.add(result); }
+            catch (IOException ignored) { }
+        }
+        return results;
+    }
+
+    static List<String> indexedDirectories(String username, String path) throws Exception {
+        User user = user(username);
         DirectoryHandle root = directory(user, path);
         AdvancedSearchParams params = new AdvancedSearchParams();
         params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
@@ -66,12 +77,47 @@ final class WebAdminDupe {
             }
             if (Thread.currentThread().isInterrupted()) throw new IOException("Scan stopped");
         }
-        List<Dupe2Utils.ReviewResult> results = new ArrayList<>();
-        for (var result : Dupe2Utils.reviewDuplicates(candidates, limit)) {
-            try { directory(user, result.path()); results.add(result); }
-            catch (IOException ignored) { }
+        return candidates;
+    }
+
+    static List<String> unknown(String username, String sectionPath) throws Exception {
+        java.util.Set<String> paths = new java.util.TreeSet<>();
+        List<java.util.Map<String, String>> sections = sections(username);
+        if (sectionPath != null && sections.stream().noneMatch(s -> s.get("path").equals(sectionPath)))
+            throw new IOException("Choose a configured section");
+        for (var section : sections) {
+            if (sectionPath != null && !section.get("path").equals(sectionPath)) continue;
+            paths.addAll(Dupe2Utils.unknownPaths(indexedDirectories(username, section.get("path"))));
         }
-        return results;
+        return new ArrayList<>(paths);
+    }
+
+    static List<String> folders(String username, String path) throws Exception {
+        var user = user(username);
+        var root = directory(user, path);
+        List<String> folders = new ArrayList<>();
+        for (var inode : root.getInodeHandlesUnchecked()) {
+            if (inode instanceof DirectoryHandle dir && !inode.isLink() && !inode.isHidden(user)) folders.add(dir.getPath());
+        }
+        folders.sort(String::compareTo);
+        return folders;
+    }
+
+    static String moveTarget(String username, String source, String destination) throws Exception {
+        checkWipe(username, source);
+        var user = user(username);
+        var from = directory(user, source);
+        var parent = directory(user, destination);
+        if (parent.isRoot()) throw new IOException("Choose a destination section or subfolder");
+        String target = parent.getPath() + "/" + from.getName();
+        validateMovePaths(from.getPath(), parent.getPath());
+        if (new DirectoryHandle(target).exists()) throw new IOException("Destination already exists: " + target);
+        return target;
+    }
+
+    static void validateMovePaths(String source, String destination) {
+        if (destination.equals(source) || destination.startsWith(source + "/"))
+            throw new IllegalArgumentException("Cannot move a release into itself");
     }
 
     static boolean eligible(String username, String path) throws Exception {
@@ -112,8 +158,12 @@ final class WebAdminDupe {
     }
 
     static List<String> selection(Collection<String> offered, List<String> selected) {
-        if (selected == null || selected.isEmpty() || selected.size() > 100) {
-            throw new IllegalArgumentException("Select between 1 and 100 releases");
+        return selection(offered, selected, 100);
+    }
+
+    static List<String> selection(Collection<String> offered, List<String> selected, int maximum) {
+        if (selected == null || selected.isEmpty() || selected.size() > maximum) {
+            throw new IllegalArgumentException("Select between 1 and " + maximum + " releases");
         }
         List<String> unique = selected.stream().distinct().toList();
         for (String path : unique) {

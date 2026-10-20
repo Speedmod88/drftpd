@@ -88,6 +88,13 @@ public final class Dupe2Utils {
 
     public record ReviewResult(String path, String key, String status, int score, boolean eligible) { }
 
+    /** Cached-only discovery, including releases without duplicate partners. */
+    public static List<String> unknownPaths(Collection<String> paths) {
+        return getSelectedCandidatesByKey(paths, null, true).values().stream()
+                .flatMap(Collection::stream).filter(candidate -> candidate.getStatus().equals("unknown"))
+                .map(candidate -> candidate.getDirectory().getPath()).distinct().sorted().toList();
+    }
+
     public static List<ReviewResult> reviewDuplicates(Collection<String> paths, int groupLimit)
             throws IndexException {
         return reviewDuplicates(paths, groupLimit, false);
