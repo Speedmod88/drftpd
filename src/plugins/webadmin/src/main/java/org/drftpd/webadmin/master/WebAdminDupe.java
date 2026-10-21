@@ -53,7 +53,7 @@ final class WebAdminDupe {
         }
         List<String> candidates = indexedDirectories(username, path);
         List<Dupe2Utils.ReviewResult> results = new ArrayList<>();
-        for (var result : Dupe2Utils.reviewDuplicates(candidates, limit)) {
+        for (var result : Dupe2Utils.reviewWeb(candidates, limit)) {
             try { directory(user, result.path()); results.add(result); }
             catch (IOException ignored) { }
         }

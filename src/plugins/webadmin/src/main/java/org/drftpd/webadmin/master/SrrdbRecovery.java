@@ -62,6 +62,74 @@ final class SrrdbRecovery implements AutoCloseable {
     private int notFound;
     private volatile boolean cancelled;
     private volatile boolean closed;
+    private String scanId;
+    private String scanOwner;
+    private long scanCreated;
+    private long scanFinished;
+    private String savedVersion;
+    interface HistorySink { void save(String username, Map<String, Object> data) throws IOException; }
+    private HistorySink historySink;
+
+    synchronized void setHistorySink(HistorySink sink) { historySink = sink; }
+
+    synchronized Map<String, Object> historyView() {
+        if (scanId == null) return Map.of();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", scanId);
+        data.put("command", "SRRDB scan");
+        data.put("created", scanCreated);
+        data.put("state", scanState);
+        data.put("finished", scanFinished);
+        data.put("recovery", view());
+        data.put("owner", scanOwner);
+        return data;
+    }
+
+    synchronized void checkpointHistory() {
+        if (scanId == null) return;
+        String version = scanId + ":" + scanState + ":" + scanned + ":" + comparisons.size() + ":" + errors + ":" + scanFinished;
+        if (version.equals(savedVersion)) return;
+        Map<String, Object> data = historyView();
+        try {
+            Path target = stateFile.resolveSibling(stateFile.getFileName() + ".scan.json");
+            Files.createDirectories(target.getParent());
+            Path temp = Files.createTempFile(target.getParent(), "srrdb-scan-", ".tmp");
+            try {
+                Files.writeString(temp, gson.toJson(data), StandardCharsets.UTF_8);
+                try { Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+                catch (AtomicMoveNotSupportedException e) { Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING); }
+            } finally { Files.deleteIfExists(temp); }
+            if (historySink != null) historySink.save(scanOwner, data);
+            savedVersion = version;
+        } catch (IOException e) { logger.error("Unable to persist srrDB scan results", e); }
+    }
+
+    private void loadScan() {
+        Path path = stateFile.resolveSibling(stateFile.getFileName() + ".scan.json");
+        if (!Files.exists(path)) return;
+        try {
+            if (Files.isSymbolicLink(path) || Files.size(path) > 16 * 1024 * 1024) throw new IOException("Invalid scan snapshot");
+            var data = gson.fromJson(Files.readString(path), com.google.gson.JsonObject.class);
+            var result = data.getAsJsonObject("recovery");
+            String restoredId = UUID.fromString(data.get("id").getAsString()).toString();
+            scanOwner = data.get("owner").getAsString();
+            scanCreated = data.get("created").getAsLong();
+            scanFinished = data.has("finished") ? data.get("finished").getAsLong() : 0;
+            scanState = result.get("scanState").getAsString();
+            if (scanState.equals("running") || scanState.equals("queued")) scanState = "interrupted";
+            scanMessage = scanState.equals("interrupted") ? "Interrupted by restart; not automatically resumed." : result.get("scanMessage").getAsString();
+            scanned = result.get("scanned").getAsInt();
+            total = result.get("total").getAsInt();
+            errors = result.get("errors").getAsInt();
+            notFound = result.get("notFound").getAsInt();
+            for (var item : result.getAsJsonArray("comparisons")) {
+                if (comparisons.size() >= 2000) break;
+                comparisons.add(gson.fromJson(item, Comparison.class));
+            }
+            for (var item : result.getAsJsonArray("scanErrors")) if (scanErrors.size() < 20) scanErrors.add(item.getAsString());
+            scanId = restoredId;
+        } catch (IOException | RuntimeException e) { logger.error("Cannot restore srrDB scan results; snapshot preserved", e); }
+    }
 
     SrrdbRecovery(Path stateFile, int scanLimit, SrrdbClient client, Library library) throws IOException {
         this.stateFile = stateFile;
@@ -69,6 +137,7 @@ final class SrrdbRecovery implements AutoCloseable {
         this.client = client;
         this.library = library;
         load();
+        loadScan();
     }
 
     synchronized Map<String, Object> view() {
@@ -90,6 +159,11 @@ final class SrrdbRecovery implements AutoCloseable {
         String normalizedPath = normalizePath(path);
         if (closed) throw new IllegalArgumentException("Recovery service is stopping");
         if (scanState.equals("running") || scanState.equals("queued")) throw new IllegalArgumentException("A scan is already running");
+        checkpointHistory();
+        scanId = UUID.randomUUID().toString();
+        scanOwner = username;
+        scanCreated = System.currentTimeMillis();
+        scanFinished = 0;
         cancelled = false;
         scanned = 0;
         total = 0;
@@ -163,6 +237,8 @@ final class SrrdbRecovery implements AutoCloseable {
         }
         logger.info("srrDB scan ended: user={} state={} scanned={} notFound={} errors={}",
                 username, scanState, scanned, notFound, errors);
+        synchronized (this) { scanFinished = System.currentTimeMillis(); }
+        checkpointHistory();
     }
 
     synchronized void cancel() { cancelled = true; }
@@ -263,6 +339,7 @@ final class SrrdbRecovery implements AutoCloseable {
     }
 
     @Override public void close() {
+        checkpointHistory();
         synchronized (this) { closed = true; cancelled = true; }
         worker.shutdownNow();
         library.close();
