@@ -44,6 +44,8 @@ import java.util.concurrent.ThreadFactory;
  * @version $Id$
  */
 public class Archive implements PluginInterface {
+    private final ArchiveControl control = new ArchiveControl();
+    public ArchiveControl getControl() { return control; }
 
     private static final Logger logger = LogManager.getLogger(Archive.class);
     private static final String TIMER_NAME = "archive.scan";
@@ -160,6 +162,7 @@ public class Archive implements PluginInterface {
             public void run() {
 
                 logger.debug("TimerTask triggered");
+                if (!control.state().equals("running")) return;
                 int count = 1;
 
                 String type;
@@ -188,14 +191,30 @@ public class Archive implements PluginInterface {
      * Submit a new archive task to be executed
      */
     public void executeArchiveType(ArchiveType at) {
+        synchronized (control) {
+            if (!control.state().equals("running")) return;
+            submitArchiveType(at);
+        }
+    }
 
+    public java.util.concurrent.Future<?> submitArchiveType(ArchiveType at) {
+        return submitArchiveType(at, message -> { });
+    }
+
+    public java.util.concurrent.Future<?> submitArchiveType(ArchiveType at, java.util.function.Consumer<String> progress) {
+        synchronized (control) {
+        if (!control.state().equals("running")) throw new IllegalStateException("Archive plugin is paused or stopped");
         // Create the Runnable ArchiveHandler
-        ArchiveHandler ah = new ArchiveHandler(at);
+        ArchiveHandler ah = new ArchiveHandler(at, progress);
 
         // Register it to our active archive handlers and submit it to our executor
         _archiveHandlers.put(ah.getUUID(), ah);
-        _archiveHandlerExecutor.submit(ah);
+        java.util.concurrent.Future<?> future;
+        try { future = _archiveHandlerExecutor.submit(ah); }
+        catch (RuntimeException e) { _archiveHandlers.remove(ah.getUUID()); throw e; }
         logger.debug("New archive handler with uuid {} registered and submitted to executor", ah.getUUID());
+        return future;
+        }
     }
 
     /*
@@ -218,11 +237,12 @@ public class Archive implements PluginInterface {
      * throws DuplicateArchiveException if it is.
      */
     public void checkPathForArchiveStatus(String handlerPath) throws DuplicateArchiveException {
+        checkPathForArchiveStatus(handlerPath, null);
+    }
+
+    public void checkPathForArchiveStatus(String handlerPath, ArchiveHandler current) throws DuplicateArchiveException {
         for (ArchiveHandler ah : _archiveHandlers.values()) {
-            if(ah.getJobs().size() == 0) {
-                // no jobs associated to this archive type yet so it has not been initialized yet
-                continue;
-            }
+            if (ah == current) continue;
             DirectoryHandle dirHandle = ah.getArchiveType().getDirectory();
             if (dirHandle == null) {
                 // archiveType is not yet started so directory is not known yet ...
@@ -231,11 +251,11 @@ public class Archive implements PluginInterface {
             String ahPath = dirHandle.getPath();
 
             if (ahPath.length() > handlerPath.length()) {
-                if (ahPath.startsWith(handlerPath)) {
+                if (ahPath.startsWith(handlerPath + "/")) {
                     throw new DuplicateArchiveException(ahPath + " is already being archived");
                 }
             } else {
-                if (handlerPath.startsWith(ahPath)) {
+                if (handlerPath.equals(ahPath) || handlerPath.startsWith(ahPath + "/")) {
                     throw new DuplicateArchiveException(handlerPath + " is already being archived");
                 }
             }
@@ -249,6 +269,7 @@ public class Archive implements PluginInterface {
     }
 
     public void startPlugin() {
+        control.change("resume");
         // Subscribe to events
         AnnotationProcessor.process(this);
         logger.info("Archive plugin loaded successfully");
@@ -257,6 +278,7 @@ public class Archive implements PluginInterface {
     }
 
     public void stopPlugin(String reason) {
+        control.change("stop");
         if (_runHandler != null) {
             _runHandler.cancel();
         }

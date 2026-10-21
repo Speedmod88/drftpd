@@ -45,9 +45,17 @@ public class ArchiveHandler implements Runnable {
     private ArrayList<Job> _jobs;
 
     private final UUID _uuid;
+    private final long generation;
+    private final java.util.function.Consumer<String> progress;
 
     public ArchiveHandler(ArchiveType archiveType) {
+        this(archiveType, message -> { });
+    }
+
+    public ArchiveHandler(ArchiveType archiveType, java.util.function.Consumer<String> progress) {
+        this.progress = progress;
         _archiveType = archiveType;
+        generation = archiveType.getParent().getControl().generation();
         _jobs = new ArrayList<>();
         _uuid = UUID.randomUUID();
         AnnotationProcessor.process(this);
@@ -102,6 +110,7 @@ public class ArchiveHandler implements Runnable {
 
         // Check to make sure that we are the only timer based runner for this archive type
         if (hasActiveThreadForArchiveTypeAndSection()) {
+            progress.accept("SKIPPED: another handler for this archive rule is active.");
             logger.warn("Another timer based ArchiveHandler already exists and is active, so this one is duplicate and not running it");
             if (_archiveType._parent.removeArchiveHandler(this) == null) {
                 logger.error("We were unable to remove this ArchiveHandler from the registered ArchiveHandlers");
@@ -113,9 +122,14 @@ public class ArchiveHandler implements Runnable {
 
         // Loop as often as Repeat demands
         for (int i = 0; i < _archiveType.getRepeat(); i++) {
+            if (!_archiveType.getParent().getControl().await(generation)) {
+                progress.accept("STOPPED: remaining releases were not processed.");
+                break;
+            }
             try {
                 synchronized (_archiveType._parent) {
                     if (_archiveType.getDirectory() == null) {
+                        progress.accept("No more eligible completed releases.");
                         _archiveType.setDirectory(_archiveType.getOldestNonArchivedDir());
                     }
 
@@ -126,8 +140,9 @@ public class ArchiveHandler implements Runnable {
                     }
                     try {
                         // Ensure we are not already archiving this request
-                        _archiveType._parent.checkPathForArchiveStatus(_archiveType.getDirectory().getPath());
+                        _archiveType._parent.checkPathForArchiveStatus(_archiveType.getDirectory().getPath(), this);
                     } catch (DuplicateArchiveException e) {
+                        progress.accept("SKIPPED: release already being archived: " + _archiveType.getDirectory().getPath());
                         logger.warn("Directory -- {} -- is already being archived ", _archiveType.getDirectory());
                         // Do a break here (no return) as that stops the finally from running (ie: deleting the archive handler)
                         break;
@@ -139,10 +154,12 @@ public class ArchiveHandler implements Runnable {
                     _archiveType.addFailedDir(_archiveType.getDirectory().getPath());
                     continue;
                 }
+                progress.accept("START: " + _archiveType.getDirectory().getPath());
                 if (!_archiveType.moveReleaseOnly()) {
                     Set<RemoteSlave> destSlaves = _archiveType.findDestinationSlaves();
 
                     if (destSlaves == null || destSlaves.isEmpty() || destSlaves.size() < _archiveType._numOfSlaves) {
+                        progress.accept("SKIPPED: insufficient destination slaves.");
                         _archiveType.setDirectory(null);
                         logger.warn("Archive rule {} section {}: insufficient destination slaves (available={}, required={}); retry next cycle",
                                 _archiveType.getConfNum(), _archiveType.getSection().getName(),
@@ -161,14 +178,17 @@ public class ArchiveHandler implements Runnable {
                 }
 
                 if (!_archiveType.moveRelease(getArchiveType().getDirectory())) {
+                    progress.accept("FAILED: " + getArchiveType().getDirectory().getPath());
                     _archiveType.addFailedDir(getArchiveType().getDirectory().getPath());
                     GlobalContext.getEventService().publish(new ArchiveFailedEvent(_archiveType, startTime, "Failed To Move Directory"));
                     logger.error("Failed to Archiving {} (Failed To Move Directory)", getArchiveType().getDirectory().getPath());
                 } else {
+                    progress.accept("DONE: " + getArchiveType().getDirectory().getPath());
                     GlobalContext.getEventService().publish(new ArchiveFinishEvent(_archiveType, startTime));
                     logger.info("Done archiving {}", getArchiveType().getDirectory().getPath());
                 }
             } catch (Exception e) {
+                progress.accept("FAILED: " + e.toString());
                 logger.warn("Caught an unexpected exception while trying to archive", e);
             } finally {
                 // Make sure we always reset the directory to null
