@@ -113,18 +113,30 @@ public final class Dupe2Utils {
         return reviewKeys(Set.of(key), groupLimit, true);
     }
 
+    /** Web review also exposes incomplete single releases, without making them cleanup candidates. */
+    public static List<ReviewResult> reviewWeb(Collection<String> paths, int groupLimit) throws IndexException {
+        var selected = getSelectedCandidatesByKey(paths, null, true);
+        return reviewKeys(selected.keySet(), groupLimit, false, true);
+    }
+
     private static List<ReviewResult> reviewKeys(Set<String> keys, int groupLimit) throws IndexException {
         return reviewKeys(keys, groupLimit, false);
     }
 
     private static List<ReviewResult> reviewKeys(Set<String> keys, int groupLimit, boolean includeSingle) throws IndexException {
+        return reviewKeys(keys, groupLimit, includeSingle, false);
+    }
+
+    private static List<ReviewResult> reviewKeys(Set<String> keys, int groupLimit, boolean includeSingle,
+                                                boolean includeIncomplete) throws IndexException {
         if (groupLimit < 1 || groupLimit > 1000) throw new IllegalArgumentException("Limit must be between 1 and 1000");
         Map<String, List<DupeCandidate>> all = getIndexedCandidatesForKeys(keys);
         List<ReviewResult> results = new ArrayList<>();
         int groups = 0;
         for (String key : keys.stream().sorted().toList()) {
             List<DupeCandidate> candidates = all.getOrDefault(key, Collections.emptyList());
-            if (candidates.isEmpty() || (!includeSingle && candidates.size() < 2)) continue;
+            if (candidates.isEmpty() || (!includeSingle && candidates.size() < 2
+                    && !(includeIncomplete && !candidates.get(0).isComplete()))) continue;
             Set<String> keepers = getCandidatePaths(getDupeKeepers(getCompletedCandidates(candidates)));
             for (DupeCandidate candidate : candidates.stream()
                     .sorted(java.util.Comparator.comparing(c -> c.getDirectory().getPath())).toList()) {

@@ -96,6 +96,11 @@ final class WebAdminServer {
     private final Map<String, LoginAttempt> loginAttempts = new ConcurrentHashMap<>();
     private final Map<String, WebSessionToken> sessions = new ConcurrentHashMap<>();
     private final Map<String, CommandJob> jobs = new ConcurrentHashMap<>();
+    private final WebJobHistory history;
+    private final java.util.concurrent.ScheduledExecutorService historyWriter =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread thread = new Thread(r, "WebAdmin-History"); thread.setDaemon(true); return thread;
+            });
     private final ThreadPoolExecutor requestExecutor;
     private final ThreadPoolExecutor commandExecutor;
     private final ThreadPoolExecutor dupeExecutor = executor(1, 4, "WebAdmin-DupeReview");
@@ -106,6 +111,7 @@ final class WebAdminServer {
 
     WebAdminServer(WebAdminSettings settings) {
         this.settings = Objects.requireNonNull(settings);
+        history = new WebJobHistory(settings.srrdbState.resolveSibling("jobs"));
         requestExecutor = executor(settings.requestThreads, settings.requestQueue, "WebAdmin-HTTP");
         commandExecutor = executor(settings.commandThreads, settings.commandQueue, "WebAdmin-Command");
     }
@@ -137,6 +143,7 @@ final class WebAdminServer {
             server.createContext("/", this::handle);
             server.setExecutor(requestExecutor);
             server.start();
+            historyWriter.scheduleWithFixedDelay(this::checkpointHistory, 5, 5, TimeUnit.SECONDS);
             logger.info("HTTPS web administration listening on https://{}:{}; login restricted to siteop",
                     settings.bindAddress.getHostAddress(), settings.port);
             if (settings.bindAddress.isLoopbackAddress()) {
@@ -166,6 +173,8 @@ final class WebAdminServer {
         commandExecutor.shutdownNow();
         dupeExecutor.shutdownNow();
         sessions.clear();
+        checkpointHistory();
+        historyWriter.shutdown();
         logger.info("HTTPS web administration server stopped");
     }
 
@@ -193,6 +202,22 @@ final class WebAdminServer {
             switch (path) {
                 case "/api/session" -> session(exchange, session);
                 case "/api/logout" -> logout(exchange, session);
+                case "/api/history" -> {
+                    requireMethod(exchange, "GET");
+                    Map<String, Object> summaries = new LinkedHashMap<>();
+                    for (var saved : history.list(session.username)) {
+                        markInterrupted(saved);
+                        summaries.put(saved.get("id").getAsString(), saved);
+                    }
+                    for (var job : jobs.values()) if (job.saveHistory && job.username.equals(session.username))
+                        summaries.put(job.id, Map.of("id", job.id, "command", job.command,
+                                "created", job.created, "state", job.state, "finished", job.finished));
+                    if (recovery != null) {
+                        var live = recovery.historyView();
+                        if (session.username.equals(live.get("owner"))) summaries.put((String) live.get("id"), live);
+                    }
+                    sendJson(exchange, 200, summaries.values());
+                }
                 case "/api/overview" -> overview(exchange, session);
                 case "/api/file-scopes" -> fileScopes(exchange);
                 case "/api/dupe2" -> dupe2(exchange, session);
@@ -203,6 +228,16 @@ final class WebAdminServer {
                 }
                 case "/api/archive/rules" -> { requireMethod(exchange, "GET"); sendJson(exchange, 200, WebAdminArchive.rules()); }
                 case "/api/archive/preview" -> archivePreview(exchange, session);
+                case "/api/archive/run" -> archivePreview(exchange, session);
+                case "/api/archive/control" -> {
+                    if (exchange.getRequestMethod().equals("GET")) sendJson(exchange, 200, WebAdminArchive.control(null));
+                    else {
+                        requireMethod(exchange, "POST");
+                        var request = readJson(exchange, com.google.gson.JsonObject.class, MAX_COMMAND_BODY);
+                        if (request == null || !request.has("action")) throw new ApiException(400, "Missing action");
+                        sendJson(exchange, 200, WebAdminArchive.control(request.get("action").getAsString()));
+                    }
+                }
                 case "/api/timers" -> timers(exchange);
                 case "/api/config/files" -> configFiles(exchange);
                 case "/api/config/file" -> configFile(exchange, session);
@@ -335,6 +370,7 @@ final class WebAdminServer {
         if (recovery == null) {
             recovery = new SrrdbRecovery(settings.srrdbState, settings.srrdbScanLimit,
                     new SrrdbClient(settings.srrdbMaximumBytes), new SrrdbLibrary());
+            recovery.setHistorySink(history::save);
         }
         return recovery;
     }
@@ -476,29 +512,37 @@ final class WebAdminServer {
 
     private synchronized void archivePreview(HttpExchange exchange, WebSessionToken session) throws IOException {
         requireMethod(exchange, "POST");
+        boolean execute = exchange.getRequestURI().getPath().endsWith("/run");
         ArchivePreviewPayload payload = readJson(exchange, ArchivePreviewPayload.class, MAX_COMMAND_BODY);
         if (payload == null || payload.rule < 0 || payload.limit < 1 || payload.limit > 1000)
             throw new ApiException(400, "Select a rule and a limit between 1 and 1000");
         if (jobs.values().stream().anyMatch(job -> job.username.equals(session.username)
-                && job.command.startsWith("ARCHIVE PREVIEW") && (job.state.equals("queued") || job.state.equals("running"))))
-            throw new ApiException(409, "An archive preview is already running");
+                && job.command.startsWith("ARCHIVE ") && (job.state.equals("queued") || job.state.equals("running"))))
+            throw new ApiException(409, "An archive job is already running");
         pruneJobs();
-        CommandJob job = new CommandJob(UUID.randomUUID().toString(), session.username, "ARCHIVE PREVIEW " + payload.rule);
+        CommandJob job = new CommandJob(UUID.randomUUID().toString(), session.username,
+                (execute ? "ARCHIVE RUN " : "ARCHIVE PREVIEW ") + payload.rule);
         jobs.put(job.id, job);
         try {
             commandExecutor.execute(() -> {
                 job.state = "running";
                 job.started = System.currentTimeMillis();
                 try {
-                    job.archiveRows = WebAdminArchive.preview(job.username, payload.rule, payload.limit,
-                            payload.section, payload.destination, payload.template);
-                    job.addOutput("Reviewed " + job.archiveRows.size() + " releases (limit " + payload.limit + "). No files moved.");
-                    job.state = "completed";
+                    if (execute) {
+                        job.state = WebAdminArchive.run(job.username, payload.rule, payload.limit,
+                                payload.section, payload.destination, payload.template, job::addOutput);
+                        job.addOutput("Archive handler finished. See archive.log for per-release outcomes.");
+                    } else {
+                        job.archiveRows = WebAdminArchive.preview(job.username, payload.rule, payload.limit,
+                                payload.section, payload.destination, payload.template);
+                        job.addOutput("Reviewed " + job.archiveRows.size() + " releases (limit " + payload.limit + "). No files moved.");
+                        job.state = "completed";
+                    }
                 } catch (Exception | LinkageError e) {
                     job.error = e.getMessage();
                     job.state = "failed";
-                    logger.error("Archive preview failed for {}", job.username, e);
-                } finally { job.finished = System.currentTimeMillis(); }
+                    logger.error("Archive job failed for {}", job.username, e);
+                } finally { job.finished = System.currentTimeMillis(); persistJob(job); }
             });
         } catch (RejectedExecutionException e) { jobs.remove(job.id); throw e; }
         sendJson(exchange, 202, jobView(job));
@@ -607,6 +651,7 @@ final class WebAdminServer {
                     logger.error("WebAdmin Dupe2 job failed for {}", job.username, e);
                 } finally {
                     job.finished = System.currentTimeMillis();
+                    persistJob(job);
                 }
             });
         } catch (RejectedExecutionException e) { jobs.remove(job.id); throw e; }
@@ -786,6 +831,8 @@ final class WebAdminServer {
         pruneJobs();
         CommandJob job = new CommandJob(UUID.randomUUID().toString(), session.username,
                 resolved.name + (resolved.argument.isEmpty() ? "" : " " + resolved.argument));
+        job.saveHistory = !(payload.dashboard && (resolved.name.equalsIgnoreCase("site swho")
+                || (resolved.name.equalsIgnoreCase("site status") && resolved.argument.equalsIgnoreCase("ALL"))));
         jobs.put(job.id, job);
         try {
             commandExecutor.execute(() -> runCommand(job, resolved));
@@ -808,6 +855,7 @@ final class WebAdminServer {
             logger.error("Webadmin command failed for user [{}]: {}", job.username, job.command, e);
         } finally {
             job.finished = System.currentTimeMillis();
+            persistJob(job);
         }
     }
 
@@ -837,7 +885,23 @@ final class WebAdminServer {
     private void commandJob(HttpExchange exchange, WebSessionToken session, String id) throws IOException {
         requireMethod(exchange, "GET");
         CommandJob job = jobs.get(id);
-        if (job == null || !job.username.equals(session.username)) {
+        if (job == null) {
+            if (recovery != null) {
+                var live = recovery.historyView();
+                if (id.equals(live.get("id")) && session.username.equals(live.get("owner"))) {
+                    sendJson(exchange, 200, live);
+                    return;
+                }
+            }
+            try {
+                var saved = history.read(session.username, id);
+                markInterrupted(saved);
+                saved.addProperty("readOnly", true);
+                sendJson(exchange, 200, saved);
+                return;
+            } catch (IOException | IllegalArgumentException e) { throw new ApiException(404, "Saved result unavailable"); }
+        }
+        if (!job.username.equals(session.username)) {
             throw new ApiException(404, "Command job not found");
         }
         sendJson(exchange, 200, jobView(job));
@@ -1117,7 +1181,10 @@ final class WebAdminServer {
             return;
         }
         long cutoff = System.currentTimeMillis() - TimeUnit.HOURS.toMillis(1);
-        jobs.values().removeIf(job -> job.finished > 0 && job.finished < cutoff);
+        jobs.values().removeIf(job -> {
+            if (job.finished > 0 && job.finished < cutoff) { persistJob(job); return true; }
+            return false;
+        });
         int excess = jobs.size() - 199;
         if (excess > 0) {
             jobs.values().stream()
@@ -1126,7 +1193,33 @@ final class WebAdminServer {
                     .limit(excess)
                     .map(job -> job.id)
                     .toList()
-                    .forEach(jobs::remove);
+                    .forEach(id -> { persistJob(jobs.get(id)); jobs.remove(id); });
+        }
+    }
+
+    private static void markInterrupted(com.google.gson.JsonObject saved) {
+        String state = saved.get("state").getAsString();
+        if (List.of("queued", "running", "paused", "stopping").contains(state)) {
+            saved.addProperty("state", "interrupted");
+            saved.addProperty("error", "Interrupted by master/WebAdmin restart. Not automatically replayed.");
+        }
+    }
+
+    private void checkpointHistory() {
+        try {
+            for (CommandJob job : jobs.values()) persistJob(job);
+            SrrdbRecovery current = recovery;
+            if (current != null) current.checkpointHistory();
+        } catch (Exception e) { logger.error("WebAdmin history checkpoint failed", e); }
+    }
+
+    private void persistJob(CommandJob job) {
+        if (job == null || !job.saveHistory) return;
+        synchronized (job) {
+            String version = job.state + ":" + job.output.size() + ":" + job.finished + ":" + job.dupeResults.size() + ":" + job.archiveRows.size();
+            if (version.equals(job.persistedVersion)) return;
+            try { history.save(job.username, jobView(job)); job.persistedVersion = version; }
+            catch (IOException e) { logger.error("Cannot save WebAdmin result {}", job.id, e); }
         }
     }
 
@@ -1241,6 +1334,8 @@ final class WebAdminServer {
     }
 
     private static final class CommandJob {
+        private boolean saveHistory = true;
+        private String persistedVersion;
         private final String id;
         private final String username;
         private final String command;
@@ -1290,6 +1385,7 @@ final class WebAdminServer {
 
     private static final class CommandPayload {
         private String command;
+        private boolean dashboard;
     }
 
     private static final class DupePayload {
