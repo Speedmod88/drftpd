@@ -20,6 +20,7 @@ const state = {
   dupeSelected: new Set(),
   dupePage: 0,
   dupeBusy: false,
+  archiveBusy: false,
   view: "overview"
 };
 
@@ -41,6 +42,11 @@ async function api(path, options = {}) {
 }
 
 function showLogin(expired = false) {
+  clearTimeout(historyPoll);
+  $("#resultHistory").replaceChildren(new Option("Choose an execution", ""));
+  $("#historyRows").replaceChildren();
+  $("#historyOutput").textContent = "";
+  $("#historyStatus").textContent = "";
   state.csrf = "";
   state.username = "";
   $("#appView").hidden = true;
@@ -74,7 +80,51 @@ function showApp(session) {
   state.expiryTimer = setTimeout(() => showLogin(true), Math.max(0, session.expiresAt - session.serverTime));
   selectView("overview");
   loadFileScopes();
+  loadHistory();
 }
+
+let historyPoll;
+async function loadHistory() {
+  const username = state.username;
+  try {
+    const results = await api("/api/history");
+    if (!state.csrf || username !== state.username) return;
+    const select = $("#resultHistory"), previous = select.value;
+    select.replaceChildren(new Option("Choose an execution", ""));
+    results.sort((a, b) => b.created - a.created).forEach(job => {
+      select.append(new Option(formatTime(job.created) + " | " + job.command + " | " + job.state, job.id));
+    });
+    select.value = previous;
+  } catch (error) { if (state.csrf) showError(error); }
+}
+async function showHistory() {
+  clearTimeout(historyPoll);
+  const id = $("#resultHistory").value, username = state.username;
+  if (!id || !state.csrf) return;
+  try {
+    const job = await api("/api/jobs/" + encodeURIComponent(id));
+    if (!state.csrf || username !== state.username || id !== $("#resultHistory").value) return;
+    $("#historyStatus").textContent = job.command + " | " + job.state;
+    $("#historyOutput").textContent = (job.output || []).join("\n") + (job.error ? "\n" + job.error : "");
+    const rows = $("#historyRows");
+    rows.replaceChildren();
+    const data = job.recovery ? (job.recovery.comparisons || [])
+      : job.dupeResults && job.dupeResults.length ? job.dupeResults : (job.archiveRows || []);
+    for (const item of data) {
+      const row = document.createElement("tr");
+      const values = job.recovery
+        ? [item.releasePath, item.file, item.status, item.source, JSON.stringify(item.local || {}), item.crc]
+        : item.key ? [item.key, item.status, item.score, item.path]
+        : [item.source, item.destination, item.status];
+      values.forEach(value => row.append(td(value == null ? "" : String(value))));
+      rows.append(row);
+    }
+    if (["queued", "running", "paused", "stopping"].includes(job.state))
+      historyPoll = setTimeout(showHistory, 2000);
+  } catch (error) { if (state.csrf) showError(error); }
+}
+$("#refreshHistory").addEventListener("click", loadHistory);
+$("#resultHistory").addEventListener("change", showHistory);
 
 function toast(message) {
   const element = $("#toast");
@@ -222,7 +272,7 @@ async function waitForJob(id, update) {
     const job = await api("/api/jobs/" + encodeURIComponent(id));
     if (state.csrf !== token) throw new Error("Session ended");
     update(job);
-    if (job.state === "completed" || job.state === "failed") return job;
+    if (!["queued", "running", "paused", "stopping"].includes(job.state)) { loadHistory(); return job; }
     await new Promise(resolve => setTimeout(resolve, 1200));
   }
   throw new Error("Session ended");
@@ -235,7 +285,7 @@ async function loadDashboardCommands() {
   try {
     for (const [command, target] of [["SITE SWHO", "#dashboardWho"], ["SITE STATUS ALL", "#dashboardStatus"]]) {
       try {
-        const job = await api("/api/commands", {method: "POST", body: JSON.stringify({command})});
+        const job = await api("/api/commands", {method: "POST", body: JSON.stringify({command, dashboard: true})});
         await waitForJob(job.id, result => {
           $(target).textContent = (result.output || []).join("\n") + (result.error ? "\n" + result.error : "");
         });
@@ -517,6 +567,7 @@ async function loadArchiveRules() {
     applyArchiveRule();
     $("#archiveStatus").textContent = "";
     $("#archivePreview").disabled = !sections.length;
+    await loadArchiveControl();
   } catch (error) { showError(error); }
 }
 
@@ -529,17 +580,28 @@ function applyArchiveRule() {
 }
 $("#archiveRule").addEventListener("change", applyArchiveRule);
 
-$("#archiveForm").addEventListener("submit", async event => {
-  event.preventDefault();
+async function loadArchiveControl() {
+  const result = await api("/api/archive/control");
+  $("#archiveControlState").textContent = "Plugin: " + result.state + "; handlers: " + result.handlers;
+  $("#archiveRun").disabled = state.archiveBusy || result.state !== "running";
+}
+
+async function submitArchive(execute) {
+  if (execute && !await confirmAction("Run archive reorganization?",
+    "Completed releases may be moved using this rule. Continue?")) return;
   $("#archivePreview").disabled = true;
+  state.archiveBusy = true;
+  $("#archiveRun").disabled = true;
   $("#archiveRows").replaceChildren();
   try {
-    const job = await api("/api/archive/preview", {method: "POST", body: JSON.stringify({
+    const job = await api(execute ? "/api/archive/run" : "/api/archive/preview", {method: "POST", body: JSON.stringify({
       rule: Number($("#archiveRule").value), limit: Number($("#archiveLimit").value),
       section: $("#archiveSection").value, destination: $("#archiveDestination").value.trim(),
       template: $("#archiveTemplate").value.trim()
     })});
-    const result = await waitForJob(job.id, current => { $("#archiveStatus").textContent = current.state; });
+    const result = await waitForJob(job.id, current => {
+      $("#archiveStatus").textContent = current.state + "\n" + (current.output || []).join("\n");
+    });
     $("#archiveStatus").textContent = result.error || (result.output || []).join("\n");
     (result.archiveRows || []).forEach(item => {
       const row = document.createElement("tr");
@@ -552,8 +614,25 @@ $("#archiveForm").addEventListener("submit", async event => {
       $("#archiveRows").append(row);
     });
   } catch (error) { showError(error); }
-  finally { $("#archivePreview").disabled = false; }
-});
+  finally {
+    state.archiveBusy = false;
+    $("#archivePreview").disabled = false;
+    if (state.csrf) { try { await loadArchiveControl(); } catch (error) { showError(error); } }
+  }
+}
+$("#archiveForm").addEventListener("submit", event => { event.preventDefault(); submitArchive(false); });
+$("#archiveRun").addEventListener("click", () => submitArchive(true));
+for (const action of ["Pause", "Resume", "Stop"]) {
+  $("#archive" + action).addEventListener("click", async () => {
+    if (!await confirmAction(action + " archive plugin?",
+      "This affects all archive rules. An active release finishes before pausing or stopping.")) return;
+    try {
+      const result = await api("/api/archive/control", {method: "POST", body: JSON.stringify({action: action.toLowerCase()})});
+      $("#archiveControlState").textContent = "Plugin: " + result.state + "; handlers: " + result.handlers;
+      $("#archiveRun").disabled = state.archiveBusy || result.state !== "running";
+    } catch (error) { showError(error); }
+  });
+}
 
 async function loadDupeSections() {
   try {
@@ -569,13 +648,10 @@ function dupeGroups() {
   return Array.from(new Set(state.dupePaths.map(item => item.key)));
 }
 function visibleDupes() {
-  const keys = new Set(dupeGroups().slice(state.dupePage * 10, (state.dupePage + 1) * 10));
-  return state.dupePaths.filter(item => keys.has(item.key));
+  return state.dupePaths;
 }
 
 function renderDupes() {
-  const pages = Math.max(1, Math.ceil(dupeGroups().length / 10));
-  state.dupePage = Math.min(state.dupePage, pages - 1);
   const visible = visibleDupes();
   const body = $("#dupeRows");
   body.replaceChildren();
@@ -614,9 +690,9 @@ function renderDupes() {
     row.append(cell, status, td(String(item.score)), td(path));
     body.append(row);
   }
-  $("#dupePage").textContent = "Page " + (state.dupePage + 1) + " / " + pages + " - " + state.dupePaths.length + " results";
-  $("#dupePrevious").disabled = state.dupePage === 0 || state.dupeBusy;
-  $("#dupeNext").disabled = state.dupePage + 1 >= pages || state.dupeBusy;
+  $("#dupePage").textContent = dupeGroups().length + " groups - " + state.dupePaths.length + " results";
+  $("#dupePrevious").hidden = true;
+  $("#dupeNext").hidden = true;
   const eligible = visible.filter(item => item.eligible);
   $("#dupeSelectPage").disabled = !eligible.length || state.dupeBusy;
   $("#dupeSelectPage").checked = eligible.length > 0 && eligible.every(item => state.dupeSelected.has(item.path));

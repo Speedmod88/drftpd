@@ -90,7 +90,7 @@ public abstract class ArchiveType {
     private long _ignoreAfter;
 
     // Current directory being archived
-    private DirectoryHandle _directory;
+    private volatile DirectoryHandle _directory;
 
     // Used for: archiving only dirs that match this regex form. (Default is .*)
     private String _archiveRegex;

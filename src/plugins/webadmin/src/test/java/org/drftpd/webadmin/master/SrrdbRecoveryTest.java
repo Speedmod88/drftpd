@@ -11,6 +11,37 @@ import java.util.function.BooleanSupplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SrrdbRecoveryTest {
+    @Test void completedScanResultsSurviveRestartWithoutDownloading() throws Exception {
+        String id;
+        try (var recovery = open()) {
+            scan(recovery);
+            waitUntil(() -> ((Number) recovery.historyView().get("finished")).longValue() > 0);
+            id = (String) recovery.historyView().get("id");
+            recovery.checkpointHistory();
+        }
+        try (var restored = open()) {
+            assertEquals(id, restored.historyView().get("id"));
+            assertEquals("completed", restored.view().get("scanState"));
+            assertEquals(1, ((List<?>) restored.view().get("comparisons")).size());
+            assertEquals(0, downloads.get());
+            assertEquals(0, library.installs.get());
+        }
+    }
+
+    @Test void interruptedScanIsNotAutomaticallyReplayed() throws Exception {
+        try (var recovery = open()) {
+            scan(recovery);
+            waitUntil(() -> ((Number) recovery.historyView().get("finished")).longValue() > 0);
+        }
+        Path snapshot = temp.resolve("review.json.scan.json");
+        var json = com.google.gson.JsonParser.parseString(Files.readString(snapshot)).getAsJsonObject();
+        json.getAsJsonObject("recovery").addProperty("scanState", "running");
+        Files.writeString(snapshot, json.toString());
+        try (var restored = open()) {
+            assertEquals("interrupted", restored.historyView().get("state"));
+            assertEquals(0, downloads.get());
+        }
+    }
     @Test void missingReleaseIsCountedWithoutErrorOrDownloadAndCountResets() throws Exception {
         AtomicInteger requests = new AtomicInteger();
         try (var recovery = new SrrdbRecovery(temp.resolve("not-found.json"), 100,

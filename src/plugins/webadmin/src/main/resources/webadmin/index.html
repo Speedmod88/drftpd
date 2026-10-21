@@ -48,6 +48,15 @@
     </aside>
 
     <main class="workspace">
+      <details id="savedResults">
+        <summary>Saved execution results</summary>
+        <label for="resultHistory">Execution</label>
+        <select id="resultHistory"><option value="">Choose an execution</option></select>
+        <button id="refreshHistory" type="button">Refresh</button>
+        <pre id="historyStatus"></pre>
+        <div class="table-wrap"><table><tbody id="historyRows"></tbody></table></div>
+        <pre id="historyOutput"></pre>
+      </details>
       <section id="view-overview" class="view active">
         <div class="view-header">
           <div><p class="eyebrow">Runtime</p><h2>Dashboard</h2></div>
@@ -113,6 +122,11 @@
           <datalist id="archiveTemplates"><option value="rls:${rls}"></option><option value="rls:${rls}/${rls}.Season.${season}"></option><option value="alpha"></option><option value="dated:yyyy-MM"></option></datalist>
           <label for="archiveLimit">Limit<input id="archiveLimit" type="number" min="1" max="1000" value="100" required></label>
           <button id="archivePreview" type="submit">Preview</button>
+          <button id="archiveRun" type="button">Run</button>
+          <button id="archivePause" type="button">Pause</button>
+          <button id="archiveResume" type="button">Resume</button>
+          <button id="archiveStop" type="button">Stop</button>
+          <span id="archiveControlState" role="status"></span>
         </form>
         <p id="archiveStatus" role="status"></p>
         <div class="table-scroll"><table><thead><tr><th>Source</th><th>Destination</th><th>Status</th></tr></thead><tbody id="archiveRows"></tbody></table></div>
