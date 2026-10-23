@@ -47,6 +47,8 @@ import java.util.Properties;
 public class MinfreespaceFilter extends DiskFilter {
 
     private final long _minfreespace;
+    private final long recoveryMargin;
+    private final java.util.Map<Root, Boolean> blockedRoots = new java.util.HashMap<>();
 
     private final float _multiplier;
 
@@ -57,6 +59,10 @@ public class MinfreespaceFilter extends DiskFilter {
     public MinfreespaceFilter(DiskSelectionFilter diskSelection, Properties p, Integer i) {
         super(diskSelection, p, i);
         _minfreespace = Bytes.parseBytes(PropertyHelper.getProperty(p, i + ".minfreespace"));
+        recoveryMargin = Bytes.parseBytes(p.getProperty(i + ".recovery.margin", "0B"));
+        if (_minfreespace < 0 || recoveryMargin < 0 || recoveryMargin > Long.MAX_VALUE - _minfreespace) {
+            throw new IllegalArgumentException("Invalid minfreespace/recovery.margin for rule " + i);
+        }
         _multiplier = DiskFilter.parseMultiplier(p.getProperty(i + ".multiplier", "0"));
         _assignList = AssignRoot.parseAssign(this, p.getProperty(i + ".assign", "all"));
     }
@@ -70,11 +76,11 @@ public class MinfreespaceFilter extends DiskFilter {
 
             long df = o.getDiskSpaceAvailable();
 
-            if (df <= _minfreespace) {
+            if (isCapacityBlocked(o, df)) {
                 if (_multiplier == 0) {
                     sc.removeFromChart(o);
                 } else {
-                    sc.addScore(o, -(long) ((_minfreespace - df) * _multiplier));
+                    sc.addScore(o, -(long) (Math.max(1, _minfreespace - df) * _multiplier));
                 }
             }
         }
@@ -86,5 +92,17 @@ public class MinfreespaceFilter extends DiskFilter {
 
     public Long getMinimumFreeSpace(Root root) {
         return AssignRoot.isAssignedRoot(this, root, _assignList) ? _minfreespace : null;
+    }
+
+    public long getRecoveryMargin() {
+        return recoveryMargin;
+    }
+
+    public synchronized boolean isCapacityBlocked(Root root, long available) {
+        if (getMinimumFreeSpace(root) == null) return false;
+        long threshold = _minfreespace + (Boolean.TRUE.equals(blockedRoots.get(root)) ? recoveryMargin : 0);
+        boolean blocked = available <= threshold;
+        blockedRoots.put(root, blocked);
+        return blocked;
     }
 }

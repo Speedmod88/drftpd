@@ -118,7 +118,7 @@ public class StandardCommandManager implements CommandManagerInterface {
          * 450 No transfer-slave(s) available author <a
          * href="mailto:drftpd@mog.se">Morgan Christiansson</a>
          */
-        genericResponses.put("RESPONSE_450_SLAVE_UNAVAILABLE", new CommandResponse(450, "No transfer-slave(s) available"));
+        genericResponses.put("RESPONSE_450_SLAVE_UNAVAILABLE", new CommandResponse(450, "No transfer-slave(s) available or Site are FULL"));
 
         /* 500 Syntax error, command unrecognized. */
         genericResponses.put("RESPONSE_500_SYNTAX_ERROR", new CommandResponse(500, "Syntax error, command unrecognized."));
