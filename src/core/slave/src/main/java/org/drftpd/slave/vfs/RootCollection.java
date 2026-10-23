@@ -248,13 +248,6 @@ public class RootCollection {
                 roots.add(r);
             }
         }
-        for (Root root : _roots) {
-
-            if (root.getFile(path).exists()) {
-                roots.add(root);
-            }
-        }
-
         if (roots.size() == 0) {
             throw new FileNotFoundException("Unable to find suitable root: "
                     + path);

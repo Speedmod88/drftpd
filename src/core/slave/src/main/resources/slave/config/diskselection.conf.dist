@@ -86,3 +86,8 @@
 # This filter does not requires a 'assign=' property.
 2.filter=cycle
 
+## Optional per-minfreespace-rule recovery margin (default 0B).
+## After a root becomes FULL, it stays FULL until free > minfreespace + margin.
+## Example: 1.recovery.margin=50GB
+## Restart the slave after changing diskselection.conf. State resets on restart.
+
