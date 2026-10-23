@@ -65,6 +65,9 @@ public class BasicAnnouncer extends AbstractAnnouncer {
     private final Map<String, String> _announcedSlaveStates = new HashMap<>();
 
     private boolean _slaveEventsReady;
+    private final SiteFullReminder siteFullReminder = new SiteFullReminder();
+    private java.util.concurrent.ScheduledExecutorService capacityMonitor;
+    private volatile boolean stopped;
 
     public void initialise(AnnounceConfig config, ResourceBundle bundle) {
         _config = config;
@@ -73,9 +76,19 @@ public class BasicAnnouncer extends AbstractAnnouncer {
         // Subscribe to events
         AnnotationProcessor.process(this);
         GlobalContext.registerSiteBotSlaveEventConsumer(this::onSlaveEvent);
+        stopped = false;
+        capacityMonitor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "SiteBot Capacity Reminder");
+            thread.setDaemon(true);
+            return thread;
+        });
+        capacityMonitor.scheduleWithFixedDelay(this::checkSiteCapacity, 30, 30,
+                java.util.concurrent.TimeUnit.SECONDS);
     }
 
     public void stop() {
+        stopped = true;
+        if (capacityMonitor != null) capacityMonitor.shutdownNow();
         onBotDisconnected();
         AnnotationProcessor.unprocess(this);
         synchronized (_slaveEventLock) {
@@ -87,6 +100,25 @@ public class BasicAnnouncer extends AbstractAnnouncer {
     public String[] getEventTypes() {
         return new String[]{"mkdir", "rmdir", "wipe", "addslave",
                 "delslave", "msgslave", "msgmaster", "invite"};
+    }
+
+    private void checkSiteCapacity() {
+        try {
+            synchronized (_slaveEventLock) {
+                if (stopped || !_slaveEventsReady || !_config.getBot().isConnected()) return;
+                AnnounceWriter writer = _config.getExplicitSimpleWriter("sysop");
+                if (writer == null) return;
+                siteFullReminder.check(GlobalContext.getGlobalContext().getSlaveManager().getSlaves(),
+                        System.nanoTime(), () -> {
+                            String message = "SITE FULL: All configured slaves report FULL (minfreespace). "
+                                    + "New uploads are blocked. Reminder every 6 hours while full.";
+                            sayOutput(message, writer);
+                            logger.info(message);
+                        });
+            }
+        } catch (RuntimeException e) {
+            logger.warn("Unable to check site capacity for IRC reminder", e);
+        }
     }
 
     public void setResourceBundle(ResourceBundle bundle) {

@@ -167,23 +167,32 @@ public class DiskSelectionFilter extends DiskSelectionInterface {
             free += available;
             total += root.getDiskSpaceCapacity();
             Long minimum = null;
+            boolean blocked = false;
+            long recovery = 0;
             for (DiskFilter filter : getFilters()) {
                 if (filter instanceof MinfreespaceFilter) {
                     Long assignedMinimum = ((MinfreespaceFilter) filter).getMinimumFreeSpace(root);
                     if (assignedMinimum != null) {
                         minimum = minimum == null ? assignedMinimum : Math.max(minimum, assignedMinimum);
+                        MinfreespaceFilter reserve = (MinfreespaceFilter) filter;
+                        blocked |= reserve.isCapacityBlocked(root, available);
+                        recovery = Math.max(recovery, assignedMinimum + reserve.getRecoveryMargin());
                     }
                 }
             }
             configured |= minimum != null;
             // Never call the whole slave full when an unmonitored root remains.
-            allBelow &= minimum != null && available <= minimum;
-            usable += Math.max(0, available - (minimum == null ? 0 : Math.max(0, minimum)));
+            allBelow &= minimum != null && blocked;
+            usable += blocked ? 0 : Math.max(0, available - (minimum == null ? 0 : Math.max(0, minimum)));
             if (details.length() > 0) {
                 details.append("; ");
             }
             details.append("root.").append(++index).append(" free=").append(Bytes.formatBytes(available))
                     .append(" min=").append(minimum == null ? "unset" : Bytes.formatBytes(minimum));
+            if (minimum != null && recovery > minimum) {
+                details.append(" recoverAbove=").append(Bytes.formatBytes(recovery));
+                if (blocked) details.append(" (FULL)");
+            }
         }
         return new DiskStatus(free, total, allBelow, configured ? details.toString() : null, usable);
     }

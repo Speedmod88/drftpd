@@ -106,4 +106,42 @@ class DiskCapacityTest {
         minimum(2, "all", 2000, "1");
         assertSame(second, selection.getBestRoot("/upload"));
     }
+
+    @Test void recoveryMarginPreventsFlappingAndKeepsUsableZero() {
+        Properties p = new Properties();
+        p.setProperty("1.minfreespace", "1000B");
+        p.setProperty("1.recovery.margin", "100B");
+        filters.add(new MinfreespaceFilter(selection, p, 1));
+        assertTrue(selection.getDiskStatus().isBelowMinimumFreeSpace());
+        when(second.getDiskSpaceAvailable()).thenReturn(1050L);
+        assertTrue(selection.getDiskStatus().isBelowMinimumFreeSpace());
+        assertEquals(0L, selection.getDiskStatus().getBytesUsable());
+        assertNull(selection.getBestRoot("/upload"));
+        when(second.getDiskSpaceAvailable()).thenReturn(1100L);
+        assertTrue(selection.getDiskStatus().isBelowMinimumFreeSpace());
+        when(second.getDiskSpaceAvailable()).thenReturn(1101L);
+        assertFalse(selection.getDiskStatus().isBelowMinimumFreeSpace());
+        assertSame(second, selection.getBestRoot("/upload"));
+        when(second.getDiskSpaceAvailable()).thenReturn(1050L);
+        assertFalse(selection.getDiskStatus().isBelowMinimumFreeSpace());
+        when(second.getDiskSpaceAvailable()).thenReturn(1000L);
+        assertTrue(selection.getDiskStatus().isBelowMinimumFreeSpace());
+    }
+
+    @Test void marginDoesNotRaiseInitialMinimumAndIsPerRoot() {
+        Properties p = new Properties();
+        p.setProperty("1.minfreespace", "1000B");
+        p.setProperty("1.recovery.margin", "100B");
+        filters.add(new MinfreespaceFilter(selection, p, 1));
+        when(second.getDiskSpaceAvailable()).thenReturn(1050L);
+        assertFalse(selection.getDiskStatus().isBelowMinimumFreeSpace());
+        assertSame(second, selection.getBestRoot("/upload"));
+    }
+
+    @Test void rejectsNegativeMargin() {
+        Properties p = new Properties();
+        p.setProperty("1.minfreespace", "1000B");
+        p.setProperty("1.recovery.margin", "-1B");
+        assertThrows(RuntimeException.class, () -> new MinfreespaceFilter(selection, p, 1));
+    }
 }
