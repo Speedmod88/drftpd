@@ -162,6 +162,11 @@ public class AnnounceConfig {
         return writer;
     }
 
+    /** Administrative reminders must not fall back to a public default destination. */
+    public AnnounceWriter getExplicitSimpleWriter(String type) {
+        return _simpleWriters.get(type);
+    }
+
     public AnnounceWriter getPathWriter(String type, InodeHandle path) {
         ArrayList<AnnounceWriter> aWriters;
         // First check path filters for this type
