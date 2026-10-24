@@ -50,6 +50,10 @@ final class WebAdminDupeVerification {
             GlobalContext.getEventService().publishAsync(new VirtualFileSystemInodeRefreshEvent(dir.getInode(), dir.getPath()));
             output.accept(CachedCompletion.release(dir).name() + ": " + dir.getPath());
         }
+        // Child metadata is now populated; refresh the parent after, not only before, its discs.
+        root = WebAdminDupe.directory(WebAdminDupe.user(username), path);
+        GlobalContext.getEventService().publishAsync(new VirtualFileSystemInodeRefreshEvent(root.getInode(), root.getPath()));
+        output.accept("Release status: " + CachedCompletion.release(root).name() + ": " + root.getPath());
         output.accept("Verification finished; no files deleted: " + path);
     }
 }
