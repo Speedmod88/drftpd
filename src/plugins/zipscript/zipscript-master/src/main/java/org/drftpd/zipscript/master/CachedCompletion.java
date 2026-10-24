@@ -17,14 +17,51 @@ public final class CachedCompletion {
     private CachedCompletion() { }
 
     public static Status release(DirectoryHandle dir) {
+        return release(dir, 0, new int[]{128});
+    }
+
+    private static Status release(DirectoryHandle dir, int depth, int[] remaining) {
+        if (depth > 8 || --remaining[0] < 0) return Status.UNKNOWN;
         try {
+            boolean hasZip = false;
             for (FileHandle file : dir.getFilesUnchecked()) {
                 if (file.getName().toLowerCase(Locale.ROOT).endsWith(".sfv")) return sfv(dir);
+                hasZip |= file.getName().toLowerCase(Locale.ROOT).endsWith(".zip");
             }
-            return zip(dir);
+            Status local = zip(dir);
+            if (hasZip || local != Status.UNKNOWN) return local;
+            return discs(dir, depth, remaining);
         } catch (FileNotFoundException e) {
             return Status.UNKNOWN;
         }
+    }
+
+    private static final java.util.regex.Pattern DISC_NAME =
+            java.util.regex.Pattern.compile("(?i)(?:CD|DISC|DISK|DVD)[._ -]?([0-9]{1,3})");
+
+    /** Only numbered-disc containers qualify; arbitrary section folders must stay UNKNOWN. */
+    private static Status discs(DirectoryHandle dir, int depth, int[] remaining) throws FileNotFoundException {
+        var discs = new java.util.TreeMap<Integer, DirectoryHandle>();
+        for (var inode : dir.getInodeHandlesUnchecked()) {
+            if (inode.isLink()) return Status.UNKNOWN;
+            if (inode instanceof DirectoryHandle child) {
+                var matcher = DISC_NAME.matcher(child.getName());
+                if (!matcher.matches()) return Status.UNKNOWN;
+                int number = Integer.parseInt(matcher.group(1));
+                if (number < 1 || discs.put(number, child) != null) return Status.UNKNOWN;
+            } else if (!inode.getName().toLowerCase(Locale.ROOT).matches(".*\\.(nfo|diz|txt)")) {
+                // A payload outside the disc SFVs has not been validated.
+                return Status.UNKNOWN;
+            }
+        }
+        if (discs.isEmpty() || discs.size() != discs.lastKey()) return Status.UNKNOWN;
+        boolean unknown = false;
+        for (DirectoryHandle child : discs.values()) {
+            Status status = release(child, depth + 1, remaining);
+            if (status == Status.INCOMPLETE) return Status.INCOMPLETE;
+            unknown |= status == Status.UNKNOWN;
+        }
+        return unknown ? Status.UNKNOWN : Status.COMPLETE;
     }
 
     public static Status sfv(DirectoryHandle dir) {
