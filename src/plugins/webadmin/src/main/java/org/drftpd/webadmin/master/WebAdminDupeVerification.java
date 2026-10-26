@@ -1,6 +1,7 @@
 package org.drftpd.webadmin.master;
 
 import org.drftpd.master.GlobalContext;
+import org.drftpd.autofreespace.master.Dupe2Utils;
 import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.master.vfs.FileHandle;
 import org.drftpd.master.vfs.event.VirtualFileSystemInodeRefreshEvent;
@@ -15,10 +16,20 @@ import java.util.function.Consumer;
 /** Explicit background metadata refresh; never invokes the destructive SITE RESCAN action. */
 final class WebAdminDupeVerification {
     static boolean readable(FileHandle file) throws IOException {
-        return !file.isTransferring() && file.getXfertime() != -1 && file.getSize() > 0;
+        return unreadableReason(file) == null;
+    }
+    static String unreadableReason(FileHandle file) throws IOException {
+        if (file.isTransferring()) return "active transfer";
+        if (file.getXfertime() == -1) return "VFS marks transfer unfinished (xfertime=-1)";
+        if (file.getSize() <= 0) return "empty file";
+        return null;
     }
     static void verify(String username, String path, Consumer<String> output) throws Exception {
         DirectoryHandle root = WebAdminDupe.directory(WebAdminDupe.user(username), path);
+        if (!Dupe2Utils.isReleaseDirectory(root)) {
+            output.accept("SKIP container/non-release: " + path + ". Scan its section to discover nested releases.");
+            return;
+        }
         if (CachedCompletion.release(root) != CachedCompletion.Status.UNKNOWN) {
             output.accept("Already classified: " + path); return;
         }
@@ -34,8 +45,9 @@ final class WebAdminDupeVerification {
                 if (inode instanceof DirectoryHandle child) { pending.add(child); continue; }
                 FileHandle file = (FileHandle) inode;
                 if (file.isHidden(WebAdminDupe.user(username))) continue;
-                if (!readable(file)) {
-                    output.accept("SKIP active/unfinished file: " + file.getPath()); continue;
+                String skipReason = unreadableReason(file);
+                if (skipReason != null) {
+                    output.accept("SKIP " + skipReason + ": " + file.getPath()); continue;
                 }
                 String name = file.getName().toLowerCase(Locale.ROOT);
                 sfv |= name.endsWith(".sfv");
@@ -53,7 +65,12 @@ final class WebAdminDupeVerification {
         // Child metadata is now populated; refresh the parent after, not only before, its discs.
         root = WebAdminDupe.directory(WebAdminDupe.user(username), path);
         GlobalContext.getEventService().publishAsync(new VirtualFileSystemInodeRefreshEvent(root.getInode(), root.getPath()));
-        output.accept("Release status: " + CachedCompletion.release(root).name() + ": " + root.getPath());
+        var status = CachedCompletion.release(root);
+        output.accept("Release status: " + status.name() + ": " + root.getPath());
+        if (status == CachedCompletion.Status.UNKNOWN) {
+            output.accept("UNKNOWN means insufficient trusted SFV/DIZ/checksum metadata, not a completed verification. "
+                    + "Review skipped files and missing manifests; CRC values alone cannot prove release completeness.");
+        }
         output.accept("Verification finished; no files deleted: " + path);
     }
 }
