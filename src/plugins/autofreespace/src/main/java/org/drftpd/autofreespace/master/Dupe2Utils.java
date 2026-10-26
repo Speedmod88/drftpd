@@ -431,7 +431,11 @@ public final class Dupe2Utils {
                                                        Map<String, Set<String>> releaseParentPathCache) {
         Set<String> releaseParentPaths = releaseParentPathCache.computeIfAbsent(section.getName(),
                 key -> getReleaseParentPaths(section));
-        return releaseParentPaths.contains(directory.getParent().getPath());
+        return DupeReleasePaths.inSection(directory.getPath(), releaseParentPaths);
+    }
+
+    public static boolean isReleaseDirectory(DirectoryHandle directory) {
+        return getReleaseSection(directory, new HashMap<>()) != null;
     }
 
     private static Set<String> getReleaseParentPaths(SectionInterface section) {
@@ -549,6 +553,7 @@ public final class Dupe2Utils {
 
     static DupeCandidate makeDupeCandidate(DirectoryHandle release, String sectionName,
                                            boolean includeIncomplete) {
+        if (!DupeReleasePaths.releaseName(release.getName())) return null;
         String key = makeDupeKey(release.getName());
         if (key == null) {
             return null;

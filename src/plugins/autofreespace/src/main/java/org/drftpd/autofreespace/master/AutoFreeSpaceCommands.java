@@ -475,7 +475,7 @@ public class AutoFreeSpaceCommands extends CommandInterface {
             }
             String path = stripIndexedDirectoryPath(item.getKey());
             DirectoryHandle child = new DirectoryHandle(path);
-            if (!directory.getPath().equals(child.getParent().getPath())) {
+            if (!DupeReleasePaths.inSection(child.getPath(), java.util.List.of(directory.getPath()))) {
                 nonReleaseSkipped++;
                 continue;
             }
@@ -527,7 +527,7 @@ public class AutoFreeSpaceCommands extends CommandInterface {
                                                 Map<String, Set<String>> releaseParentPathCache) {
         Set<String> releaseParentPaths = releaseParentPathCache.computeIfAbsent(section.getName(),
                 key -> getReleaseParentPaths(section));
-        return releaseParentPaths.contains(directory.getParent().getPath());
+        return DupeReleasePaths.inSection(directory.getPath(), releaseParentPaths);
     }
 
     private Set<String> getReleaseParentPaths(SectionInterface section) {
