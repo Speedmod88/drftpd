@@ -9,6 +9,7 @@ import org.drftpd.master.network.BaseFtpConnection;
 import org.drftpd.master.network.RemoteTransfer;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.slavemanagement.SlaveManager;
+import org.drftpd.master.slaveselection.filter.SlaveSelectionManager;
 import org.drftpd.master.usermanager.User;
 import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.master.vfs.FileHandle;
@@ -128,20 +129,23 @@ final class SrrdbLibrary implements SrrdbRecovery.Library {
         if (!missing(username, releasePath, remote.name())) throw new IOException("Metadata already exists; not overwritten");
         String path = releasePath + "/" + remote.name();
         DirectoryHandle parent = directory(user, path.substring(0, path.lastIndexOf('/')));
-        RemoteSlave destination = null;
-        for (String name : parent.getSlaveRefCounts().keySet().stream().sorted().toList()) {
-            RemoteSlave slave = GlobalContext.getGlobalContext().getSlaveManager().getRemoteSlave(name);
-            if (slave.isAvailable() && !slave.isRemerging() && slave.getRenameQueue().isEmpty()) {
-                destination = slave;
-                break;
-            }
+        var selection = GlobalContext.getGlobalContext().getSlaveSelectionManager();
+        if (!(selection instanceof SlaveSelectionManager rules)) {
+            throw new IOException("Recovery requires the configured upload filter-chain selector");
         }
-        if (destination == null) throw new IOException("No stable online slave holding this directory; retry after remerge");
+        var holders = parent.getSlaveRefCounts().keySet();
+        RemoteSlave destination = SrrdbUploadSelection.select(selection.getAvailableSlaves(), holders,
+                rules.getFilterChain("up"), new ImportSession(user), new FileHandle(path));
+        logger.info("srrDB upload destination: path={} slave={} existingHolder={} rules=slaveselection-up.conf",
+                path, destination.getName(), holders.contains(destination.getName()));
         if (GlobalContext.getGlobalContext().getSSLContext() == null) throw new IOException("Master SSL is required for recovery uploads");
         RemoteTransfer transfer = null;
         FileHandle file = null;
         boolean completed = false;
         try {
+            if (!SrrdbUploadSelection.eligible(destination)) {
+                throw new IOException("Recovery destination became unavailable, FULL or busy: " + destination.getName());
+            }
             // Do not request an optional LAN address: older slaves can have none configured.
             String index = SlaveManager.getBasicIssuer().issueListenToSlave(destination, true, false, false);
             var connection = destination.fetchTransferResponseFromIndex(index);
@@ -149,6 +153,9 @@ final class SrrdbLibrary implements SrrdbRecovery.Library {
             activeTransfer = transfer;
             user(username);
             if (!missing(username, releasePath, remote.name())) throw new IOException("Metadata appeared during approval; not overwritten");
+            if (!SrrdbUploadSelection.eligible(destination)) {
+                throw new IOException("Recovery destination became unavailable, FULL or busy: " + destination.getName());
+            }
             file = parent.createFile(user, path.substring(path.lastIndexOf('/') + 1), destination);
             try (SSLSocket socket = (SSLSocket) GlobalContext.getGlobalContext().getSSLContext().getSocketFactory().createSocket()) {
                 activeSocket = socket;
