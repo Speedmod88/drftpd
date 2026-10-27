@@ -467,9 +467,35 @@ public class Slave extends SslConfigurationLoader {
         _online = online;
     }
 
+    private final java.util.concurrent.locks.ReentrantReadWriteLock metadataGate =
+            new java.util.concurrent.locks.ReentrantReadWriteLock();
+
     public void addTransfer(Transfer transfer) {
-        auditActivity.incrementAndGet();
-        _transfers.put(transfer.getTransferIndex(), transfer);
+        metadataGate.readLock().lock();
+        try {
+            auditActivity.incrementAndGet();
+            _transfers.put(transfer.getTransferIndex(), transfer);
+        } finally { metadataGate.readLock().unlock(); }
+    }
+
+    public long replaceMetadata(String[] args, boolean remerging) throws IOException {
+        if (!metadataGate.writeLock().tryLock()) throw new IOException("Metadata replacement deferred: filesystem busy");
+        try {
+            if (remerging || !_transfers.isEmpty()) throw new IOException("Metadata replacement deferred: slave transferring or remerging");
+            if (args.length != 6 || args[5].length() > 1400000) throw new IOException("Invalid metadata replacement request");
+            String path = args[0];
+            if (!path.startsWith("/") || path.contains("\\") || path.contains(":")
+                    || java.util.Arrays.stream(path.split("/")).anyMatch(p -> p.equals("..") || p.equals("."))) {
+                throw new IOException("Invalid metadata path");
+            }
+            if (_roots.getMultipleRootsForFile(path).size() != 1) throw new IOException("Ambiguous physical metadata copies");
+            return MetadataReplacement.replace(_roots.getFile(path).toPath(),
+                    java.nio.file.Path.of("userdata", "srrdb-backups"),
+                    _roots.getRootList().stream().map(r -> java.nio.file.Path.of(r.getPath())).toList(),
+                    args[1], Long.parseLong(args[2]), Long.parseUnsignedLong(args[3], 16),
+                    java.util.Base64.getDecoder().decode(args[5]), Long.parseUnsignedLong(args[4], 16));
+        } catch (IllegalArgumentException e) { throw new IOException("Invalid metadata replacement arguments", e); }
+        finally { metadataGate.writeLock().unlock(); }
     }
 
     public long auditChecksum(String path, long size, boolean remerging) throws IOException {
@@ -678,7 +704,13 @@ public class Slave extends SslConfigurationLoader {
     }
 
     private AsyncResponse handleCommand(AsyncCommandArgument ac) {
-        return _central.handleCommand(ac);
+        boolean guarded = getCommandExecutorType(ac.getName()) == CommandExecutorType.FILESYSTEM
+                || getCommandExecutorType(ac.getName()) == CommandExecutorType.CHECKSUM
+                || getCommandExecutorType(ac.getName()) == CommandExecutorType.REMERGE
+                || "idlecrc".equals(ac.getName());
+        if (guarded) metadataGate.readLock().lock();
+        try { return _central.handleCommand(ac); }
+        finally { if (guarded) metadataGate.readLock().unlock(); }
     }
 
     private void listenForCommands() throws IOException {
@@ -740,6 +772,7 @@ public class Slave extends SslConfigurationLoader {
     private ExecutorService getCommandExecutor(String commandName) {
         if ("remotelog".equals(commandName)) return remoteLogExecutor;
         if ("idlecrc".equals(commandName)) return idleChecksumExecutor;
+        if ("replacemetadata".equals(commandName)) return _filesystemCommandExecutor;
         return switch (getCommandExecutorType(commandName)) {
             case REMERGE -> _remergeCommandExecutor;
             case TRANSFER -> _transferCommandExecutor;

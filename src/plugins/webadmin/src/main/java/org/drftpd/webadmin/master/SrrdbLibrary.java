@@ -25,7 +25,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-/** VFS adapter. No local filesystem assumptions and no slave protocol additions. */
+/** VFS adapter; replacements require an explicitly probed slave capability. */
 final class SrrdbLibrary implements SrrdbRecovery.Library {
     private static final Logger logger = LogManager.getLogger("org.drftpd.webadmin.srrdb");
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -68,19 +68,28 @@ final class SrrdbLibrary implements SrrdbRecovery.Library {
         }
         AdvancedSearchParams params = new AdvancedSearchParams();
         params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
-        params.setLimit(limit);
+        params.setLimit(256);
         params.setSortField("fullPath");
-        var found = GlobalContext.getGlobalContext().getIndexEngine().advancedFind(root, params, "WEBADMIN-SRRDB");
         List<String> result = new ArrayList<>();
-        for (var entry : found.entrySet()) {
-            if (!entry.getValue().equals("d")) continue;
-            String candidate = entry.getKey().replaceAll("/+$", "");
-            String prefix = root.getPath().equals("/") ? "/" : root.getPath() + "/";
-            if (!candidate.startsWith(prefix)) continue;
-            try {
-                DirectoryHandle dir = directory(user, candidate);
-                if (dir.getName().contains("-")) result.add(dir.getPath());
-            } catch (FileNotFoundException ignored) { }
+        while (result.size() < limit) {
+            user(username);
+            var found = GlobalContext.getGlobalContext().getIndexEngine().advancedFind(root, params, "WEBADMIN-SRRDB");
+            if (found.isEmpty()) break;
+            String cursor = found.keySet().stream().max(String::compareTo).orElseThrow();
+            if (params.getAfterPath() != null && cursor.compareTo(params.getAfterPath()) <= 0)
+                throw new IOException("Index cursor did not advance");
+            for (var entry : found.entrySet()) {
+                if (!entry.getValue().equals("d")) continue;
+                String candidate = entry.getKey().replaceAll("/+$", "");
+                String prefix = root.getPath().equals("/") ? "/" : root.getPath() + "/";
+                if (!candidate.startsWith(prefix)) continue;
+                try {
+                    DirectoryHandle dir = directory(user, candidate);
+                    if (org.drftpd.autofreespace.master.Dupe2Utils.isReleaseDirectory(dir)) result.add(dir.getPath());
+                } catch (FileNotFoundException ignored) { }
+                if (result.size() >= limit) break;
+            }
+            params.setAfterPath(cursor);
         }
         result.sort(String::compareTo);
         return result;
@@ -118,9 +127,118 @@ final class SrrdbLibrary implements SrrdbRecovery.Library {
             if (found == null && file.getName().toLowerCase(Locale.ROOT).endsWith(extension.toLowerCase(Locale.ROOT))) found = file;
         }
         if (found == null) return new SrrdbRecovery.LocalFile(false, "", -1, "");
-        long crc = found.isUploading() ? 0 : found.getCheckSumCached();
-        return new SrrdbRecovery.LocalFile(true, found.getName(), found.getSize(),
-                crc == 0 ? "" : String.format(Locale.ROOT, "%08X", crc));
+        if (found.isTransferring() || found.getSize() > 1024 * 1024)
+            return new SrrdbRecovery.LocalFile(true, found.getName(), found.getSize(), "");
+        try {
+            long crc = freshChecksum(found, new ArrayList<>());
+            return new SrrdbRecovery.LocalFile(true, found.getName(), found.getSize(),
+                    String.format(Locale.ROOT, "%08X", crc));
+        } catch (Exception e) {
+            logger.info("srrDB metadata CRC deferred: path={} reason={}", found.getPath(), e.toString());
+            return new SrrdbRecovery.LocalFile(true, found.getName(), found.getSize(), "");
+        }
+    }
+
+    private record Snapshot(FileHandle file, long size, long modified, java.util.Set<RemoteSlave> slaves) {
+        void check() throws Exception {
+            if (file.isTransferring() || file.getSize() != size || file.lastModified() != modified
+                    || !file.getSlaves().equals(slaves))
+                throw new IOException("File changed or became active during verification: " + file.getPath());
+            for (RemoteSlave slave : slaves) requireStable(slave);
+        }
+    }
+
+    private static void requireStable(RemoteSlave slave) throws IOException {
+        if (!slave.isAvailable() || slave.isRemerging() || !slave.getRenameQueue().isEmpty())
+            throw new IOException("Metadata verification requires a stable holder: " + slave.getName());
+    }
+
+    private static long freshChecksum(FileHandle file, List<Snapshot> snapshots) throws Exception {
+        Snapshot snapshot = new Snapshot(file, file.getSize(), file.lastModified(), java.util.Set.copyOf(file.getSlaves()));
+        if (snapshot.slaves().isEmpty()) throw new IOException("No physical copy: " + file.getPath());
+        snapshot.check();
+        Long result = null;
+        for (RemoteSlave slave : snapshot.slaves()) {
+            long crc = slave.getCheckSumForPath(file.getPath());
+            if (result != null && result != crc)
+                throw new IOException("Physical copies disagree: " + file.getPath());
+            result = crc;
+            snapshot.check();
+        }
+        snapshot.check();
+        file.setCheckSum(result);
+        snapshots.add(snapshot);
+        return result;
+    }
+
+    @Override public String replace(String username, String releasePath, SrrdbClient.RemoteFile remote,
+                                    byte[] content, SrrdbRecovery.LocalFile approved, String transaction) throws Exception {
+        User user = user(username);
+        SrrdbClient.verify(remote, content);
+        if (approved == null || !approved.exists() || approved.crc().isEmpty()
+                || !SrrdbClient.metadataPath(approved.name()) || approved.name().contains("/"))
+            throw new IOException("A fresh local metadata comparison must be approved first");
+        String remotePath = releasePath + "/" + remote.name();
+        DirectoryHandle parent = directory(user, remotePath.substring(0, remotePath.lastIndexOf('/')));
+        InodeHandle inode = parent.getInodeHandle(approved.name(), user);
+        if (!(inode instanceof FileHandle file) || inode.isLink())
+            throw new IOException("Approved metadata target is no longer a regular file");
+        if (!approved.name().toLowerCase(Locale.ROOT).endsWith(remote.name().substring(remote.name().length() - 4).toLowerCase(Locale.ROOT)))
+            throw new IOException("Metadata type changed since approval");
+        List<Snapshot> snapshots = new ArrayList<>();
+        java.util.Set<RemoteSlave> holders = java.util.Set.copyOf(file.getSlaves());
+        if (holders.isEmpty() || file.isTransferring()) throw new IOException("Metadata is active or has no physical copy");
+        long oldCrc = Long.parseUnsignedLong(approved.crc(), 16);
+        long newCrc = Long.parseUnsignedLong(remote.crc(), 16);
+        for (RemoteSlave slave : holders) {
+            requireStable(slave);
+            String probe = slave.fetchIndex();
+            slave.sendCommand(new org.drftpd.common.network.AsyncCommandArgument(probe, "maxpath", "metadata-replace-v1"));
+            if (((org.drftpd.slave.network.AsyncResponseMaxPath) slave.fetchResponseWithoutDisconnect(probe, 15000)).getMaxPath()
+                    != -2147482999)
+                throw new IOException("Slave update required for safe metadata replacement: " + slave.getName());
+            long current = slave.getCheckSumForPath(file.getPath());
+            if (current != oldCrc && current != newCrc)
+                throw new IOException("Metadata changed since approval on " + slave.getName());
+        }
+        if (remote.name().toLowerCase(Locale.ROOT).endsWith(".sfv")) {
+            List<String> names = new ArrayList<>();
+            for (InodeHandle child : parent.getInodeHandlesUnchecked())
+                if (child instanceof FileHandle && !child.isLink()) names.add(child.getName());
+            SfvReplacementGuard.verify(content, names, name -> {
+                InodeHandle payload = parent.getInodeHandle(name, user);
+                if (!(payload instanceof FileHandle member) || payload.isLink())
+                    throw new IOException("Invalid SFV member: " + name);
+                logger.info("srrDB proposed SFV payload verification: path={}", member.getPath());
+                return freshChecksum(member, snapshots);
+            });
+        }
+        // Verify all replicas before committing any; each slave also compares the approved
+        // old bytes and keeps a transaction-specific private backup for retry after lost replies.
+        for (RemoteSlave slave : holders) {
+            user(username);
+            for (Snapshot snapshot : snapshots) snapshot.check();
+            requireStable(slave);
+            if (file.isTransferring() || !file.getSlaves().equals(holders))
+                throw new IOException("Metadata became active or holders changed; retry after inspection");
+            String index = slave.fetchIndex();
+            slave.sendCommand(new org.drftpd.common.network.AsyncCommandArgument(index, "replacemetadata",
+                    new String[]{file.getPath(), transaction, Long.toString(approved.size()), approved.crc(),
+                            remote.crc(), java.util.Base64.getEncoder().encodeToString(content)}));
+            long actual = ((org.drftpd.slave.network.AsyncResponseChecksum)
+                    slave.fetchResponseWithoutDisconnect(index, 30000)).getChecksum();
+            if (actual != newCrc) throw new IOException("Replacement reply checksum mismatch: " + slave.getName());
+        }
+        file.setSize(content.length);
+        file.setCheckSum(newCrc);
+        if (remote.name().toLowerCase(Locale.ROOT).endsWith(".sfv")) {
+            var info = SfvReplacementGuard.metadata(content, file.getName(), newCrc);
+            parent.addPluginMetaData(org.drftpd.zipscript.common.sfv.SFVInfo.SFVINFO, info);
+        }
+        file.requestRefresh(false);
+        parent.requestRefresh(false);
+        logger.info("srrDB metadata replaced: path={} transaction={} copies={}", file.getPath(), transaction, holders.size());
+        return holders.stream().map(RemoteSlave::getName).sorted().collect(java.util.stream.Collectors.joining(", "));
     }
 
     @Override public String install(String username, String releasePath, SrrdbClient.RemoteFile remote, byte[] content) throws Exception {

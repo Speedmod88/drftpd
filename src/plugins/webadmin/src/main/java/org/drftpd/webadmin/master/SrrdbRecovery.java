@@ -27,6 +27,10 @@ final class SrrdbRecovery implements AutoCloseable {
         List<String> releases(String username, String path, boolean recursive, int limit) throws Exception;
         boolean missing(String username, String releasePath, String relativeFile) throws Exception;
         String install(String username, String releasePath, SrrdbClient.RemoteFile file, byte[] content) throws Exception;
+        default String replace(String username, String releasePath, SrrdbClient.RemoteFile file,
+                               byte[] content, LocalFile original, String transaction) throws Exception {
+            throw new IOException("Safe metadata replacement is not supported");
+        }
         @Override default void close() { }
     }
     static final int MAX_ENTRIES = 500;
@@ -87,7 +91,8 @@ final class SrrdbRecovery implements AutoCloseable {
 
     synchronized void checkpointHistory() {
         if (scanId == null) return;
-        String version = scanId + ":" + scanState + ":" + scanned + ":" + comparisons.size() + ":" + errors + ":" + scanFinished;
+        String version = scanId + ":" + scanState + ":" + scanned + ":" + comparisons.size() + ":" + errors + ":" + scanFinished
+                + ":" + gson.toJson(entries.values());
         if (version.equals(savedVersion)) return;
         Map<String, Object> data = historyView();
         try {
@@ -146,6 +151,8 @@ final class SrrdbRecovery implements AutoCloseable {
             files.add(Map.ofEntries(Map.entry("id", entry.id), Map.entry("releasePath", entry.releasePath),
                     Map.entry("file", entry.file), Map.entry("size", entry.size), Map.entry("crc", entry.crc),
                     Map.entry("state", entry.state), Map.entry("message", entry.message),
+                    Map.entry("replacement", entry.replacement),
+                    Map.entry("original", entry.original == null ? new LocalFile(false, "", -1, "") : entry.original),
                     Map.entry("requestedBy", entry.requestedBy), Map.entry("decidedBy", entry.decidedBy),
                     Map.entry("source", SrrdbClient.downloadUri(releaseName(entry.releasePath), entry.file).toString())));
         }
@@ -198,7 +205,8 @@ final class SrrdbRecovery implements AutoCloseable {
                         }
                         logger.info("srrDB comparison: path={} file={} local={} remoteSize={} remoteCRC={} status={} source={}",
                                 releasePath, file.name(), local, file.size(), file.crc(), status, source);
-                        if (!library.missing(username, releasePath, file.name())) continue;
+                        boolean replacement = status.equals("MISMATCH") && !local.crc().isEmpty();
+                        if (!replacement && !library.missing(username, releasePath, file.name())) continue;
                         synchronized (this) {
                             boolean duplicate = entries.values().stream().anyMatch(item ->
                                     item.releasePath.equals(releasePath) && item.file.equalsIgnoreCase(file.name()));
@@ -209,6 +217,8 @@ final class SrrdbRecovery implements AutoCloseable {
                                 break;
                             }
                             Entry entry = new Entry(releasePath, file, username);
+                            entry.replacement = replacement;
+                            entry.original = replacement ? local : null;
                             entries.put(entry.id, entry);
                             save();
                         }
@@ -248,31 +258,49 @@ final class SrrdbRecovery implements AutoCloseable {
         Entry entry = entries.get(id);
         if (entry == null) throw new IllegalArgumentException("Review file not found");
         if (!entry.state.equals("pending") && !entry.state.equals("failed")) throw new IllegalArgumentException("File is already decided or processing");
-        if (!action.equals("accept") && !action.equals("reject")) throw new IllegalArgumentException("Invalid decision");
+        if (!action.equals("reject") && !action.equals(entry.replacement ? "replace" : "accept"))
+            throw new IllegalArgumentException("Use explicit replacement approval for existing metadata");
         String previous = entry.state;
         entry.decidedBy = username;
-        entry.state = action.equals("accept") ? "queued" : "rejected";
+        entry.state = action.equals("reject") ? "rejected" : "queued";
         entry.message = "";
         try {
             save();
-            if (action.equals("accept")) worker.execute(() -> install(entry, username));
+            if (!action.equals("reject")) worker.execute(this::installNext);
         } catch (IOException | RuntimeException e) {
             entry.state = previous;
             try { save(); } catch (IOException suppressed) { e.addSuppressed(suppressed); }
             throw e;
         }
         logger.info("srrDB decision: user={} action={} target={}/{}", username, action, entry.releasePath, entry.file);
+        checkpointHistory();
+    }
+
+    private void installNext() {
+        Entry next;
+        synchronized (this) {
+            next = entries.values().stream().filter(item -> item.state.equals("queued"))
+                    .min(java.util.Comparator.comparing(item -> item.replacement)).orElse(null);
+            if (next == null) return;
+            next.state = "downloading";
+        }
+        install(next, next.decidedBy);
     }
 
     private void install(Entry entry, String username) {
         try {
             synchronized (this) { entry.state = "downloading"; save(); }
-            if (closed || !library.missing(username, entry.releasePath, entry.file)) throw new IOException("Target unavailable or no longer missing; nothing was overwritten");
+            if (closed || (!entry.replacement && !library.missing(username, entry.releasePath, entry.file)))
+                throw new IOException("Target unavailable or no longer missing; nothing was overwritten");
             SrrdbClient.RemoteFile file = new SrrdbClient.RemoteFile(entry.file, entry.size, entry.crc);
             byte[] content = client.download(releaseName(entry.releasePath), file);
             if (closed || Thread.currentThread().isInterrupted()) throw new IOException("Recovery cancelled");
-            String slave = library.install(username, entry.releasePath, file, content);
-            synchronized (this) { entry.state = "installed"; entry.message = "Verified and imported on " + slave; }
+            String slave = entry.replacement
+                    ? library.replace(username, entry.releasePath, file, content, entry.original, entry.id)
+                    : library.install(username, entry.releasePath, file, content);
+            synchronized (this) { entry.state = "installed"; entry.message = entry.replacement
+                    ? "Verified and replaced on " + slave + "; private backup transaction " + entry.id
+                    : "Verified and imported on " + slave; }
             logger.info("srrDB import completed: user={} slave={} path={}/{} size={} crc={}",
                     username, slave, entry.releasePath, entry.file, entry.size, entry.crc);
         } catch (Exception e) {
@@ -282,6 +310,7 @@ final class SrrdbRecovery implements AutoCloseable {
             synchronized (this) {
                 try { save(); } catch (IOException e) { logger.error("Unable to persist srrDB review", e); }
             }
+            checkpointHistory();
         }
     }
 
@@ -300,6 +329,10 @@ final class SrrdbRecovery implements AutoCloseable {
                 entry.releasePath = normalizePath(entry.releasePath);
                 if (!SrrdbClient.metadataPath(entry.file) || entry.id == null || entry.crc == null
                         || !entry.crc.matches("(?i)[0-9a-f]{8}")) throw new IOException("Invalid srrDB review entry");
+                UUID.fromString(entry.id);
+                if (entry.replacement && (entry.original == null || entry.original.crc() == null
+                        || !entry.original.crc().matches("(?i)[0-9a-f]{8}")))
+                    throw new IOException("Invalid replacement approval snapshot");
                 if (entry.state.equals("queued") || entry.state.equals("downloading")) {
                     entry.state = "failed";
                     entry.message = "Interrupted by restart. Check the destination before approving again.";
@@ -355,6 +388,8 @@ final class SrrdbRecovery implements AutoCloseable {
         String message = "";
         String requestedBy;
         String decidedBy = "";
+        boolean replacement;
+        LocalFile original;
         Entry(String path, SrrdbClient.RemoteFile file, String username) {
             this.releasePath = path;
             this.file = file.name();

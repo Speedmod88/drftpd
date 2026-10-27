@@ -106,6 +106,39 @@ class SrrdbRecoveryTest {
     final AtomicInteger downloads = new AtomicInteger();
     final FakeLibrary library = new FakeLibrary();
 
+    @Test void replacementNeedsExplicitApprovalAndSurvivesRestart() throws Exception {
+        library.missing = false;
+        library.original = new SrrdbRecovery.LocalFile(true, "old.nfo", 3, "12345678");
+        String id;
+        try (var recovery = open()) {
+            id = scan(recovery);
+            assertEquals(true, entries(recovery).get(0).get("replacement"));
+            assertThrows(IllegalArgumentException.class, () -> recovery.decide(id, "accept", "siteop"));
+            assertEquals(0, downloads.get());
+        }
+        try (var restored = open()) {
+            assertEquals(library.original, entries(restored).get(0).get("original"));
+            restored.decide(id, "replace", "siteop");
+            waitUntil(() -> entries(restored).get(0).get("state").equals("installed"));
+            assertEquals(1, library.replacements.get());
+            assertEquals(0, library.installs.get());
+            assertEquals(id, library.transaction);
+        }
+    }
+
+    @Test void replacementVerificationFailureNeverFallsBackToInstall() throws Exception {
+        library.missing = false;
+        library.original = new SrrdbRecovery.LocalFile(true, "old.nfo", 3, "12345678");
+        library.rejectReplacement = true;
+        try (var recovery = open()) {
+            String id = scan(recovery);
+            recovery.decide(id, "replace", "siteop");
+            waitUntil(() -> entries(recovery).get(0).get("state").equals("failed"));
+            assertEquals(0, library.installs.get());
+            assertTrue(entries(recovery).get(0).get("message").toString().contains("CRC mismatch"));
+        }
+    }
+
     private SrrdbRecovery open() throws Exception {
         return new SrrdbRecovery(temp.resolve("review.json"), 100, new SrrdbClient(1024, (uri, limit) -> {
             if (uri.getHost().equals("api.srrdb.com")) return SrrdbClientTest.details("Release-GRP", file);
@@ -210,6 +243,21 @@ class SrrdbRecoveryTest {
         volatile boolean missing = true;
         final AtomicInteger installs = new AtomicInteger();
         volatile String installedPath;
+        volatile SrrdbRecovery.LocalFile original;
+        final AtomicInteger replacements = new AtomicInteger();
+        volatile String transaction;
+        volatile boolean rejectReplacement;
+        @Override public SrrdbRecovery.LocalFile compare(String user, String path, String file) throws Exception {
+            return original == null ? SrrdbRecovery.Library.super.compare(user, path, file) : original;
+        }
+        @Override public String replace(String user, String path, SrrdbClient.RemoteFile file, byte[] content,
+                                        SrrdbRecovery.LocalFile approved, String transaction) throws Exception {
+            assertEquals(original, approved);
+            if (rejectReplacement) throw new java.io.IOException("CRC mismatch; original retained");
+            this.transaction = transaction;
+            replacements.incrementAndGet();
+            return "TestSlave";
+        }
         @Override public List<String> releases(String user, String path, boolean recursive, int limit) { return List.of(path); }
         @Override public boolean missing(String user, String path, String file) { return missing; }
         @Override public String install(String user, String path, SrrdbClient.RemoteFile file, byte[] content) {
