@@ -31,16 +31,16 @@ class SrrdbUploadSelectionTest {
         return SrrdbUploadSelection.select(slaves, holders, rules, session, target);
     }
 
-    @Test void prefersEligibleHolderAfterApplyingUploadRules() throws Exception {
+    @Test void uploadScoresTakePrecedenceOverExistingHolder() throws Exception {
         RemoteSlave holder = slave("Holder"), other = slave("Other");
         doAnswer(call -> {
             ScoreChart chart = call.getArgument(0);
             chart.addScoreToSlave(other, 100);
             return null;
         }).when(rules).filter(any(), same(session), eq(Transfer.TRANSFER_RECEIVING_UPLOAD), same(target), isNull());
-        assertSame(holder, select(List.of(other, holder), Set.of("Holder")));
+        assertSame(other, select(List.of(other, holder), Set.of("Holder")));
         verify(rules).filter(any(), same(session), eq(Transfer.TRANSFER_RECEIVING_UPLOAD), same(target), isNull());
-        verify(holder).setLastDirection(eq(Transfer.TRANSFER_RECEIVING_UPLOAD), anyLong());
+        verify(other).setLastDirection(eq(Transfer.TRANSFER_RECEIVING_UPLOAD), anyLong());
     }
 
     @Test void fallsBackFromRemergingHolderUsingUploadScores() throws Exception {
