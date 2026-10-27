@@ -876,6 +876,11 @@ function renderRecovery(data) {
   for (const file of data.files) {
     const row = document.createElement("tr");
     const destination = td(`${file.releasePath}/${file.file}`);
+    if (file.replacement) {
+      const existing = document.createElement("small");
+      existing.textContent = `Replace existing ${file.original.name}: ${formatBytes(file.original.size)}, CRC32 ${file.original.crc}`;
+      destination.append(existing);
+    }
     const source = document.createElement("a");
     source.textContent = "srrDB source";
     source.href = file.source;
@@ -899,13 +904,16 @@ function renderRecovery(data) {
     const buttons = document.createElement("div");
     buttons.className = "button-row";
     if (file.state === "pending" || file.state === "failed") {
-      for (const action of ["accept", "reject"]) {
+      for (const action of [file.replacement ? "replace" : "accept", "reject"]) {
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = action === "accept" ? (file.state === "failed" ? "Retry" : "Accept") : "Reject";
-        if (action === "accept") button.className = "primary";
+        button.textContent = action === "reject" ? "Reject" : action === "replace"
+          ? "Replace with backup" : (file.state === "failed" ? "Retry" : "Accept");
+        if (action !== "reject") button.className = "primary";
         button.addEventListener("click", async () => {
           if (action === "accept" && !await confirmAction("Download missing metadata", `${file.releasePath}/${file.file} (${formatBytes(file.size)})`)) return;
+          if (action === "replace" && !await confirmAction("Replace existing metadata",
+              `${file.releasePath}/${file.original.name}: CRC32 ${file.original.crc} -> ${file.crc}. Original copies are backed up privately. SFV replacement requires every referenced local file to pass a fresh CRC check. A failed multi-slave replacement may need a retry.`)) return;
           button.disabled = true;
           await recoveryAction({ action, id: file.id });
         });

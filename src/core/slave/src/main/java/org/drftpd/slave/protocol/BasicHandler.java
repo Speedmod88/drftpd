@@ -158,6 +158,9 @@ public class BasicHandler extends AbstractHandler {
 
     // MAXPATH
     public AsyncResponse handleMaxpath(AsyncCommandArgument ac) {
+        if (org.drftpd.slave.MetadataReplacement.PROBE.equals(ac.getArgs())) {
+            return new AsyncResponseMaxPath(ac.getIndex(), org.drftpd.slave.MetadataReplacement.CAPABILITY);
+        }
         if ("delete-zero-byte-v1".equals(ac.getArgs())) {
             return new AsyncResponseMaxPath(ac.getIndex(), -24003);
         }
@@ -493,6 +496,14 @@ public class BasicHandler extends AbstractHandler {
             return new AsyncResponseChecksum(ac.getIndex(), getSlaveObject().checkSum(ac.getArgs()));
         } catch (IOException e) {
             return new AsyncResponseException(ac.getIndex(), e);
+        }
+    }
+
+    public AsyncResponse handleReplacemetadata(AsyncCommandArgument ac) {
+        try {
+            return new AsyncResponseChecksum(ac.getIndex(), getSlaveObject().replaceMetadata(ac.getArgsArray(), _remerging.get()));
+        } catch (IOException | RuntimeException e) {
+            return new AsyncResponseException(ac.getIndex(), new IOException("Metadata replacement refused: " + e.getMessage(), e));
         }
     }
 

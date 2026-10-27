@@ -388,7 +388,7 @@ final class WebAdminServer {
                 case "scan" -> recovery().scan(session.username, payload.path, payload.recursive);
                 case "cancel" -> recovery().cancel();
                 case "clear" -> recovery().clearFinished();
-                case "accept", "reject" -> recovery().decide(payload.id, payload.action, session.username);
+                case "accept", "replace", "reject" -> recovery().decide(payload.id, payload.action, session.username);
                 default -> throw new IllegalArgumentException("Unknown recovery action");
             }
         } catch (IllegalArgumentException e) { throw new ApiException(400, e.getMessage()); }
