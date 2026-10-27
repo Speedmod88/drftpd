@@ -28,14 +28,7 @@ final class SrrdbUploadSelection {
         // Capacity/connection state can change while filters query the slaves.
         chart.getSlaveScores().removeIf(score -> !eligible(score.getRSlave()));
         if (chart.isEmpty()) throw unavailable();
-        ScoreChart.SlaveScore preferred = null;
-        for (ScoreChart.SlaveScore score : chart.getSlaveScores()) {
-            if (holders.contains(score.getRSlave().getName())
-                    && (preferred == null || score.getScore() > preferred.getScore())) {
-                preferred = score;
-            }
-        }
-        RemoteSlave result = preferred == null ? chart.getBestSlave() : preferred.getRSlave();
+        RemoteSlave result = chart.getBestSlave();
         result.setLastDirection(Transfer.TRANSFER_RECEIVING_UPLOAD, System.currentTimeMillis());
         return result;
     }
