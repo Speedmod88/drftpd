@@ -137,6 +137,17 @@
           <div><p class="eyebrow">Scheduler</p><h2>Timers</h2></div>
           <button id="refreshTimers" type="button">Refresh</button>
         </div>
+        <div class="table-band crc-audit">
+          <div class="band-header"><h3>Background CRC audit</h3><span id="crcAuditState"></span></div>
+          <p id="crcAuditSchedule" class="muted"></p>
+          <p id="crcAuditError" hidden></p>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Slave</th><th>State</th><th>Next eligible check</th><th>Last completed CRC</th><th>Current file</th><th>Last error</th></tr></thead>
+              <tbody id="crcAuditRows"></tbody>
+            </table>
+          </div>
+        </div>
         <div class="table-band">
           <div class="table-scroll">
             <table>
