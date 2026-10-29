@@ -38,12 +38,17 @@ class IntegrityAuditTest {
         var state = idle();
         when(slave.isOnline()).thenReturn(false);
         audit.step(slave, state, 1000000);
+        assertEquals("Offline", state.description);
+        assertEquals(0, state.nextEligibleAt);
         when(slave.isOnline()).thenReturn(true);
         when(slave.isRemerging()).thenReturn(true);
         audit.step(slave, state, 2000000);
+        assertEquals("Remerging", state.description);
         when(slave.isRemerging()).thenReturn(false);
         when(status.getTransfers()).thenReturn(1);
         audit.step(slave, state, 3000000);
+        assertEquals("Waiting for idle", state.description);
+        assertEquals(3300000, state.nextEligibleAt);
         verify(slave, never()).sendCommand(any());
     }
 
@@ -54,6 +59,8 @@ class IntegrityAuditTest {
         audit.step(slave, state, 1200000);
         verify(slave, never()).sendCommand(any());
         assertEquals(1000000, state.quietSince);
+        assertEquals(1300000, state.nextEligibleAt);
+        assertEquals("Waiting for idle", state.description);
     }
 
     @Test void legacySlaveOnlyReceivesSafeMaxpathProbe() throws Exception {
@@ -62,6 +69,8 @@ class IntegrityAuditTest {
         audit.step(slave, state, 1000000);
         audit.step(slave, state, 2000000);
         assertFalse(state.supported);
+        assertEquals("Unsupported slave version", state.description);
+        assertEquals(0, state.nextEligibleAt);
         var command = org.mockito.ArgumentCaptor.forClass(AsyncCommandArgument.class);
         verify(slave).sendCommand(command.capture());
         assertEquals("maxpath", command.getValue().getName());
@@ -79,6 +88,26 @@ class IntegrityAuditTest {
                 .thenReturn(new AsyncResponseMaxPath("a1", IdleChecksumScanner.CAPABILITY));
         audit.step(slave, state, 1300000);
         assertTrue(state.supported);
+    }
+
+    @Test void futurePassReportsItsRealEligibilityTimeWithoutSendingCommands() throws Exception {
+        var state = idle();
+        state.supported = true;
+        state.cursor = new IntegrityAudit.Cursor("", 2000000);
+        audit.step(slave, state, 1000000);
+        assertEquals("Waiting for next pass", state.description);
+        assertEquals(2000000, state.nextEligibleAt);
+        verify(slave, never()).sendCommand(any());
+    }
+
+    @Test void retryAndIdleGraceReportTheLaterDeadline() throws Exception {
+        var state = idle();
+        state.quietSince = 900000;
+        state.retryAfter = 1100000;
+        audit.step(slave, state, 1000000);
+        assertEquals("Retry delayed", state.description);
+        assertEquals(1200000, state.nextEligibleAt);
+        verify(slave, never()).sendCommand(any());
     }
 
     @Test void expectedSfvCrcIsNeverReplacedWithMeasuredBadCrc() throws Exception {
