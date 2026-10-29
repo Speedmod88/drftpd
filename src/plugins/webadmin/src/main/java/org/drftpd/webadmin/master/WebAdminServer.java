@@ -676,6 +676,7 @@ final class WebAdminServer {
         }
         sendJson(exchange, 200, Map.of(
                 "timers", timers,
+                "integrity", org.drftpd.zipscript.master.audit.IntegrityAudit.getSchedule(),
                 "timeEvents", GlobalContext.getGlobalContext().getTimeEventNames()));
     }
 

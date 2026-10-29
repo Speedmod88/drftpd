@@ -12,6 +12,8 @@ const state = {
   recoveryTimer: null,
   dashboardTimer: null,
   dashboardCommandsTimer: null,
+  timersTimer: null,
+  timersBusy: false,
   overviewBusy: false,
   dashboardBusy: false,
   samples: [],
@@ -57,6 +59,7 @@ function showLogin(expired = false) {
   clearTimeout(state.recoveryTimer);
   clearTimeout(state.dashboardTimer);
   clearTimeout(state.dashboardCommandsTimer);
+  clearTimeout(state.timersTimer);
   state.dupeJob = null;
   state.dupePaths = [];
   state.dupeSelected.clear();
@@ -319,8 +322,13 @@ function fileApi(path, kind, selectedScope) {
 }
 
 async function loadTimers() {
+  clearTimeout(state.timersTimer);
+  if (!state.csrf || state.view !== "timers" || state.timersBusy) return;
+  state.timersBusy = true;
   try {
     const data = await api("/api/timers");
+    if (!state.csrf || state.view !== "timers") return;
+    renderIntegritySchedule(data.integrity);
     const body = $("#timerRows");
     body.replaceChildren();
     for (const timer of data.timers) {
@@ -344,6 +352,41 @@ async function loadTimers() {
     }
     $("#timeEventCount").textContent = `${(data.timeEvents || []).length} registered`;
   } catch (error) { showError(error); }
+  finally {
+    state.timersBusy = false;
+    if (state.csrf && state.view === "timers") state.timersTimer = setTimeout(loadTimers, 5000);
+  }
+}
+
+function renderIntegritySchedule(audit) {
+  const body = $("#crcAuditRows");
+  body.replaceChildren();
+  $("#crcAuditState").textContent = !audit || !audit.loaded ? "Not loaded" : audit.enabled ? "Enabled" : "Disabled";
+  const error = $("#crcAuditError");
+  error.textContent = audit && audit.error || "";
+  error.hidden = !error.textContent;
+  if (!audit || !audit.loaded) {
+    $("#crcAuditSchedule").textContent = "Background CRC audit unavailable.";
+    return;
+  }
+  const next = !audit.enabled ? "Disabled" : audit.error ? "Blocked"
+    : audit.nextCheckAt > Date.now() ? formatTime(audit.nextCheckAt) : "Waiting for worker";
+  $("#crcAuditSchedule").textContent = `Next eligibility check: ${next} | Idle required: ${formatDuration(audit.idleMillis)} | Recheck each file: ${formatDuration(audit.intervalMillis)} | Minimum file age: ${formatDuration(audit.minimumAgeMillis)} | Last completed CRC: ${audit.lastCompletedAt ? formatTime(audit.lastCompletedAt) : "None this session"}`;
+  for (const slave of audit.slaves || []) {
+    const row = document.createElement("tr");
+    const nextCheck = !slave.nextEligibleAt ? "-" : slave.nextEligibleAt > Date.now()
+      ? formatTime(slave.nextEligibleAt) : "Next worker turn";
+    row.append(td(slave.name), td(slave.state), td(nextCheck),
+      td(slave.lastCompletedAt ? formatTime(slave.lastCompletedAt) : "None this session"),
+      td(slave.path || "-"), td(slave.error || "-"));
+    body.append(row);
+  }
+  if (!body.children.length) {
+    const row = document.createElement("tr"), cell = td(audit.enabled ? "Waiting for the first eligibility check" : "CRC audit disabled");
+    cell.colSpan = 6;
+    row.append(cell);
+    body.append(row);
+  }
 }
 
 async function loadConfigFiles() {
@@ -537,6 +580,7 @@ function selectView(name) {
   clearTimeout(state.dashboardTimer);
   clearTimeout(state.dashboardCommandsTimer);
   clearTimeout(state.recoveryTimer);
+  clearTimeout(state.timersTimer);
   $$(".nav-item").forEach(button => button.classList.toggle("active", button.dataset.view === name));
   $$(".view").forEach(view => view.classList.toggle("active", view.id === `view-${name}`));
   $("#sidebar").classList.remove("open");
