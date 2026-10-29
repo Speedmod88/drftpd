@@ -242,6 +242,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .state.running { color: var(--blue); background: var(--blue-soft); }
 .muted { color: var(--muted); }
 .time-events { margin-top: 16px; }
+.crc-audit { margin-bottom: 16px; }
+.crc-audit > p { margin: 12px 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.crc-audit td:nth-child(5), .crc-audit td:nth-child(6) { min-width: 180px; max-width: 380px; white-space: normal; overflow-wrap: anywhere; }
 .plain-list { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
 .plain-list li { padding: 10px 15px; border-bottom: 1px solid #e6e9e7; font-family: ui-monospace, monospace; font-size: 13px; }
 .plain-list li:last-child { border-bottom: 0; }

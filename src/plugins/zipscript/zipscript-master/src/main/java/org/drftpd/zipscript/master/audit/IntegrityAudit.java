@@ -31,6 +31,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class IntegrityAudit implements PluginInterface {
     private static final Logger logger = LogManager.getLogger(IntegrityAudit.class);
     private static final String TIMER = "integrity.dispatch";
+    private static volatile IntegrityAudit active;
+    private volatile IntegritySchedule schedule = IntegritySchedule.unavailable();
+    private long lastCycleAt, lastCompletedAt;
+    private volatile long nextCheckAt;
+    private String scheduleError = "";
+
+    public static IntegritySchedule getSchedule() {
+        IntegrityAudit audit = active;
+        return audit == null ? IntegritySchedule.unavailable() : audit.schedule;
+    }
     private final ExecutorService worker = Executors.newSingleThreadExecutor(task -> {
         Thread t = new Thread(task, "Integrity Audit");
         t.setDaemon(true); t.setPriority(Thread.MIN_PRIORITY); return t;
@@ -50,9 +60,16 @@ public class IntegrityAudit implements PluginInterface {
             config = IntegrityConfig.read(new Properties());
         }
         running.set(true);
+        nextCheckAt = System.currentTimeMillis() + 30000;
+        publishSchedule(List.of());
+        active = this;
         worker.execute(() -> {
             try { store = new AuditStore(Path.of("userdata", "integrity-audit")); }
-            catch (Exception e) { logger.error("Integrity audit database could not be opened; audit disabled", e); }
+            catch (Exception e) {
+                scheduleError = "Integrity database unavailable: " + e.getMessage();
+                logger.error("Integrity audit database could not be opened; audit disabled", e);
+                publishSchedule(List.of());
+            }
         });
         AnnotationProcessor.process(this);
         GlobalContext.getGlobalContext().scheduleTimer(TIMER, getClass().getName(), this::dispatch, 30000, 1000);
@@ -61,11 +78,16 @@ public class IntegrityAudit implements PluginInterface {
     }
 
     private void dispatch() {
+        nextCheckAt = System.currentTimeMillis() + 1000;
         if (!running.get() || !queued.compareAndSet(false, true)) return;
         try {
             worker.execute(() -> {
                 try { if (store != null && running.get()) tick(); }
-                catch (Exception e) { logger.warn("Integrity background pass deferred", e); }
+                catch (Exception e) {
+                    scheduleError = String.valueOf(e.getMessage());
+                    logger.warn("Integrity background pass deferred", e);
+                    publishSchedule(List.of());
+                }
                 finally { queued.set(false); }
             });
         } catch (RejectedExecutionException e) { queued.set(false); }
@@ -82,6 +104,7 @@ public class IntegrityAudit implements PluginInterface {
     }
     public void stopPlugin(String reason) {
         if (!running.getAndSet(false)) return;
+        if (active == this) active = null;
         AnnotationProcessor.unprocess(this);
         GlobalContext.getGlobalContext().cancelTimer(TIMER);
         worker.execute(() -> {
@@ -98,12 +121,14 @@ public class IntegrityAudit implements PluginInterface {
 
     private void tick() throws Exception {
         long now = System.currentTimeMillis();
+        lastCycleAt = now;
+        scheduleError = "";
         if (config.backfill() && now >= nextBackfill
                 && GlobalContext.getEventServiceSlowest().getQueueSize() < 5000) {
             backfill(now);
         }
+        List<RemoteSlave> slaves = new ArrayList<>(GlobalContext.getGlobalContext().getSlaveManager().getSlaves());
         if (config.enabled()) {
-            List<RemoteSlave> slaves = new ArrayList<>(GlobalContext.getGlobalContext().getSlaveManager().getSlaves());
             slaves.sort(Comparator.comparing(RemoteSlave::getName));
             for (int i = 0; i < config.steps() && running.get() && config.enabled() && !slaves.isEmpty(); i++) {
                 RemoteSlave slave = slaves.get(Math.floorMod(roundRobin++, slaves.size()));
@@ -113,11 +138,35 @@ public class IntegrityAudit implements PluginInterface {
                 catch (Exception e) {
                     state.retryAfter = now + 60000;
                     state.pending = null;
+                    state.description = "Retry delayed";
+                    state.nextEligibleAt = state.retryAfter;
+                    state.error = e.toString();
                     logger.warn("Idle audit deferred: slave={} reason={}", slave.getName(), e.toString());
                 }
             }
         }
         if (now - lastCommit >= 30000) { store.commit(); lastCommit = now; }
+        publishSchedule(slaves);
+    }
+
+    private void publishSchedule(Collection<RemoteSlave> slaves) {
+        IntegrityConfig settings = config;
+        if (settings == null) return;
+        List<IntegritySchedule.Slave> rows = new ArrayList<>();
+        for (RemoteSlave slave : slaves) {
+            Progress state = progress.get(slave.getName());
+            boolean selected = settings.slaves().isEmpty() || settings.slaves().contains(slave.getName());
+            String description = !settings.enabled() ? "Disabled" : !selected ? "Excluded"
+                    : state == null ? "Waiting for eligibility check" : state.description;
+            rows.add(new IntegritySchedule.Slave(slave.getName(), description,
+                    settings.enabled() && selected && state != null ? state.nextEligibleAt : 0,
+                    state == null ? 0 : state.lastCompletedAt,
+                    state == null || state.pending == null ? "" : state.pending.path,
+                    state == null ? "" : state.error));
+        }
+        rows.sort(Comparator.comparing(IntegritySchedule.Slave::name));
+        schedule = new IntegritySchedule(true, settings.enabled(), settings.idleMillis(), settings.intervalMillis(),
+                settings.minimumAgeMillis(), nextCheckAt, lastCycleAt, lastCompletedAt, scheduleError, rows);
     }
 
     private void backfill(long now) throws Exception {
@@ -149,14 +198,22 @@ public class IntegrityAudit implements PluginInterface {
             state.quietSince = now;
         }
         if (!slave.isOnline() || slave.isRemerging()) {
+            state.description = !slave.isOnline() ? "Offline" : "Remerging";
+            state.nextEligibleAt = 0;
             state.quietSince = now; state.supported = null; state.pending = null; return;
         }
         var status = slave.getSlaveStatus();
         long traffic = status.getBytesReceived() + status.getBytesSent();
         if (status.getTransfers() != 0 || state.traffic != traffic) {
+            state.description = "Waiting for idle";
+            state.nextEligibleAt = now + config.idleMillis();
             state.traffic = traffic; state.quietSince = now; return;
         }
-        if (now - state.quietSince < config.idleMillis() || now < state.retryAfter) return;
+        if (now - state.quietSince < config.idleMillis() || now < state.retryAfter) {
+            state.description = now < state.retryAfter ? "Retry delayed" : "Waiting for idle";
+            state.nextEligibleAt = Math.max(state.quietSince + config.idleMillis(), state.retryAfter);
+            return;
+        }
         if (state.supported == null) {
             String index = slave.fetchIndex();
             // Existing command/response classes: an old slave returns its normal maximum path length.
@@ -165,25 +222,41 @@ public class IntegrityAudit implements PluginInterface {
                     == IdleChecksumScanner.CAPABILITY;
             if (!state.supported) logger.info("Idle audit skipped for older slave {} (capability not supported)", slave.getName());
         }
-        if (!state.supported) return;
+        if (!state.supported) {
+            state.description = "Unsupported slave version"; state.nextEligibleAt = 0; return;
+        }
         if (state.cursor == null) {
             state.cursor = store.get("cursor:" + slave.getName(), Cursor.class);
             if (state.cursor == null) state.cursor = new Cursor("", 0);
         }
-        if (now < state.cursor.nextPass) return;
+        if (now < state.cursor.nextPass) {
+            state.description = "Waiting for next pass"; state.nextEligibleAt = state.cursor.nextPass; return;
+        }
+        state.description = "Selecting eligible files";
+        state.nextEligibleAt = now + 1000;
         if (state.pending == null) select(slave, state, now);
         Pending pending = state.pending;
-        if (pending == null || !running.get() || !config.enabled()) return;
+        if (pending == null || !running.get() || !config.enabled()) {
+            if (state.cursor.nextPass > now) {
+                state.description = "Waiting for next pass"; state.nextEligibleAt = state.cursor.nextPass;
+            }
+            return;
+        }
         if (slave.getConnectionGeneration() != generation) return;
         FileHandle file = new FileHandle(pending.path);
         if (!unchanged(file, slave, pending) || !config.includes(file.getPath())) {
             state.pending = null; return;
         }
         String index = slave.fetchIndex();
+        state.description = "Scanning CRC";
+        publishSchedule(GlobalContext.getGlobalContext().getSlaveManager().getSlaves());
         slave.sendCommand(new AsyncCommandArgument(index, "idlecrc",
                 new String[]{file.getPath(), Long.toString(pending.size)}));
         long measured = ((AsyncResponseChecksum) slave.fetchResponseWithoutDisconnect(index, 15000)).getChecksum();
-        if (measured == IdleChecksumScanner.BUSY) { state.quietSince = now; return; }
+        if (measured == IdleChecksumScanner.BUSY) {
+            state.description = "Waiting for idle"; state.nextEligibleAt = now + config.idleMillis();
+            state.quietSince = now; return;
+        }
         if (measured == IdleChecksumScanner.MORE) return;
         if (measured < 0 || measured > 0xffffffffL) throw new IllegalStateException("Invalid audit CRC response");
         if (slave.getConnectionGeneration() != generation || !unchanged(file, slave, pending)
@@ -193,6 +266,9 @@ public class IntegrityAudit implements PluginInterface {
             return;
         }
         finish(slave, file, pending, measured, System.currentTimeMillis());
+        state.lastCompletedAt = lastCompletedAt = System.currentTimeMillis();
+        state.description = "Ready for next CRC check";
+        state.error = "";
         state.cursor = new Cursor(file.getPath(), 0);
         store.put("cursor:" + slave.getName(), state.cursor);
         state.pending = null;
@@ -289,6 +365,8 @@ public class IntegrityAudit implements PluginInterface {
     record Reference(Long crc, String source) { }
     private record Pending(String path, long size, long modified, long xfertime, Reference reference, AuditResult previous) { }
     static final class Progress {
+        String description = "Waiting for eligibility check", error = "";
+        long nextEligibleAt, lastCompletedAt;
         long traffic = -1, generation = -1, quietSince = System.currentTimeMillis(), retryAfter;
         Boolean supported;
         Cursor cursor;
