@@ -158,6 +158,9 @@ public class BasicHandler extends AbstractHandler {
 
     // MAXPATH
     public AsyncResponse handleMaxpath(AsyncCommandArgument ac) {
+        if (org.drftpd.slave.NfoReader.PROBE.equals(ac.getArgs())) {
+            return new AsyncResponseMaxPath(ac.getIndex(), org.drftpd.slave.NfoReader.CAPABILITY);
+        }
         if (org.drftpd.slave.MetadataReplacement.PROBE.equals(ac.getArgs())) {
             return new AsyncResponseMaxPath(ac.getIndex(), org.drftpd.slave.MetadataReplacement.CAPABILITY);
         }
@@ -184,6 +187,24 @@ public class BasicHandler extends AbstractHandler {
     // PING
     public AsyncResponse handleRemotelog(AsyncCommandArgument ac) {
         return org.drftpd.slave.RemoteLogReader.read(ac.getIndex(), ac.getArgsArray(), getSlaveObject().getConfig());
+    }
+
+    public AsyncResponse handleNforead(AsyncCommandArgument ac) {
+        try {
+            String[] args = ac.getArgsArray();
+            if (args.length != 2 || !args[0].startsWith("/") || args[0].contains("\\")
+                    || args[0].contains(":") || args[0].chars().anyMatch(c -> c < 32 || c == 127)
+                    || java.util.Arrays.stream(args[0].split("/")).anyMatch(p -> p.equals(".") || p.equals("..")))
+                throw new IOException("Invalid VFS NFO path");
+            if (getSlaveObject().getRoots().getMultipleRootsForFile(args[0]).size() != 1)
+                throw new IOException("Ambiguous NFO physical copies");
+            String content = org.drftpd.slave.NfoReader.read(
+                    getSlaveObject().getRoots().getFile(args[0]).toPath(), Long.parseLong(args[1]),
+                    getSlaveObject().getRoots().getRootList().stream().map(root -> java.nio.file.Path.of(root.getPath())).toList());
+            return new org.drftpd.slave.network.AsyncResponseLog(ac.getIndex(), java.util.List.of(), content, null);
+        } catch (IOException | RuntimeException e) {
+            return new org.drftpd.slave.network.AsyncResponseLog(ac.getIndex(), java.util.List.of(), "", "NFO unavailable");
+        }
     }
 
     public AsyncResponse handlePing(AsyncCommandArgument ac) {
