@@ -1,0 +1,8 @@
+# Display a cached NFO as 250- comments after entering a confirmed complete release.
+# Incomplete and UNKNOWN releases never display NFO text.
+enabled=true
+
+# Slave reads are bounded to 64 KiB. FTP output is additionally limited below.
+max.lines=200
+cache.entries=256
+cache.minutes=60
