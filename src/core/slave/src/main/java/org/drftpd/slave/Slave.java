@@ -708,6 +708,7 @@ public class Slave extends SslConfigurationLoader {
                 || getCommandExecutorType(ac.getName()) == CommandExecutorType.CHECKSUM
                 || getCommandExecutorType(ac.getName()) == CommandExecutorType.REMERGE
                 || "idlecrc".equals(ac.getName());
+        guarded |= "nforead".equals(ac.getName());
         if (guarded) metadataGate.readLock().lock();
         try { return _central.handleCommand(ac); }
         finally { if (guarded) metadataGate.readLock().unlock(); }
@@ -770,7 +771,7 @@ public class Slave extends SslConfigurationLoader {
     }
 
     private ExecutorService getCommandExecutor(String commandName) {
-        if ("remotelog".equals(commandName)) return remoteLogExecutor;
+        if ("remotelog".equals(commandName) || "nforead".equals(commandName)) return remoteLogExecutor;
         if ("idlecrc".equals(commandName)) return idleChecksumExecutor;
         if ("replacemetadata".equals(commandName)) return _filesystemCommandExecutor;
         return switch (getCommandExecutorType(commandName)) {
