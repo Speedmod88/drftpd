@@ -425,6 +425,7 @@ public class Slave extends SslConfigurationLoader {
 
     public void shutdown() {
         logger.warn("Shutdown() called");
+        RemoteLogReader.shutdownArchives();
         if (_diskStatusExecutor != null) {
             _diskStatusExecutor.shutdownNow();
         }

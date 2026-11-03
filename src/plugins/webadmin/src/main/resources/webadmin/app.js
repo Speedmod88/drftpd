@@ -7,6 +7,7 @@ const state = {
   config: null,
   logTimer: null,
   logBusy: false,
+  logFiles: [],
   jobTimer: null,
   expiryTimer: null,
   recoveryTimer: null,
@@ -51,6 +52,11 @@ function showLogin(expired = false) {
   $("#historyStatus").textContent = "";
   state.csrf = "";
   state.username = "";
+  state.logFiles = [];
+  $("#logFile").replaceChildren();
+  $("#logDate").replaceChildren(new Option("Current logs", ""));
+  $("#logOutput").textContent = "";
+  $("#logStatus").textContent = "";
   $("#appView").hidden = true;
   $("#loginView").hidden = false;
   clearInterval(state.logTimer);
@@ -464,18 +470,14 @@ async function loadLogFiles() {
     const data = await api(fileApi("/api/logs/files", "logs", scope));
     if (scope !== $("#logScope").value) return;
     $("#logLines").max = data.maximumLines;
-    $("#logLines").value = data.defaultLines;
-    const select = $("#logFile");
-    const selected = select.value;
-    select.replaceChildren();
-    for (const file of data.files) {
-      const option = document.createElement("option");
-      option.value = file.path;
-      option.textContent = file.path;
-      select.append(option);
-    }
-    if (selected && data.files.some(file => file.path === selected)) select.value = selected;
-    if (select.value) await loadLog();
+    if (!state.logFiles.length) $("#logLines").value = data.defaultLines;
+    state.logFiles = data.files;
+    const date = $("#logDate"), previous = date.value;
+    date.replaceChildren(new Option("Current logs", ""), new Option("All archives", "*"));
+    const dates = [...new Set(data.files.map(file => file.date).filter(Boolean))].sort().reverse();
+    for (const value of dates) date.append(new Option(value, value));
+    if (previous === "*" || dates.includes(previous)) date.value = previous;
+    renderLogFiles();
   } catch (error) {
     if (scope !== $("#logScope").value) return;
     $("#logFile").replaceChildren();
@@ -486,6 +488,18 @@ async function loadLogFiles() {
   }
 }
 
+function renderLogFiles() {
+  const date = $("#logDate").value, select = $("#logFile"), previous = select.value;
+  const files = state.logFiles.filter(file => date === "*" ? file.archived : date ? file.date === date : !file.archived);
+  select.replaceChildren();
+  for (const file of files) select.append(new Option(file.path, file.path));
+  if (files.some(file => file.path === previous)) select.value = previous;
+  $("#logOutput").textContent = "";
+  $("#logStatus").textContent = files.length ? "" : "No logs available for this selection.";
+  updateLogFollow();
+  if (select.value) loadLog();
+}
+
 async function loadLog() {
   if (state.logBusy) return;
   const scope = $("#logScope").value;
@@ -494,15 +508,28 @@ async function loadLog() {
   state.logBusy = true;
   try {
     const lines = $("#logLines").value || 500;
-    const data = await api(fileApi(`/api/logs/tail?file=${encodeURIComponent(file)}&lines=${encodeURIComponent(lines)}`, "logs", scope));
-    if (scope !== $("#logScope").value || file !== $("#logFile").value) return;
+    const url = fileApi(`/api/logs/tail?file=${encodeURIComponent(file)}&lines=${encodeURIComponent(lines)}`, "logs", scope);
+    $("#logStatus").textContent = file.endsWith(".gz") ? "Reading compressed archive..." : "Loading...";
+    let data = await api(url);
+    while (data.state === "queued" || data.state === "running") {
+      if (!state.csrf || state.view !== "logs" || scope !== $("#logScope").value || file !== $("#logFile").value) return;
+      $("#logStatus").textContent = data.state === "queued" ? "Archive queued..."
+        : `Reading compressed archive: ${formatBytes(data.scannedBytes || 0)} scanned`;
+      await new Promise(resolve => setTimeout(resolve, 750));
+      if (!state.csrf || state.view !== "logs" || scope !== $("#logScope").value || file !== $("#logFile").value) return;
+      data = await api(url + "&job=" + encodeURIComponent(data.job));
+    }
+    if (!state.csrf || scope !== $("#logScope").value || file !== $("#logFile").value) return;
+    if (data.state === "failed") throw new Error(data.error || "Unable to read archive");
     const output = $("#logOutput");
     const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 35;
     output.textContent = data.content;
+    $("#logStatus").textContent = `Last ${lines} lines${data.limited ? " (preview limited to the last 256 KiB)" : ""}`;
     if (atBottom || $("#logFollow").checked) output.scrollTop = output.scrollHeight;
   } catch (error) {
     if (scope !== $("#logScope").value || file !== $("#logFile").value) return;
     $("#logOutput").textContent = error.message;
+    $("#logStatus").textContent = "Log read failed";
     $("#logFollow").checked = false;
     updateLogFollow();
     showError(error);
@@ -516,7 +543,10 @@ async function loadLog() {
 function updateLogFollow() {
   clearInterval(state.logTimer);
   state.logTimer = null;
-  if ($("#logFollow").checked && state.view === "logs") state.logTimer = setInterval(loadLog, 3000);
+  const archived = state.logFiles.find(file => file.path === $("#logFile").value)?.archived || $("#logDate").value !== "";
+  $("#logFollow").disabled = archived;
+  if (archived) $("#logFollow").checked = false;
+  if ($("#logFollow").checked && !archived && state.view === "logs") state.logTimer = setInterval(loadLog, 3000);
 }
 
 function dangerousCommand(command) {
@@ -589,7 +619,10 @@ function selectView(name) {
   if (name === "archive") loadArchiveRules();
   if (name === "timers") loadTimers();
   if (name === "config" && state.configFiles.length === 0) loadConfigFiles();
-  if (name === "logs" && $("#logFile").options.length === 0) loadLogFiles();
+  if (name === "logs") {
+    if ($("#logFile").options.length === 0) loadLogFiles();
+    else loadLog();
+  }
   if (name === "srrdb") loadRecovery();
 }
 
@@ -1042,7 +1075,15 @@ $("#configScope").addEventListener("change", () => {
   $("#reloadMasterConfig").disabled = $("#configScope").value !== "master";
   loadConfigFiles();
 });
-$("#logScope").addEventListener("change", () => { $("#logOutput").textContent = ""; loadLogFiles(); });
+$("#logScope").addEventListener("change", () => {
+  state.logFiles = [];
+  $("#logDate").replaceChildren(new Option("Current logs", ""));
+  $("#logFile").replaceChildren();
+  $("#logOutput").textContent = "";
+  $("#logStatus").textContent = "Loading log list...";
+  updateLogFollow();
+  loadLogFiles();
+});
 $("#refreshTimers").addEventListener("click", loadTimers);
 $("#reloadConfigList").addEventListener("click", loadConfigFiles);
 $("#configFilter").addEventListener("input", renderConfigFiles);
@@ -1051,10 +1092,11 @@ $("#configEditor").addEventListener("input", () => {
 });
 $("#saveConfig").addEventListener("click", saveConfig);
 $("#reloadMasterConfig").addEventListener("click", () => runCommand("SITE RELOAD"));
-$("#logFile").addEventListener("change", loadLog);
+$("#logDate").addEventListener("change", renderLogFiles);
+$("#logFile").addEventListener("change", () => { updateLogFollow(); loadLog(); });
 $("#logLines").addEventListener("change", loadLog);
 $("#logFollow").addEventListener("change", updateLogFollow);
-$("#refreshLog").addEventListener("click", loadLog);
+$("#refreshLog").addEventListener("click", loadLogFiles);
 $("#runCommand").addEventListener("click", () => runCommand());
 $$("[data-command]").forEach(button => button.addEventListener("click", () => {
   $("#commandInput").value = button.dataset.command;
