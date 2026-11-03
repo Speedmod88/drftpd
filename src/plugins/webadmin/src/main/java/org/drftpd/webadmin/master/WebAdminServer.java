@@ -91,6 +91,7 @@ final class WebAdminServer {
 
     private final WebAdminSettings settings;
     private final SlaveLogs slaveLogs = new SlaveLogs();
+    private final org.drftpd.slave.LogArchives logArchives = new org.drftpd.slave.LogArchives("WebAdmin-LogArchives");
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private final SecureRandom random = new SecureRandom();
     private final Map<String, LoginAttempt> loginAttempts = new ConcurrentHashMap<>();
@@ -172,6 +173,7 @@ final class WebAdminServer {
         requestExecutor.shutdownNow();
         commandExecutor.shutdownNow();
         dupeExecutor.shutdownNow();
+        logArchives.close();
         sessions.clear();
         checkpointHistory();
         historyWriter.shutdown();
@@ -241,8 +243,8 @@ final class WebAdminServer {
                 case "/api/timers" -> timers(exchange);
                 case "/api/config/files" -> configFiles(exchange);
                 case "/api/config/file" -> configFile(exchange, session);
-                case "/api/logs/files" -> logFiles(exchange);
-                case "/api/logs/tail" -> logTail(exchange);
+                case "/api/logs/files" -> logFiles(exchange, session);
+                case "/api/logs/tail" -> logTail(exchange, session);
                 case "/api/commands" -> commands(exchange, session);
                 case "/api/restart" -> restart(exchange, session);
                 case "/api/srrdb" -> srrdb(exchange, session);
@@ -474,7 +476,7 @@ final class WebAdminServer {
         sendJson(exchange, 200, Map.of("scopes", scopes));
     }
 
-    private boolean remoteLogs(HttpExchange exchange, boolean tail) throws IOException {
+    private boolean remoteLogs(HttpExchange exchange, boolean tail, WebSessionToken session) throws IOException {
         Map<String, String> params = query(exchange.getRequestURI());
         String scope = params.getOrDefault("scope", "master");
         if (!scope.startsWith("remote:")) return false;
@@ -484,11 +486,26 @@ final class WebAdminServer {
                 int lines = Integer.parseInt(params.getOrDefault("lines", String.valueOf(settings.defaultLogLines)));
                 lines = Math.max(1, Math.min(Math.min(settings.maximumLogLines, 2000), lines));
                 String file = params.getOrDefault("file", "");
-                var response = slaveLogs.request(slave, "tail", file, String.valueOf(lines));
-                sendJson(exchange, 200, Map.of("file", file, "content", response.getContent()));
+                if (file.endsWith(".log.gz")) {
+                    String owner = session.username + "|" + scope;
+                    String job = params.get("job");
+                    var response = job == null ? slaveLogs.request(slave, "archive-start", file, String.valueOf(lines), owner)
+                            : slaveLogs.request(slave, "archive-status", job, owner);
+                    var fields = response.getFiles();
+                    if (fields.size() != 5 || !fields.get(2).equals(file)) throw new IOException("Invalid archive preview response");
+                    String state = fields.get(1);
+                    sendJson(exchange, state.equals("queued") || state.equals("running") ? 202 : 200,
+                            new org.drftpd.slave.LogArchives.Preview(fields.get(0), file, state,
+                                    state.equals("failed") ? "" : response.getContent(), state.equals("failed") ? response.getContent() : "",
+                                    Long.parseLong(fields.get(3)), Boolean.parseBoolean(fields.get(4))));
+                } else {
+                    var response = slaveLogs.request(slave, file.contains("/") ? "tail-file" : "tail", file, String.valueOf(lines));
+                    sendJson(exchange, 200, Map.of("file", file, "content", response.getContent()));
+                }
             } else {
-                var response = slaveLogs.request(slave, "list");
-                sendJson(exchange, 200, Map.of("files", response.getFiles().stream().map(file -> Map.of("path", file)).toList(),
+                var response = slaveLogs.request(slave, "list-all");
+                sendJson(exchange, 200, Map.of("files", response.getFiles().stream().map(file -> Map.of("path", file,
+                                "date", org.drftpd.slave.LogArchives.date(file), "archived", org.drftpd.slave.LogArchives.archived(file))).toList(),
                         "maximumLines", Math.min(settings.maximumLogLines, 2000),
                         "defaultLines", Math.min(settings.defaultLogLines, 2000)));
             }
@@ -767,34 +784,31 @@ final class WebAdminServer {
                 "modified", Files.getLastModifiedTime(target).toMillis()));
     }
 
-    private void logFiles(HttpExchange exchange) throws IOException {
+    private void logFiles(HttpExchange exchange, WebSessionToken session) throws IOException {
         requireMethod(exchange, "GET");
-        if (remoteLogs(exchange, false)) return;
+        if (remoteLogs(exchange, false, session)) return;
         Path logsRoot = fileRoot(exchange, false);
         List<Map<String, Object>> files = new ArrayList<>();
-        try (Stream<Path> stream = Files.walk(logsRoot, 2)) {
-            stream.filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
-                    .filter(path -> !Files.isSymbolicLink(path))
-                    .filter(path -> path.getFileName().toString().endsWith(".log"))
-                    .sorted()
-                    .forEach(path -> {
-                        try {
-                            files.add(Map.of(
-                                    "path", portable(logsRoot.relativize(path)),
-                                    "size", Files.size(path),
-                                    "modified", Files.getLastModifiedTime(path).toMillis()));
-                        } catch (IOException e) {
-                            logger.debug("Skipping unreadable log file {}", path, e);
-                        }
-                    });
+        for (String relative : org.drftpd.slave.LogArchives.list(logsRoot)) {
+            Path path = logsRoot.resolve(relative);
+            try {
+                files.add(Map.of(
+                        "path", portable(logsRoot.relativize(path)),
+                        "date", org.drftpd.slave.LogArchives.date(relative),
+                        "archived", org.drftpd.slave.LogArchives.archived(relative),
+                        "size", Files.size(path),
+                        "modified", Files.getLastModifiedTime(path).toMillis()));
+            } catch (IOException e) {
+                logger.debug("Skipping unreadable log file {}", path, e);
+            }
         }
         sendJson(exchange, 200, Map.of("files", files, "defaultLines", settings.defaultLogLines,
                 "maximumLines", settings.maximumLogLines));
     }
 
-    private void logTail(HttpExchange exchange) throws IOException {
+    private void logTail(HttpExchange exchange, WebSessionToken session) throws IOException {
         requireMethod(exchange, "GET");
-        if (remoteLogs(exchange, true)) return;
+        if (remoteLogs(exchange, true, session)) return;
         Path logsRoot = fileRoot(exchange, false);
         Map<String, String> query = query(exchange.getRequestURI());
         String relative = query.get("file");
@@ -810,6 +824,14 @@ final class WebAdminServer {
             }
         }
         lines = Math.max(1, Math.min(settings.maximumLogLines, lines));
+        if (relative.endsWith(".log.gz")) {
+            String owner = session.username + "|" + logsRoot;
+            String job = query.get("job");
+            var preview = job == null ? logArchives.start(owner, logsRoot, relative, lines) : logArchives.status(owner, job);
+            if (!preview.file().equals(relative)) throw new ApiException(400, "Archive job does not match selected file");
+            sendJson(exchange, preview.state().equals("queued") || preview.state().equals("running") ? 202 : 200, preview);
+            return;
+        }
         Path target = safeExistingFile(logsRoot, relative);
         if (!target.getFileName().toString().endsWith(".log")) throw new ApiException(400, "Only log files are supported");
         sendJson(exchange, 200, Map.of(

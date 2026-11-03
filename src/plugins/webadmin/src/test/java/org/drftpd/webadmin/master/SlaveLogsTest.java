@@ -34,4 +34,17 @@ class SlaveLogsTest {
         assertEquals(List.of("slave.log"), new SlaveLogs().request(slave, "list").getFiles());
         assertEquals(List.of("maxpath", "remotelog"), slave.commands);
     }
+    @Test void oldLogSlaveFallsBackToCurrentLogsAndNeverReceivesArchiveActions() throws Exception {
+        Slave slave = new Slave(RemoteLogReader.SUPPORTED);
+        assertEquals(List.of("slave.log"), new SlaveLogs().request(slave, "list-all").getFiles());
+        assertEquals(List.of("maxpath", "maxpath", "remotelog"), slave.commands);
+        slave.commands.clear();
+        assertThrows(java.io.IOException.class, () -> new SlaveLogs().request(slave, "archive-start", "slave.log.gz", "10", "siteop"));
+        assertEquals(List.of("maxpath"), slave.commands);
+    }
+    @Test void archiveCapableSlaveUsesTheNewActionAfterItsSafeProbe() throws Exception {
+        Slave slave = new Slave(RemoteLogReader.ARCHIVE_SUPPORTED);
+        assertEquals(List.of("slave.log"), new SlaveLogs().request(slave, "list-all").getFiles());
+        assertEquals(List.of("maxpath", "remotelog"), slave.commands);
+    }
 }

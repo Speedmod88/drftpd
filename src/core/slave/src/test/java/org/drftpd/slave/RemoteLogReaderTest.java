@@ -55,4 +55,39 @@ class RemoteLogReaderTest {
         assertNotNull(RemoteLogReader.read("1", new String[]{"tail", "linked.log", "1"}, config()).getError());
         assertFalse(RemoteLogReader.read("1", new String[]{"list"}, config()).getFiles().contains("linked.log"));
     }
+
+    @Test void archiveActionsListMonthlyFilesAndSurviveSlaveReconnect() throws Exception {
+        Path month = Files.createDirectory(root.resolve("2026-11"));
+        Path archive = month.resolve("slave-2026-11-02.log.gz");
+        try (var output = new java.util.zip.GZIPOutputStream(Files.newOutputStream(archive))) {
+            output.write("first\nlast\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+        assertTrue(RemoteLogReader.read("1", new String[]{"list"}, config()).getFiles().isEmpty());
+        assertEquals(java.util.List.of("2026-11/slave-2026-11-02.log.gz"),
+                RemoteLogReader.read("1", new String[]{"list-all"}, config()).getFiles());
+        for (int reconnect = 0; reconnect < 2; reconnect++) {
+            var result = RemoteLogReader.read("2", new String[]{"archive-start", "2026-11/slave-2026-11-02.log.gz", "1", "siteop"}, config());
+            assertNull(result.getError());
+            String id = result.getFiles().get(0);
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (!result.getFiles().get(1).equals("completed") && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+                result = RemoteLogReader.read("3", new String[]{"archive-status", id, "siteop"}, config());
+                assertNull(result.getError());
+            }
+            assertEquals("last", result.getContent());
+            assertNotNull(RemoteLogReader.read("4", new String[]{"archive-status", id, "other"}, config()).getError());
+            RemoteLogReader.shutdownArchives();
+        }
+    }
+
+    @Test void canReadUncompressedMonthlyArchiveWithoutRelaxingLegacyPathRules() throws Exception {
+        Path month = Files.createDirectory(root.resolve("2026-11"));
+        Files.writeString(month.resolve("slave-2026-11-02.log"), "first\nlast\n");
+        String file = "2026-11/slave-2026-11-02.log";
+        assertNotNull(RemoteLogReader.read("1", new String[]{"tail", file, "1"}, config()).getError());
+        var response = RemoteLogReader.read("2", new String[]{"tail-file", file, "1"}, config());
+        assertNull(response.getError());
+        assertEquals("last", response.getContent());
+    }
 }
