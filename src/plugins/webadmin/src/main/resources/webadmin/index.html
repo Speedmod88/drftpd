@@ -190,12 +190,14 @@
           <div><p class="eyebrow">Runtime</p><h2>Logs</h2></div>
           <div class="log-controls">
             <select id="logScope" aria-label="Log server"><option value="master">Master</option></select>
+            <select id="logDate" aria-label="Archive date"><option value="">Current logs</option></select>
             <select id="logFile" aria-label="Log file"></select>
             <input id="logLines" type="number" min="10" max="2000" value="500" aria-label="Lines">
             <label class="toggle"><input id="logFollow" type="checkbox"><span>Follow</span></label>
             <button id="refreshLog" type="button">Refresh</button>
           </div>
         </div>
+        <p id="logStatus" class="muted" role="status"></p>
         <pre id="logOutput" class="log-output" tabindex="0"></pre>
       </section>
 
