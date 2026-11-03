@@ -17,9 +17,18 @@ final class SlaveLogs {
         try {
             if (!slave.isOnline()) throw new IOException("Slave is offline");
             long generation = slave.getConnectionGeneration();
-            AsyncResponse capability = send(slave, "maxpath", RemoteLogReader.PROBE);
+            boolean archives = args.length > 0 && (args[0].equals("list-all") || args[0].equals("tail-file") || args[0].startsWith("archive-"));
+            AsyncResponse capability = send(slave, "maxpath", archives ? RemoteLogReader.ARCHIVE_PROBE : RemoteLogReader.PROBE);
             if (!(capability instanceof AsyncResponseMaxPath result)) throw new IOException("Invalid capability response");
-            requireSupported(result.getMaxPath());
+            if (archives && result.getMaxPath() != RemoteLogReader.ARCHIVE_SUPPORTED) {
+                if (result.getMaxPath() == RemoteLogReader.DISABLED) requireSupported(result.getMaxPath());
+                if (!args[0].equals("list-all")) throw new IOException("Update this slave JAR to read compressed log archives");
+                // Older log-capable slaves keep their current log list and never receive a new action.
+                capability = send(slave, "maxpath", RemoteLogReader.PROBE);
+                if (!(capability instanceof AsyncResponseMaxPath legacy)) throw new IOException("Invalid capability response");
+                requireSupported(legacy.getMaxPath());
+                args = new String[]{"list"};
+            } else if (!archives) requireSupported(result.getMaxPath());
             if (generation != slave.getConnectionGeneration()) throw new IOException("Slave reconnected; retry");
             AsyncResponse response = send(slave, "remotelog", args);
             if (!(response instanceof AsyncResponseLog log)) throw new IOException("Invalid log response");

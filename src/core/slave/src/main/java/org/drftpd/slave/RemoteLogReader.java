@@ -14,6 +14,13 @@ public final class RemoteLogReader {
     public static final String PROBE = "remote-log-tail-v1";
     public static final int SUPPORTED = -24001;
     public static final int DISABLED = -24002;
+    public static final String ARCHIVE_PROBE = "remote-log-archives-v1";
+    public static final int ARCHIVE_SUPPORTED = -24005;
+    private static LogArchives archives;
+    private static synchronized LogArchives archiveJobs() {
+        if (archives == null) archives = new LogArchives("Slave Log Archives");
+        return archives;
+    }
     public static final int MAX_BYTES = 262144;
     public static final int MAX_LINES = 2000;
 
@@ -28,6 +35,18 @@ public final class RemoteLogReader {
             if (!root.equals(root.toRealPath()) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) {
                 throw new IOException("Log root must be a real directory, not a symbolic link");
             }
+            if (args.length == 1 && args[0].equals("list-all")) {
+                return new AsyncResponseLog(index, LogArchives.list(root), "", null);
+            }
+            if (args.length == 4 && args[0].equals("archive-start")) {
+                if (args[3].length() > 256) throw new IOException("Invalid archive owner");
+                int lines = Integer.parseInt(args[2]);
+                if (lines < 1 || lines > MAX_LINES) throw new IOException("Invalid line count");
+                return preview(index, archiveJobs().start(args[3], root, args[1], lines));
+            }
+            if (args.length == 3 && args[0].equals("archive-status")) {
+                return preview(index, archiveJobs().status(args[2], args[1]));
+            }
             if (args.length == 1 && args[0].equals("list")) {
                 try (var stream = Files.list(root)) {
                     List<String> files = stream.filter(p -> validName(p.getFileName().toString()))
@@ -36,12 +55,14 @@ public final class RemoteLogReader {
                     return new AsyncResponseLog(index, files, "", null);
                 }
             }
-            if (args.length != 3 || !args[0].equals("tail") || !validName(args[1])) {
+            boolean extendedTail = args.length == 3 && args[0].equals("tail-file")
+                    && LogArchives.validPath(args[1]) && args[1].endsWith(".log");
+            if (!extendedTail && (args.length != 3 || !args[0].equals("tail") || !validName(args[1]))) {
                 throw new IOException("Expected list or tail of a simple .log filename");
             }
             int lines = Integer.parseInt(args[2]);
             if (lines < 1 || lines > MAX_LINES) throw new IOException("Lines must be between 1 and 2000");
-            Path file = root.resolve(args[1]);
+            Path file = extendedTail ? LogArchives.safeFile(root, args[1]) : root.resolve(args[1]);
             if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Log file unavailable");
             byte[] bytes;
             boolean truncated;
@@ -73,5 +94,15 @@ public final class RemoteLogReader {
     }
     static boolean validName(String name) {
         return name.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,159}\\.log");
+    }
+
+    private static AsyncResponseLog preview(String index, LogArchives.Preview preview) {
+        return new AsyncResponseLog(index,
+                List.of(preview.job(), preview.state(), preview.file(), Long.toString(preview.scannedBytes()), Boolean.toString(preview.limited())),
+                preview.state().equals("failed") ? preview.error() : preview.content(), null);
+    }
+
+    public static synchronized void shutdownArchives() {
+        if (archives != null) { archives.close(); archives = null; }
     }
 }

@@ -158,6 +158,10 @@ public class BasicHandler extends AbstractHandler {
 
     // MAXPATH
     public AsyncResponse handleMaxpath(AsyncCommandArgument ac) {
+        if (org.drftpd.slave.RemoteLogReader.ARCHIVE_PROBE.equals(ac.getArgs())) {
+            return new AsyncResponseMaxPath(ac.getIndex(), org.drftpd.slave.RemoteLogReader.enabled(getSlaveObject().getConfig())
+                    ? org.drftpd.slave.RemoteLogReader.ARCHIVE_SUPPORTED : org.drftpd.slave.RemoteLogReader.DISABLED);
+        }
         if (org.drftpd.slave.NfoReader.PROBE.equals(ac.getArgs())) {
             return new AsyncResponseMaxPath(ac.getIndex(), org.drftpd.slave.NfoReader.CAPABILITY);
         }
