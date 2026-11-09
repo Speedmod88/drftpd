@@ -69,7 +69,9 @@ final class SrrdbClient {
         if (!metadataPath(file.name()) || file.size() <= 0 || file.size() > maximumBytes) {
             throw new IOException("Invalid metadata file");
         }
-        byte[] data = request(downloadUri(release, file.name()), maximumBytes);
+        byte[] data;
+        try { data = request(downloadUri(release, file.name()), maximumBytes); }
+        catch (IOException e) { throw new IOException("srrDB HTTPS download failed: " + e.getMessage(), e); }
         verify(file, data);
         return data;
     }

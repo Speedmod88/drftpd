@@ -96,6 +96,7 @@ final class WebAdminServer {
     private final SecureRandom random = new SecureRandom();
     private final Map<String, LoginAttempt> loginAttempts = new ConcurrentHashMap<>();
     private final Map<String, WebSessionToken> sessions = new ConcurrentHashMap<>();
+    private final RecoveryCredentials recoveryCredentials = new RecoveryCredentials();
     private final Map<String, CommandJob> jobs = new ConcurrentHashMap<>();
     private final WebJobHistory history;
     private final java.util.concurrent.ScheduledExecutorService historyWriter =
@@ -175,6 +176,7 @@ final class WebAdminServer {
         dupeExecutor.shutdownNow();
         logArchives.close();
         sessions.clear();
+        recoveryCredentials.close();
         checkpointHistory();
         historyWriter.shutdown();
         logger.info("HTTPS web administration server stopped");
@@ -298,13 +300,18 @@ final class WebAdminServer {
         }
 
         attempt.success();
-        sessions.values().removeIf(WebSessionToken::expired);
+        sessions.entrySet().removeIf(entry -> {
+            if (!entry.getValue().expired()) return false;
+            recoveryCredentials.forget(entry.getKey());
+            return true;
+        });
         if (sessions.size() >= 1000) throw new ApiException(503, "Too many active sessions");
         String previousSession = cookie(exchange, SESSION_COOKIE);
-        if (previousSession != null) sessions.remove(previousSession);
+        if (previousSession != null) removeSession(previousSession);
         WebSessionToken session = new WebSessionToken(randomToken(), randomToken(), user.getName(),
                 settings.sessionTimeoutMinutes);
         sessions.put(session.id, session);
+        recoveryCredentials.remember(session.id, session.username, payload.password, session.expires);
         exchange.getResponseHeaders().add("Set-Cookie", SESSION_COOKIE + "=" + session.id
                 + "; Path=/; Max-Age=" + settings.sessionTimeoutMinutes * 60
                 + "; Secure; HttpOnly; SameSite=Strict");
@@ -329,7 +336,7 @@ final class WebAdminServer {
         WebSessionToken session = id == null ? null : sessions.get(id);
         if (session == null || session.expired()) {
             if (id != null) {
-                sessions.remove(id);
+                removeSession(id);
             }
             throw new ApiException(401, "Authentication required");
         }
@@ -337,13 +344,13 @@ final class WebAdminServer {
             User user = GlobalContext.getGlobalContext().getUserManager()
                     .getUserByNameIncludeDeleted(session.username);
             if (user.isDeleted() || !user.isMemberOf("siteop") || !GlobalContext.getConfig().isLoginAllowed(user)) {
-                sessions.remove(session.id);
+                removeSession(session.id);
                 throw new ApiException(401, "Authentication required");
             }
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
-            sessions.remove(session.id);
+            removeSession(session.id);
             throw new ApiException(401, "Authentication required");
         }
         return session;
@@ -355,6 +362,11 @@ final class WebAdminServer {
                 supplied.getBytes(StandardCharsets.UTF_8), session.csrf.getBytes(StandardCharsets.UTF_8))) {
             throw new ApiException(403, "Invalid CSRF token");
         }
+    }
+
+    private void removeSession(String id) {
+        sessions.remove(id);
+        recoveryCredentials.forget(id);
     }
 
     private void session(HttpExchange exchange, WebSessionToken session) throws IOException {
@@ -371,7 +383,8 @@ final class WebAdminServer {
         if (stopping) throw new ApiException(503, "WebAdmin is stopping");
         if (recovery == null) {
             recovery = new SrrdbRecovery(settings.srrdbState, settings.srrdbScanLimit,
-                    new SrrdbClient(settings.srrdbMaximumBytes), new SrrdbLibrary());
+                    new SrrdbClient(settings.srrdbMaximumBytes), new SrrdbLibrary(new SrrdbFtpUpload(settings,
+                            recoveryCredentials::forUser, () -> new SrrdbFtpUpload.Client(GlobalContext.getGlobalContext().getSSLContext()))));
             recovery.setHistorySink(history::save);
         }
         return recovery;
@@ -399,7 +412,7 @@ final class WebAdminServer {
 
     private void logout(HttpExchange exchange, WebSessionToken session) throws IOException {
         requireMethod(exchange, "POST");
-        sessions.remove(session.id);
+        removeSession(session.id);
         exchange.getResponseHeaders().add("Set-Cookie",
                 SESSION_COOKIE + "=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict");
         sendJson(exchange, 200, Map.of("ok", true));
@@ -1229,6 +1242,7 @@ final class WebAdminServer {
     }
 
     private void checkpointHistory() {
+        recoveryCredentials.purge();
         try {
             for (CommandJob job : jobs.values()) persistJob(job);
             SrrdbRecovery current = recovery;
