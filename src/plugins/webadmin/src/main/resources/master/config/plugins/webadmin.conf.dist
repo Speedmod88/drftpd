@@ -37,14 +37,21 @@ login.window.seconds=60
 
 # srrDB recovery is manually started from the panel. No scheduled automatic scans.
 # One background worker, at least one second between remote requests, exact release
-# names only. Only missing SFV/NFO files are offered; existing files are never replaced.
-# Each file requires Accept before any file content is downloaded or written to a slave.
+# names only. Missing files require Accept; mismatches require separate Replace approval.
+# Missing SFV/NFO files are uploaded through normal FTPS login/PRET/PASV/STOR/XCRC.
+# The active WebAdmin login credentials are held only in memory until logout/expiry.
+# Normal FTP login slots, IP permissions, upload selection and post-hooks apply.
 # Review decisions survive restarts. Interrupted imports require manual review/retry.
 # Scope scans use the index, capped per scan. Subdirectories (CD1, Subs...) must exist.
 # HTTPS download errors (including srrDB access restrictions) are reported, not bypassed.
 srrdb.scan.limit=100
 srrdb.maximum.bytes=1048576
 srrdb.state.file=userdata/webadmin/srrdb.json
+
+# Optional LOCAL master FTP endpoint. Blank host uses master.ip (or loopback when
+# bound to all interfaces); port 0 uses master.port. No public/external FTP host.
+srrdb.ftp.host=
+srrdb.ftp.port=0
 
 # Paths are relative to the master runtime directory unless absolute.
 # The editor only opens regular .conf/.conf.dist files below config.root and

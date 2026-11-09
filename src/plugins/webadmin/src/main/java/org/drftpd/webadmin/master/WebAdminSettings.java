@@ -44,6 +44,8 @@ final class WebAdminSettings {
     final Path srrdbState;
     final int srrdbScanLimit;
     final int srrdbMaximumBytes;
+    final String srrdbFtpHost;
+    final int srrdbFtpPort;
     final Set<String> allowedCommands;
 
     WebAdminSettings(Properties properties) {
@@ -81,6 +83,8 @@ final class WebAdminSettings {
         srrdbState = rootPath(properties.getProperty("srrdb.state.file", "userdata/webadmin/srrdb.json"));
         srrdbScanLimit = intValue(properties, "srrdb.scan.limit", 100, 1, 1000);
         srrdbMaximumBytes = intValue(properties, "srrdb.maximum.bytes", 1048576, 1024, 4194304);
+        srrdbFtpHost = properties.getProperty("srrdb.ftp.host", "").trim();
+        srrdbFtpPort = intValue(properties, "srrdb.ftp.port", 0, 0, 65535);
         bindAddress = address(properties.getProperty("bind", "127.0.0.1"));
         allowedCommands = Collections.unmodifiableSet(loadAllowedCommands(properties));
     }
