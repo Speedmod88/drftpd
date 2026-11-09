@@ -3,39 +3,24 @@ package org.drftpd.webadmin.master;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.drftpd.master.GlobalContext;
-import org.drftpd.master.event.TransferEvent;
 import org.drftpd.master.indexation.AdvancedSearchParams;
-import org.drftpd.master.network.BaseFtpConnection;
-import org.drftpd.master.network.RemoteTransfer;
 import org.drftpd.master.slavemanagement.RemoteSlave;
-import org.drftpd.master.slavemanagement.SlaveManager;
-import org.drftpd.master.slaveselection.filter.SlaveSelectionManager;
 import org.drftpd.master.usermanager.User;
 import org.drftpd.master.vfs.DirectoryHandle;
 import org.drftpd.master.vfs.FileHandle;
 import org.drftpd.master.vfs.InodeHandle;
-import javax.net.ssl.SSLSocket;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 /** VFS adapter; replacements require an explicitly probed slave capability. */
 final class SrrdbLibrary implements SrrdbRecovery.Library {
     private static final Logger logger = LogManager.getLogger("org.drftpd.webadmin.srrdb");
-    private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread thread = new Thread(r, "WebAdmin-srrDB-deadline");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final SrrdbFtpUpload uploads;
     private volatile boolean closed;
-    private volatile SSLSocket activeSocket;
-    private volatile RemoteTransfer activeTransfer;
+    SrrdbLibrary(SrrdbFtpUpload uploads) { this.uploads = uploads; }
 
     private User user(String username) throws Exception {
         if (closed || Thread.currentThread().isInterrupted()) throw new IOException("Recovery service stopped");
@@ -242,104 +227,15 @@ final class SrrdbLibrary implements SrrdbRecovery.Library {
     }
 
     @Override public String install(String username, String releasePath, SrrdbClient.RemoteFile remote, byte[] content) throws Exception {
-        User user = user(username);
+        user(username);
         SrrdbClient.verify(remote, content);
-        if (!missing(username, releasePath, remote.name())) throw new IOException("Metadata already exists; not overwritten");
+        if (!missing(username, releasePath, remote.name())) throw new IOException("Metadata already exists (possibly a stale zero-byte reservation); inspect it through FTP before retrying. Nothing was overwritten");
         String path = releasePath + "/" + remote.name();
-        DirectoryHandle parent = directory(user, path.substring(0, path.lastIndexOf('/')));
-        var selection = GlobalContext.getGlobalContext().getSlaveSelectionManager();
-        if (!(selection instanceof SlaveSelectionManager rules)) {
-            throw new IOException("Recovery requires the configured upload filter-chain selector");
-        }
-        var holders = parent.getSlaveRefCounts().keySet();
-        RemoteSlave destination = SrrdbUploadSelection.select(selection.getAvailableSlaves(), holders,
-                rules.getFilterChain("up"), new ImportSession(user), new FileHandle(path));
-        logger.info("srrDB upload destination: path={} slave={} existingHolder={} rules=slaveselection-up.conf",
-                path, destination.getName(), holders.contains(destination.getName()));
-        if (GlobalContext.getGlobalContext().getSSLContext() == null) throw new IOException("Master SSL is required for recovery uploads");
-        RemoteTransfer transfer = null;
-        FileHandle file = null;
-        boolean completed = false;
-        try {
-            if (!SrrdbUploadSelection.eligible(destination)) {
-                throw new IOException("Recovery destination became unavailable, FULL or busy: " + destination.getName());
-            }
-            // Do not request an optional LAN address: older slaves can have none configured.
-            String index = SlaveManager.getBasicIssuer().issueListenToSlave(destination, true, false, false);
-            var connection = destination.fetchTransferResponseFromIndex(index);
-            transfer = destination.getTransfer(connection.getTransferIndex());
-            activeTransfer = transfer;
-            user(username);
-            if (!missing(username, releasePath, remote.name())) throw new IOException("Metadata appeared during approval; not overwritten");
-            if (!SrrdbUploadSelection.eligible(destination)) {
-                throw new IOException("Recovery destination became unavailable, FULL or busy: " + destination.getName());
-            }
-            file = parent.createFile(user, path.substring(path.lastIndexOf('/') + 1), destination);
-            try (SSLSocket socket = (SSLSocket) GlobalContext.getGlobalContext().getSSLContext().getSocketFactory().createSocket()) {
-                activeSocket = socket;
-                var timeout = deadlines.schedule(() -> closeSocket(socket), 60, TimeUnit.SECONDS);
-                try {
-                    socket.setUseClientMode(true);
-                    socket.setSoTimeout(20000);
-                    socket.connect(transfer.getAddress(), 10000);
-                    if (destination.usePersistentInodeIdentity()) {
-                        transfer.receiveFile(path, 'I', 0, "*@*", 0, 0, 0,
-                                user.getName(), user.getGroup().getName(), parent.getUsername(), parent.getGroup());
-                    } else {
-                        transfer.receiveFile(path, 'I', 0, "*@*", 0, 0);
-                    }
-                    socket.startHandshake();
-                    socket.getOutputStream().write(content);
-                    socket.getOutputStream().flush();
-                } finally { timeout.cancel(false); }
-            } finally { activeSocket = null; }
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
-            while (!transfer.getTransferStatus().isFinished()) {
-                if (closed || Thread.currentThread().isInterrupted() || System.nanoTime() > deadline) {
-                    throw new IOException("Recovery upload interrupted or timed out");
-                }
-                Thread.sleep(50);
-            }
-            if (transfer.getTransfered() != content.length) throw new IOException("Incomplete recovery upload");
-            // Only checksum the small metadata file after the receiving transfer finished.
-            long crc = destination.getCheckSumForPath(path);
-            if (crc != Long.parseUnsignedLong(remote.crc(), 16)) throw new IOException("Slave checksum differs from approved metadata");
-            file.setSize(content.length);
-            file.setCheckSum(crc);
-            file.setXfertime(transfer.getElapsed());
-            file.requestRefresh(false);
-            parent.requestRefresh(false);
-            completed = true;
-            // Existing missing-NFO/SFV and incomplete-link listeners use this successful upload event.
-            GlobalContext.getEventService().publishAsync(new TransferEvent(new ImportSession(user), "STOR", file,
-                    InetAddress.getLoopbackAddress(), destination, transfer.getAddress().getAddress(), 'I'));
-            return destination.getName();
-        } finally {
-            if (!completed && transfer != null) transfer.abort("srrDB metadata import failed");
-            activeTransfer = null;
-            if (!completed && file != null) {
-                logger.warn("srrDB import did not complete: {}. Inspect the reserved file before retrying; no existing physical file is deleted automatically", path);
-            }
-        }
+        return uploads.install(username, path, remote, content, GlobalContext.getConfig().getMainProperties());
     }
 
-    private static void closeSocket(SSLSocket socket) {
-        try { socket.close(); } catch (IOException ignored) { }
-    }
     @Override public void close() {
         closed = true;
-        SSLSocket socket = activeSocket;
-        if (socket != null) closeSocket(socket);
-        RemoteTransfer transfer = activeTransfer;
-        if (transfer != null) transfer.abort("WebAdmin stopping");
-        deadlines.shutdownNow();
-    }
-
-    private static final class ImportSession extends BaseFtpConnection {
-        private final User user;
-        ImportSession(User user) { this.user = user; }
-        @Override public User getUserNull() { return user; }
-        @Override public boolean isSecure() { return true; }
-        @Override public InetAddress getClientAddress() { return InetAddress.getLoopbackAddress(); }
+        uploads.close();
     }
 }
