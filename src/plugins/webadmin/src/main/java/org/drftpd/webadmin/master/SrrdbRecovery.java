@@ -289,12 +289,18 @@ final class SrrdbRecovery implements AutoCloseable {
 
     private void install(Entry entry, String username) {
         try {
-            synchronized (this) { entry.state = "downloading"; save(); }
+            synchronized (this) { entry.state = "downloading"; entry.message = "Downloading approved metadata from srrDB"; save(); }
             if (closed || (!entry.replacement && !library.missing(username, entry.releasePath, entry.file)))
-                throw new IOException("Target unavailable or no longer missing; nothing was overwritten");
+                throw new IOException("Target unavailable or no longer missing; inspect any stale zero-byte file through FTP before retrying. Nothing was overwritten");
             SrrdbClient.RemoteFile file = new SrrdbClient.RemoteFile(entry.file, entry.size, entry.crc);
             byte[] content = client.download(releaseName(entry.releasePath), file);
             if (closed || Thread.currentThread().isInterrupted()) throw new IOException("Recovery cancelled");
+            logger.info("srrDB download verified: path={}/{} size={} crc={}", entry.releasePath, entry.file, content.length, entry.crc);
+            synchronized (this) {
+                entry.state = "uploading";
+                entry.message = entry.replacement ? "Validating approved replacement" : "Uploading through master FTPS";
+                save();
+            }
             String slave = entry.replacement
                     ? library.replace(username, entry.releasePath, file, content, entry.original, entry.id)
                     : library.install(username, entry.releasePath, file, content);
@@ -333,7 +339,7 @@ final class SrrdbRecovery implements AutoCloseable {
                 if (entry.replacement && (entry.original == null || entry.original.crc() == null
                         || !entry.original.crc().matches("(?i)[0-9a-f]{8}")))
                     throw new IOException("Invalid replacement approval snapshot");
-                if (entry.state.equals("queued") || entry.state.equals("downloading")) {
+                if (entry.state.equals("queued") || entry.state.equals("downloading") || entry.state.equals("uploading")) {
                     entry.state = "failed";
                     entry.message = "Interrupted by restart. Check the destination before approving again.";
                 }
