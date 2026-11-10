@@ -35,6 +35,10 @@ final class SrrdbFtpUpload implements AutoCloseable {
         private volatile boolean cancelled;
         Client(SSLContext context) { super(false, context); }
         @Override protected void _parsePassiveModeReply(String reply) throws org.apache.commons.net.MalformedServerReplyException {
+            // Commons Net supplies the first line, but DrFTPD puts the endpoint on the final 227 line.
+            for (String line : getReplyStrings()) {
+                if (line.startsWith("227 ")) reply = line;
+            }
             super._parsePassiveModeReply(reply);
             logger.info("srrDB FTPS passive data endpoint: host={} port={}", getPassiveHost(), getPassivePort());
         }
