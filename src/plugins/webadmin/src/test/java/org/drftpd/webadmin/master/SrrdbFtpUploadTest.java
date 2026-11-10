@@ -11,6 +11,37 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class SrrdbFtpUploadTest {
+    private SrrdbFtpUpload.Client passiveClient(String... replies) throws Exception {
+        var client = spy(new SrrdbFtpUpload.Client(javax.net.ssl.SSLContext.getDefault()));
+        client.setIpAddressFromPasvResponse(true);
+        client.setPassiveNatWorkaroundStrategy(null);
+        doReturn(replies).when(client).getReplyStrings();
+        return client;
+    }
+
+    @Test void parsesDrftpdMultilinePassiveReplyInsteadOfSlaveComment() throws Exception {
+        var client = passiveClient("227- Using EvoI for upcoming transfer",
+                "227 Entering Passive Mode (192,0,2,10,195,80).");
+        client._parsePassiveModeReply("227- Using EvoI for upcoming transfer");
+        assertEquals("192.0.2.10", client.getPassiveHost());
+        assertEquals(50000, client.getPassivePort());
+    }
+
+    @Test void preservesSingleLinePassiveReplySupport() throws Exception {
+        String reply = "227 Entering Passive Mode (192,0,2,11,195,81).";
+        var client = passiveClient(reply);
+        client._parsePassiveModeReply(reply);
+        assertEquals("192.0.2.11", client.getPassiveHost());
+        assertEquals(50001, client.getPassivePort());
+    }
+
+    @Test void rejectsMalformedFinalPassiveReplyEvenIfCommentContainsAnEndpoint() throws Exception {
+        String comment = "227- Using slave (192,0,2,12,195,82) for upcoming transfer";
+        var client = passiveClient(comment, "227 No passive endpoint available");
+        assertThrows(org.apache.commons.net.MalformedServerReplyException.class,
+                () -> client._parsePassiveModeReply(comment));
+    }
+
     private final byte[] content = SrrdbClientTest.bytes("approved metadata");
     private final SrrdbClient.RemoteFile remote = SrrdbClientTest.file("release.nfo", content);
 

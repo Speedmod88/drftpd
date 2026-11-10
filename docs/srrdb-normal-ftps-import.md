@@ -41,6 +41,12 @@ address and port. Changing the upload workflow cannot repair firewall, NAT
 loopback or port-forwarding failures. The actual passive endpoint is logged and
 included in stage-specific failures.
 
+DrFTPD can send multiline PASV replies: a `227- Using <slave>` comment followed
+by the terminating `227 Entering Passive Mode (...)` address line. The recovery
+client selects that terminating line before invoking Commons Net's passive
+address parser; the comment is not an endpoint. Single-line replies remain
+supported, and a malformed terminating line is still rejected.
+
 ## Credentials and restart
 
 Successful WebAdmin login keeps a separate in-memory credential copy, associated
