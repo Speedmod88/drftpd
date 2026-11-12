@@ -27,8 +27,11 @@ srrdb.ftp.user=
 srrdb.ftp.pasword=
 ```
 
-Blank/zero retains automatic local selection. Configured hosts must resolve to a
-local IPv4 address of the master; external control endpoints are not supported.
+Blank/zero retains automatic local selection. A manually configured host may be
+any hostname resolving to IPv4, or an IPv4 literal, with a custom port. Only that
+configured host is resolved for the control connection; no secondary server is
+selected automatically. Configure only your trusted FTP endpoint: it receives
+the dedicated recovery credentials. WebAdmin passwords are never used for FTP.
 There is no deployment-specific hostname or port in the code. The client uses
 the master's existing SSL context and TLS trust policy. PASV and PROT P remain
 enabled; changing the control host does not relay file data through the master.

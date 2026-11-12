@@ -122,21 +122,25 @@ class SrrdbFtpUploadTest {
         }
         verify(corrupt, never()).deleteFile(anyString());
     }
-    @Test void endpointDefaultsToActualMasterPortAndRejectsExternalHosts() throws Exception {
+    @Test void endpointDefaultsToActualMasterPortAndAllowsExplicitExternalIp() throws Exception {
         Properties master = new Properties();
         master.setProperty("master.ip", "0.0.0.0"); master.setProperty("master.port", "2021");
         var endpoint = SrrdbFtpUpload.endpoint(new WebAdminSettings(new Properties()), master);
         assertTrue(endpoint.getAddress().isLoopbackAddress());
         assertEquals(2021, endpoint.getPort());
         Properties config = new Properties(); config.setProperty("srrdb.ftp.host", "192.0.2.45");
-        assertThrows(IOException.class, () -> SrrdbFtpUpload.endpoint(new WebAdminSettings(config), master));
+        var external = SrrdbFtpUpload.endpoint(new WebAdminSettings(config), master);
+        assertEquals("192.0.2.45", external.getAddress().getHostAddress());
+        assertEquals(2021, external.getPort());
+        master.setProperty("master.ip", "192.0.2.45");
+        assertThrows(IOException.class, () -> SrrdbFtpUpload.endpoint(new WebAdminSettings(new Properties()), master));
     }
 
-    @Test void configuredHostnameMustResolveLocallyAndUsesRequestedPort() throws Exception {
+    @Test void explicitHostnameMayResolveExternallyAndUsesRequestedPort() throws Exception {
         Properties config = new Properties();
         config.setProperty("srrdb.ftp.host", "ftp.example.invalid");
         config.setProperty("srrdb.ftp.port", "2022");
-        InetAddress address = InetAddress.getByName("127.0.0.1");
+        InetAddress address = InetAddress.getByName("192.0.2.45");
         SrrdbFtpUpload.Hosts resolver = host -> {
             assertEquals("ftp.example.invalid", host);
             return new InetAddress[]{address};
@@ -145,7 +149,25 @@ class SrrdbFtpUploadTest {
         assertEquals(address, endpoint.getAddress());
         assertEquals(2022, endpoint.getPort());
         assertThrows(IOException.class, () -> SrrdbFtpUpload.endpoint(new WebAdminSettings(config), new Properties(),
-                host -> new InetAddress[]{InetAddress.getByName("192.0.2.45")}));
+                host -> new InetAddress[]{InetAddress.getByName("2001:db8::1")}));
+    }
+
+    @Test void externalEndpointUsesOnlyDedicatedCredentialsAndProtectedPassiveUpload() throws Exception {
+        FTPSClient ftp = connected();
+        Properties config = new Properties();
+        config.setProperty("srrdb.ftp.host", "192.0.2.45");
+        config.setProperty("srrdb.ftp.port", "2022");
+        config.setProperty("srrdb.ftp.user", "recovery");
+        config.setProperty("srrdb.ftp.pasword", "password");
+        try (var uploader = new SrrdbFtpUpload(new WebAdminSettings(config), () -> ftp)) {
+            uploader.install("evo", "/SECTION/Release-GRP/release.nfo", remote, content, new Properties());
+        }
+        verify(ftp).connect(InetAddress.getByName("192.0.2.45"), 2022);
+        verify(ftp).login("recovery", "password");
+        verify(ftp, never()).login(eq("evo"), anyString());
+        verify(ftp).enterLocalPassiveMode();
+        verify(ftp).execPROT("P");
+        verify(ftp).storeFile(eq("release.nfo"), any(InputStream.class));
     }
 
     @Test void missingDedicatedLoginFailsBeforeConnectingAndFilesWithSpacesUseVerifiedFtpRetr() throws Exception {
