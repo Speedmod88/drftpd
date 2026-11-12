@@ -59,15 +59,17 @@ final class SrrdbFtpUpload implements AutoCloseable {
 
     static InetSocketAddress endpoint(WebAdminSettings settings, Properties master, Hosts hosts) throws IOException {
         String host = settings.srrdbFtpHost;
+        boolean explicitHost = !host.isEmpty();
         if (host.isEmpty()) host = master.getProperty("master.ip", "").trim();
         if (host.isEmpty() || host.equals("0.0.0.0") || host.equals("::")) host = "127.0.0.1";
         InetAddress chosen = null;
         for (InetAddress address : hosts.resolve(host)) {
-            if (address instanceof Inet4Address && (address.isLoopbackAddress() || NetworkInterface.getByInetAddress(address) != null)) {
+            if (address instanceof Inet4Address && (explicitHost || address.isLoopbackAddress() || NetworkInterface.getByInetAddress(address) != null)) {
                 chosen = address; break;
             }
         }
-        if (chosen == null) throw new IOException("Recovery FTPS host must resolve to a local IPv4 address of this master");
+        if (chosen == null) throw new IOException(explicitHost ? "Configured recovery FTPS host has no IPv4 address"
+                : "Automatic recovery FTPS host must resolve to a local IPv4 address of this master");
         int port = settings.srrdbFtpPort;
         if (port == 0) {
             try { port = Integer.parseInt(master.getProperty("master.port", "2121").trim()); }
