@@ -17,6 +17,7 @@ import java.util.function.Supplier;
 final class SrrdbFtpUpload implements AutoCloseable {
     private static final Logger logger = LogManager.getLogger("org.drftpd.webadmin.srrdb");
     interface Logins { RecoveryCredentials.Login get(String username) throws IOException; }
+    interface Hosts { InetAddress[] resolve(String host) throws UnknownHostException; }
     private final WebAdminSettings settings;
     private final Logins logins;
     private final Supplier<FTPSClient> clients;
@@ -55,16 +56,21 @@ final class SrrdbFtpUpload implements AutoCloseable {
     }
 
     static InetSocketAddress endpoint(WebAdminSettings settings, Properties master) throws IOException {
+        return endpoint(settings, master, InetAddress::getAllByName);
+    }
+
+    static InetSocketAddress endpoint(WebAdminSettings settings, Properties master, Hosts hosts) throws IOException {
         String host = settings.srrdbFtpHost;
+        boolean approvedPublicHost = "ftp.example.invalid".equalsIgnoreCase(host);
         if (host.isEmpty()) host = master.getProperty("master.ip", "").trim();
         if (host.isEmpty() || host.equals("0.0.0.0") || host.equals("::")) host = "127.0.0.1";
         InetAddress chosen = null;
-        for (InetAddress address : InetAddress.getAllByName(host)) {
-            if (address instanceof Inet4Address && (address.isLoopbackAddress() || NetworkInterface.getByInetAddress(address) != null)) {
+        for (InetAddress address : hosts.resolve(host)) {
+            if (address instanceof Inet4Address && (approvedPublicHost || address.isLoopbackAddress() || NetworkInterface.getByInetAddress(address) != null)) {
                 chosen = address; break;
             }
         }
-        if (chosen == null) throw new IOException("Recovery FTPS host must be a local IPv4 address of this master");
+        if (chosen == null) throw new IOException("Recovery FTPS host must be local or explicitly configured as ftp.example.invalid");
         int port = settings.srrdbFtpPort;
         if (port == 0) {
             try { port = Integer.parseInt(master.getProperty("master.port", "2121").trim()); }
