@@ -48,7 +48,7 @@ class SrrdbFtpUploadTest {
     private FTPSClient connected() throws Exception {
         FTPSClient ftp = mock(FTPSClient.class);
         when(ftp.getReplyCode()).thenReturn(220);
-        when(ftp.login("evo", "password")).thenReturn(true);
+        when(ftp.login("recovery", "password")).thenReturn(true);
         when(ftp.setFileType(FTP.BINARY_FILE_TYPE)).thenReturn(true);
         when(ftp.changeWorkingDirectory("/SECTION/Release-GRP")).thenReturn(true);
         when(ftp.sendCommand("PRET", "STOR release.nfo")).thenReturn(200);
@@ -61,8 +61,10 @@ class SrrdbFtpUploadTest {
         return ftp;
     }
     private SrrdbFtpUpload uploader(FTPSClient ftp) {
-        return new SrrdbFtpUpload(new WebAdminSettings(new Properties()),
-                user -> new RecoveryCredentials.Login(user, "password".toCharArray()), () -> ftp);
+        Properties config = new Properties();
+        config.setProperty("srrdb.ftp.user", "recovery");
+        config.setProperty("srrdb.ftp.pasword", "password");
+        return new SrrdbFtpUpload(new WebAdminSettings(config), () -> ftp);
     }
     @Test void usesNormalProtectedFtpCommandsAndDistributedPassiveAddress() throws Exception {
         FTPSClient ftp = connected();
@@ -75,7 +77,8 @@ class SrrdbFtpUploadTest {
         verify(ftp).setRemoteVerificationEnabled(false);
         var order = inOrder(ftp);
         order.verify(ftp).connect(InetAddress.getByName("127.0.0.1"), 2121);
-        order.verify(ftp).login("evo", "password");
+        order.verify(ftp).login("recovery", "password");
+        verify(ftp, never()).login(eq("evo"), anyString());
         order.verify(ftp).execPBSZ(0);
         order.verify(ftp).execPROT("P");
         order.verify(ftp).setFileType(FTP.BINARY_FILE_TYPE);
@@ -129,34 +132,25 @@ class SrrdbFtpUploadTest {
         assertThrows(IOException.class, () -> SrrdbFtpUpload.endpoint(new WebAdminSettings(config), master));
     }
 
-    @Test void explicitlyConfiguredArchivesxHostnameUsesRequestedPort() throws Exception {
+    @Test void configuredHostnameMustResolveLocallyAndUsesRequestedPort() throws Exception {
         Properties config = new Properties();
         config.setProperty("srrdb.ftp.host", "ftp.example.invalid");
-        config.setProperty("srrdb.ftp.port", "2133");
-        InetAddress address = InetAddress.getByName("192.0.2.45");
+        config.setProperty("srrdb.ftp.port", "2022");
+        InetAddress address = InetAddress.getByName("127.0.0.1");
         SrrdbFtpUpload.Hosts resolver = host -> {
             assertEquals("ftp.example.invalid", host);
             return new InetAddress[]{address};
         };
         var endpoint = SrrdbFtpUpload.endpoint(new WebAdminSettings(config), new Properties(), resolver);
         assertEquals(address, endpoint.getAddress());
-        assertEquals(2133, endpoint.getPort());
-        config.setProperty("srrdb.ftp.host", "ftp.example.invalid");
-        assertEquals(address, SrrdbFtpUpload.endpoint(new WebAdminSettings(config), new Properties(),
-                host -> new InetAddress[]{address}).getAddress());
-        config.setProperty("srrdb.ftp.host", "ftp.example.invalid.attacker.invalid");
+        assertEquals(2022, endpoint.getPort());
         assertThrows(IOException.class, () -> SrrdbFtpUpload.endpoint(new WebAdminSettings(config), new Properties(),
-                host -> new InetAddress[]{address}));
-        Properties master = new Properties();
-        master.setProperty("master.ip", "ftp.example.invalid");
-        assertThrows(IOException.class, () -> SrrdbFtpUpload.endpoint(new WebAdminSettings(new Properties()), master,
-                host -> new InetAddress[]{address}));
+                host -> new InetAddress[]{InetAddress.getByName("192.0.2.45")}));
     }
 
-    @Test void expiredWebLoginFailsBeforeConnectingAndFilesWithSpacesUseVerifiedFtpRetr() throws Exception {
+    @Test void missingDedicatedLoginFailsBeforeConnectingAndFilesWithSpacesUseVerifiedFtpRetr() throws Exception {
         FTPSClient ftp = connected();
-        try (var uploader = new SrrdbFtpUpload(new WebAdminSettings(new Properties()),
-                user -> { throw new IOException("Sign in again"); }, () -> ftp)) {
+        try (var uploader = new SrrdbFtpUpload(new WebAdminSettings(new Properties()), () -> ftp)) {
             assertThrows(IOException.class, () -> uploader.install("evo", "/SECTION/Release-GRP/release.nfo", remote, content, new Properties()));
             verify(ftp, never()).connect(any(InetAddress.class), anyInt());
         }
@@ -174,5 +168,17 @@ class SrrdbFtpUploadTest {
         }
         verify(spaced, never()).sendCommand("XCRC", "release notes.nfo");
         verify(spaced).retrieveFile(eq("release notes.nfo"), any(OutputStream.class));
+    }
+
+    @Test void ftpRefusalDoesNotEchoConfiguredPassword() throws Exception {
+        FTPSClient ftp = connected();
+        when(ftp.login("recovery", "password")).thenReturn(false);
+        when(ftp.getReplyString()).thenReturn("530 Rejected password");
+        try (var uploader = uploader(ftp)) {
+            var error = assertThrows(IOException.class, () -> uploader.install("evo",
+                    "/SECTION/Release-GRP/release.nfo", remote, content, new Properties()));
+            assertFalse(error.getMessage().contains("password"));
+            assertTrue(error.getMessage().contains("[REDACTED]"));
+        }
     }
 }
