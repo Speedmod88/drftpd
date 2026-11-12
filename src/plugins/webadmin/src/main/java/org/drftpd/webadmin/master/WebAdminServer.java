@@ -96,7 +96,6 @@ final class WebAdminServer {
     private final SecureRandom random = new SecureRandom();
     private final Map<String, LoginAttempt> loginAttempts = new ConcurrentHashMap<>();
     private final Map<String, WebSessionToken> sessions = new ConcurrentHashMap<>();
-    private final RecoveryCredentials recoveryCredentials = new RecoveryCredentials();
     private final Map<String, CommandJob> jobs = new ConcurrentHashMap<>();
     private final WebJobHistory history;
     private final java.util.concurrent.ScheduledExecutorService historyWriter =
@@ -176,7 +175,6 @@ final class WebAdminServer {
         dupeExecutor.shutdownNow();
         logArchives.close();
         sessions.clear();
-        recoveryCredentials.close();
         checkpointHistory();
         historyWriter.shutdown();
         logger.info("HTTPS web administration server stopped");
@@ -300,18 +298,13 @@ final class WebAdminServer {
         }
 
         attempt.success();
-        sessions.entrySet().removeIf(entry -> {
-            if (!entry.getValue().expired()) return false;
-            recoveryCredentials.forget(entry.getKey());
-            return true;
-        });
+        sessions.values().removeIf(WebSessionToken::expired);
         if (sessions.size() >= 1000) throw new ApiException(503, "Too many active sessions");
         String previousSession = cookie(exchange, SESSION_COOKIE);
         if (previousSession != null) removeSession(previousSession);
         WebSessionToken session = new WebSessionToken(randomToken(), randomToken(), user.getName(),
                 settings.sessionTimeoutMinutes);
         sessions.put(session.id, session);
-        recoveryCredentials.remember(session.id, session.username, payload.password, session.expires);
         exchange.getResponseHeaders().add("Set-Cookie", SESSION_COOKIE + "=" + session.id
                 + "; Path=/; Max-Age=" + settings.sessionTimeoutMinutes * 60
                 + "; Secure; HttpOnly; SameSite=Strict");
@@ -366,7 +359,6 @@ final class WebAdminServer {
 
     private void removeSession(String id) {
         sessions.remove(id);
-        recoveryCredentials.forget(id);
     }
 
     private void session(HttpExchange exchange, WebSessionToken session) throws IOException {
@@ -384,7 +376,7 @@ final class WebAdminServer {
         if (recovery == null) {
             recovery = new SrrdbRecovery(settings.srrdbState, settings.srrdbScanLimit,
                     new SrrdbClient(settings.srrdbMaximumBytes), new SrrdbLibrary(new SrrdbFtpUpload(settings,
-                            recoveryCredentials::forUser, () -> new SrrdbFtpUpload.Client(GlobalContext.getGlobalContext().getSSLContext()))));
+                            () -> new SrrdbFtpUpload.Client(GlobalContext.getGlobalContext().getSSLContext()))));
             recovery.setHistorySink(history::save);
         }
         return recovery;
@@ -1242,7 +1234,6 @@ final class WebAdminServer {
     }
 
     private void checkpointHistory() {
-        recoveryCredentials.purge();
         try {
             for (CommandJob job : jobs.values()) persistJob(job);
             SrrdbRecovery current = recovery;

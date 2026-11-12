@@ -16,10 +16,8 @@ import java.util.function.Supplier;
 /** Missing metadata is uploaded by a normal, authenticated FTP session. */
 final class SrrdbFtpUpload implements AutoCloseable {
     private static final Logger logger = LogManager.getLogger("org.drftpd.webadmin.srrdb");
-    interface Logins { RecoveryCredentials.Login get(String username) throws IOException; }
     interface Hosts { InetAddress[] resolve(String host) throws UnknownHostException; }
     private final WebAdminSettings settings;
-    private final Logins logins;
     private final Supplier<FTPSClient> clients;
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(task -> {
         Thread thread = new Thread(task, "srrDB-FTPS-deadline"); thread.setDaemon(true); return thread;
@@ -27,8 +25,8 @@ final class SrrdbFtpUpload implements AutoCloseable {
     private volatile FTPSClient active;
     private volatile boolean closed;
 
-    SrrdbFtpUpload(WebAdminSettings settings, Logins logins, Supplier<FTPSClient> clients) {
-        this.settings = settings; this.logins = logins; this.clients = clients;
+    SrrdbFtpUpload(WebAdminSettings settings, Supplier<FTPSClient> clients) {
+        this.settings = settings; this.clients = clients;
     }
 
     static final class Client extends FTPSClient {
@@ -61,16 +59,15 @@ final class SrrdbFtpUpload implements AutoCloseable {
 
     static InetSocketAddress endpoint(WebAdminSettings settings, Properties master, Hosts hosts) throws IOException {
         String host = settings.srrdbFtpHost;
-        boolean approvedPublicHost = "ftp.example.invalid".equalsIgnoreCase(host);
         if (host.isEmpty()) host = master.getProperty("master.ip", "").trim();
         if (host.isEmpty() || host.equals("0.0.0.0") || host.equals("::")) host = "127.0.0.1";
         InetAddress chosen = null;
         for (InetAddress address : hosts.resolve(host)) {
-            if (address instanceof Inet4Address && (approvedPublicHost || address.isLoopbackAddress() || NetworkInterface.getByInetAddress(address) != null)) {
+            if (address instanceof Inet4Address && (address.isLoopbackAddress() || NetworkInterface.getByInetAddress(address) != null)) {
                 chosen = address; break;
             }
         }
-        if (chosen == null) throw new IOException("Recovery FTPS host must be local or explicitly configured as ftp.example.invalid");
+        if (chosen == null) throw new IOException("Recovery FTPS host must resolve to a local IPv4 address of this master");
         int port = settings.srrdbFtpPort;
         if (port == 0) {
             try { port = Integer.parseInt(master.getProperty("master.port", "2121").trim()); }
@@ -83,14 +80,16 @@ final class SrrdbFtpUpload implements AutoCloseable {
     String install(String username, String path, SrrdbClient.RemoteFile remote, byte[] bytes, Properties master) throws Exception {
         SrrdbClient.verify(remote, bytes);
         if (closed) throw new IOException("FTPS recovery is stopped");
+        if (settings.srrdbFtpUser.isEmpty() || settings.srrdbFtpPassword.isEmpty())
+            throw new IOException("Configure the dedicated srrdb.ftp.user and srrdb.ftp.pasword in webadmin.conf");
         InetSocketAddress endpoint = endpoint(settings, master);
         String parent = path.substring(0, path.lastIndexOf('/'));
         String name = path.substring(path.lastIndexOf('/') + 1);
-        String stage = "load WebAdmin FTP credentials";
+        String stage = "initialize dedicated FTP client";
         FTPSClient ftp = clients.get();
         active = ftp;
         var deadline = deadlines.schedule(() -> disconnect(ftp), 120, TimeUnit.SECONDS);
-        try (var login = logins.get(username)) {
+        try {
             ftp.setConnectTimeout(10000);
             ftp.setDefaultTimeout(20000);
             ftp.setDataTimeout(Duration.ofSeconds(30));
@@ -105,7 +104,7 @@ final class SrrdbFtpUpload implements AutoCloseable {
             ftp.connect(endpoint.getAddress(), endpoint.getPort());
             require(FTPReply.isPositiveCompletion(ftp.getReplyCode()), ftp, "Master FTP greeting");
             stage = "FTP login";
-            require(ftp.login(login.username, new String(login.password)), ftp, "FTP login (check IP permissions and login slots)");
+            require(ftp.login(settings.srrdbFtpUser, settings.srrdbFtpPassword), ftp, "FTP login (check IP permissions and login slots)");
             stage = "configure protected FTP transfer";
             ftp.execPBSZ(0);
             ftp.execPROT("P");
@@ -156,9 +155,10 @@ final class SrrdbFtpUpload implements AutoCloseable {
         }
     }
 
-    private static void require(boolean success, FTPSClient ftp, String command) throws IOException {
+    private void require(boolean success, FTPSClient ftp, String command) throws IOException {
         if (!success) {
             String reply = String.valueOf(ftp.getReplyString()).replaceAll("[\\r\\n]+", " ");
+            if (!settings.srrdbFtpPassword.isEmpty()) reply = reply.replace(settings.srrdbFtpPassword, "[REDACTED]");
             if (reply.length() > 400) reply = reply.substring(0, 400);
             throw new IOException(command + " refused: " + reply);
         }
