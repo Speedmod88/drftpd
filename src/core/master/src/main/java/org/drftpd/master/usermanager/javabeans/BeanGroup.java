@@ -28,7 +28,6 @@ import org.drftpd.master.usermanager.UserManager;
 import org.drftpd.master.vfs.CommitManager;
 
 import java.io.IOException;
-import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -80,9 +79,10 @@ public class BeanGroup extends AbstractGroup {
 
         Map<String, Object> params = new HashMap<>();
         params.put(JsonWriter.PRETTY_PRINT, true);
-        try (OutputStream out = new SafeFileOutputStream(_um.getGroupFile(getName()));
-             JsonWriter writer = new JsonWriter(out, params)) {
-            writer.write(this);
+        try {
+            SafeFileOutputStream.writeAtomically(_um.getGroupFile(getName()), out -> {
+                try (JsonWriter writer = new JsonWriter(out, params)) { writer.write(this); }
+            });
             logger.debug("Wrote groupfile for {}", this.getName());
         } catch (IOException | JsonIoException e) {
             throw new IOException("Unable to write " + _um.getGroupFile(getName()) + " to disk", e);

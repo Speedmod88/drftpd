@@ -17,87 +17,159 @@
  */
 package org.drftpd.master.io;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * @author mog
  * @version $Id$
  */
 public class SafeFileOutputStream extends OutputStream {
-    private final File _actualFile;
-
-    private FileOutputStream _out;
-
-    private final File _tempFile;
-
-    // failed until it works
-    private boolean failed = true;
-
-    public SafeFileOutputStream(File file) throws IOException {
-        _actualFile = file;
-
-        if (!_actualFile.getAbsoluteFile().getParentFile().canWrite()) {
-            throw new IOException("Can't write to target dir");
-        }
-
-        File dir = _actualFile.getParentFile();
-
-        if (dir == null) {
-            dir = new File(".");
-        }
-        String prefix = _actualFile.getName();
-        while (prefix.length() < 3) {
-            prefix = "x" + prefix;
-        }
-        _tempFile = File.createTempFile(prefix, null, dir);
-        _out = new FileOutputStream(_tempFile);
+    private static final Logger logger = LogManager.getLogger(SafeFileOutputStream.class);
+    private static final ConcurrentHashMap<Path, LockEntry> locks = new ConcurrentHashMap<>();
+    private static final class LockEntry {
+        final ReentrantLock lock = new ReentrantLock();
+        int users;
     }
 
-    public SafeFileOutputStream(String fileName) throws IOException {
-        this(new File(fileName));
+    @FunctionalInterface
+    public interface WriteOperation {
+        void write(OutputStream output) throws IOException;
     }
 
-    public void close() throws IOException {
-        if (_out == null) {
-            return;
-        }
-        _out.flush();
-        _out.close();
-        _out = null;
-        if (!failed) {
-            // logger.debug("Renaming " +
-            // _tempFile + " (" + _tempFile.length() + ") to " + _actualFile);
+    private final Path target;
+    private final Path temporary;
+    private final FileOutputStream output;
+    private final boolean allowEmpty;
+    private boolean written;
+    private boolean failed;
+    private boolean closed;
 
-            if (_actualFile.exists() && !_actualFile.delete()) {
-                throw new IOException("delete() failed");
-            }
+    public SafeFileOutputStream(File file) throws IOException { this(file, false); }
 
-            if (!_tempFile.exists()) {
-                throw new IOException("source doesn't exist");
-            }
-
-            if (!_tempFile.renameTo(_actualFile)) {
-                throw new IOException("renameTo(" + _tempFile + ", "
-                        + _actualFile + ") failed");
-            }
-        }
-    }
-
-    public void flush() throws IOException {
-        _out.flush();
-    }
-
-    public void write(int b) throws IOException {
+    SafeFileOutputStream(File file, boolean allowEmpty) throws IOException {
+        target = file.toPath().toAbsolutePath().normalize();
+        this.allowEmpty = allowEmpty;
+        Path created = null;
+        FileOutputStream opened;
         try {
-            _out.write(b);
-            // ensures the file gets written to
-            failed = false;
-        } catch (IOException e) {
-            failed = true;
-            throw e;
+            String prefix = target.getFileName().toString();
+            while (prefix.length() < 3) prefix = "x" + prefix;
+            created = Files.createTempFile(target.getParent(), prefix, ".tmp");
+            opened = new FileOutputStream(created.toFile());
+        } catch (IOException | RuntimeException | Error error) {
+            if (created != null) cleanup(created, error);
+            throw error;
+        }
+        temporary = created;
+        output = opened;
+    }
+
+    public SafeFileOutputStream(String fileName) throws IOException { this(new File(fileName)); }
+
+    /** A serializer closing its view must not commit before its callback succeeds. */
+    OutputStream view() {
+        return new FilterOutputStream(this) {
+            @Override public void write(byte[] bytes, int offset, int length) throws IOException {
+                out.write(bytes, offset, length);
+            }
+            @Override public void close() throws IOException { flush(); }
+        };
+    }
+
+    /** Only a successful callback may commit; live-object serialization runs without filesystem locks. */
+    public static void writeAtomically(File file, WriteOperation operation) throws IOException {
+        Objects.requireNonNull(operation);
+        try (SafeFileOutputStream stream = new SafeFileOutputStream(file, true)) {
+            try { operation.write(stream.view()); }
+            catch (IOException | RuntimeException | Error error) {
+                try { stream.abort(); }
+                catch (IOException cleanupError) { error.addSuppressed(cleanupError); }
+                throw error;
+            }
+        }
+    }
+
+    private void checkOpen() throws IOException {
+        if (closed) throw new IOException("Safe writer already closed: " + target);
+        if (failed) throw new IOException("Previous write failed: " + target);
+    }
+
+    @Override public void write(int value) throws IOException {
+        checkOpen();
+        try { output.write(value); written = true; }
+        catch (IOException error) { failed = true; throw error; }
+    }
+
+    @Override public void write(byte[] bytes, int offset, int length) throws IOException {
+        Objects.checkFromIndexSize(offset, length, bytes.length);
+        checkOpen();
+        try { output.write(bytes, offset, length); written |= length > 0; }
+        catch (IOException error) { failed = true; throw error; }
+    }
+
+    @Override public void flush() throws IOException {
+        checkOpen();
+        try { output.flush(); }
+        catch (IOException error) { failed = true; throw error; }
+    }
+
+    public void abort() throws IOException { failed = true; close(); }
+
+    @Override public void close() throws IOException {
+        if (closed) return;
+        closed = true;
+        boolean retain = false;
+        try {
+            try (FileOutputStream stream = output) {
+                if (!failed) stream.flush();
+            }
+            if (failed || (!written && !allowEmpty)) {
+                Files.deleteIfExists(temporary);
+                return;
+            }
+            // Never unlink the old target or fall back to a non-atomic replacement.
+            retain = true;
+            LockEntry lease = locks.compute(target, (path, entry) -> {
+                if (entry == null) entry = new LockEntry();
+                entry.users++;
+                return entry;
+            });
+            lease.lock.lock();
+            try { Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+            finally {
+                lease.lock.unlock();
+                locks.compute(target, (path, entry) -> --entry.users == 0 ? null : entry);
+            }
+            retain = false;
+        } catch (IOException | RuntimeException | Error error) {
+            if (retain) {
+                logger.error("Atomic save failed: target={} recoveryTemporary={}; completed temporary file retained, no target deletion attempted",
+                        target, temporary, error);
+            } else {
+                cleanup(temporary, error);
+                logger.error("Staged save failed: target={} temporary={}; no target replacement attempted", target, temporary, error);
+            }
+            throw error;
+        }
+    }
+
+    private static void cleanup(Path path, Throwable error) {
+        try { Files.deleteIfExists(path); }
+        catch (IOException | RuntimeException cleanupError) {
+            error.addSuppressed(cleanupError);
+            logger.error("Unable to clean failed temporary save: {}", path, cleanupError);
         }
     }
 }
