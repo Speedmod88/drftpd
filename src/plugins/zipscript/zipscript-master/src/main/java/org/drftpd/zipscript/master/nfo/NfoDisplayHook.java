@@ -27,7 +27,7 @@ public final class NfoDisplayHook {
             for (FileHandle file : files) {
                 if (!file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".nfo") || file.isHidden(user) || file.isLink()
                         || !GlobalContext.getConfig().getVFSPermissions().checkPathPermission("download", user, file)) continue;
-                List<String> lines = display.lines(file);
+                List<String> lines = display.linesForCwd(file);
                 // Recheck after reading the cache so a new upload or deletion cannot reveal stale completion.
                 if (!lines.isEmpty() && CachedCompletion.release(directory) == CachedCompletion.Status.COMPLETE) {
                     response.addComment("NFO: " + file.getName());

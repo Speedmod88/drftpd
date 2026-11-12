@@ -1,4 +1,4 @@
-# Display a cached NFO as 250- comments after entering a confirmed complete release.
+# Display a stored/cached NFO as 250- comments after entering a confirmed complete release.
 # Incomplete and UNKNOWN releases never display NFO text.
 enabled=true
 
@@ -6,3 +6,17 @@ enabled=true
 max.lines=200
 cache.entries=256
 cache.minutes=60
+
+# Persistent master-only store. NFO text is gzip-compressed; no FTP-visible files.
+store.enabled=true
+store.path=userdata/nfo-display
+
+# Maximum first-entry wait for a cache/store miss; 0 keeps fully asynchronous CWD.
+# A slow/offline slave never holds CWD beyond this deadline (allowed: 0..2000).
+cwd.wait.millis=500
+
+# Gradually discover NFOs through the index, not a recursive VFS/slave scan.
+# Background reads skip transferring/remerging slaves; each file is at most 64 KiB.
+prefetch.enabled=true
+prefetch.batch=8
+prefetch.interval.seconds=2
