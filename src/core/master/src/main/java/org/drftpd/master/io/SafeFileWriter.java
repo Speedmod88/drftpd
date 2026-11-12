@@ -17,8 +17,6 @@
  */
 package org.drftpd.master.io;
 
-import org.apache.logging.log4j.LogManager;
-
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 
@@ -27,29 +25,14 @@ import java.nio.charset.StandardCharsets;
  * @version $Id$
  */
 public class SafeFileWriter extends Writer {
-    private final File _actualFile;
-
-    private final OutputStreamWriter _out;
-
-    private final File _tempFile;
-
+    private final SafeFileOutputStream output;
+    private final OutputStreamWriter writer;
     private boolean failed = false;
+    private boolean closed;
 
     public SafeFileWriter(File file) throws IOException {
-        _actualFile = file;
-
-        if (!_actualFile.getAbsoluteFile().getParentFile().canWrite()) {
-            throw new IOException("Can't write to target dir");
-        }
-
-        File dir = _actualFile.getParentFile();
-
-        if (dir == null) {
-            dir = new File(".");
-        }
-
-        _tempFile = File.createTempFile(_actualFile.getName(), null, dir);
-        _out = new OutputStreamWriter(new FileOutputStream(_tempFile), StandardCharsets.UTF_8);
+        output = new SafeFileOutputStream(file, true);
+        writer = new OutputStreamWriter(output.view(), StandardCharsets.UTF_8);
     }
 
     /**
@@ -60,34 +43,26 @@ public class SafeFileWriter extends Writer {
     }
 
     public void close() throws IOException {
-        _out.flush();
-        _out.close();
-
-        if (!failed) {
-            LogManager.getLogger(SafeFileWriter.class).debug("Renaming {} ({}) to {}", _tempFile, _tempFile.length(), _actualFile);
-
-            if (_actualFile.exists() && !_actualFile.delete()) {
-                throw new IOException("delete() failed");
-            }
-
-            if (!_tempFile.exists()) {
-                throw new IOException("source doesn't exist");
-            }
-
-            if (!_tempFile.renameTo(_actualFile)) {
-                throw new IOException("renameTo(" + _tempFile + ", "
-                        + _actualFile + ") failed");
-            }
+        if (closed) return;
+        closed = true;
+        try {
+            if (failed) output.abort();
+            else { writer.close(); output.close(); }
+        } catch (IOException | RuntimeException | Error error) {
+            try { output.abort(); }
+            catch (IOException cleanupError) { error.addSuppressed(cleanupError); }
+            throw error;
         }
     }
 
     public void flush() throws IOException {
-        _out.flush();
+        try { writer.flush(); }
+        catch (IOException error) { failed = true; throw error; }
     }
 
     public void write(char[] cbuf, int off, int len) throws IOException {
         try {
-            _out.write(cbuf, off, len);
+            writer.write(cbuf, off, len);
         } catch (IOException e) {
             failed = true;
             throw e;

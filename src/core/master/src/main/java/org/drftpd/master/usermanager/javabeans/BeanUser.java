@@ -28,7 +28,6 @@ import org.drftpd.master.usermanager.UserManager;
 import org.drftpd.master.vfs.CommitManager;
 
 import java.io.IOException;
-import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -94,9 +93,10 @@ public class BeanUser extends AbstractUser {
 
         Map<String, Object> params = new HashMap<>();
         params.put(JsonWriter.PRETTY_PRINT, true);
-        try (OutputStream out = new SafeFileOutputStream(_um.getUserFile(getName()));
-             JsonWriter writer = new JsonWriter(out, params)) {
-            writer.write(this);
+        try {
+            SafeFileOutputStream.writeAtomically(_um.getUserFile(getName()), out -> {
+                try (JsonWriter writer = new JsonWriter(out, params)) { writer.write(this); }
+            });
             logger.debug("Wrote userfile for {}", this.getName());
         } catch (IOException | JsonIoException e) {
             throw new IOException("Unable to write " + _um.getUserFile(getName()) + " to disk", e);
