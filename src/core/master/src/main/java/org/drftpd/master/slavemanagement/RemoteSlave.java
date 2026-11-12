@@ -2016,10 +2016,10 @@ public class RemoteSlave extends ExtendedTimedStats implements Runnable, Compara
     public void writeToDisk() {
         Map<String, Object> params = new HashMap<>();
         params.put(JsonWriter.PRETTY_PRINT, true);
-        try (OutputStream out = new SafeFileOutputStream(
-                getGlobalContext().getSlaveManager().getSlaveFile(this.getName()));
-             JsonWriter writer = new JsonWriter(out, params)) {
-            writer.write(this);
+        try {
+            SafeFileOutputStream.writeAtomically(getGlobalContext().getSlaveManager().getSlaveFile(this.getName()), out -> {
+                try (JsonWriter writer = new JsonWriter(out, params)) { writer.write(this); }
+            });
             logger.debug("Wrote slavefile for {}", this.getName());
         } catch (IOException | JsonIoException e) {
             throw new RuntimeException("Error writing slavefile for "
