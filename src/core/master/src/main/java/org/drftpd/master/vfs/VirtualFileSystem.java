@@ -353,9 +353,10 @@ public class VirtualFileSystem {
         }
         Map<String, Object> params = new HashMap<>();
         params.put(JsonWriter.PRETTY_PRINT, true);
-        try (OutputStream out = new SafeFileOutputStream(fullPath);
-             JsonWriter writer = new JsonWriter(out, params)) {
-            writer.write(inode);
+        try {
+            SafeFileOutputStream.writeAtomically(new File(fullPath), out -> {
+                try (JsonWriter writer = new JsonWriter(out, params)) { writer.write(inode); }
+            });
             logger.debug("Wrote fullPath {}", fullPath);
         } catch (IOException | JsonIoException e) {
             logger.error("Unable to write {} to disk", fullPath, e);

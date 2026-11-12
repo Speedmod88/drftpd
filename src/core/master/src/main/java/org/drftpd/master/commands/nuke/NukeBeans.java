@@ -244,11 +244,12 @@ public class NukeBeans {
     public void commit() throws IOException {
         Map<String, Object> params = new HashMap<>();
         params.put(JsonWriter.PRETTY_PRINT, true);
-        try (OutputStream out = new SafeFileOutputStream(_nukebeansPath + VirtualFileSystem.separator + "nukebeans.json");
-             JsonWriter writer = new JsonWriter(out, params)) {
-            writer.write(_nukes);
+        try {
+            SafeFileOutputStream.writeAtomically(new File(_nukebeansPath + VirtualFileSystem.separator + "nukebeans.json"), out -> {
+                try (JsonWriter writer = new JsonWriter(out, params)) { writer.write(_nukes); }
+            });
         } catch (IOException | JsonIoException e) {
-            throw new IOException(e.getMessage());
+            throw new IOException("Unable to save nuke data", e);
         }
     }
 
