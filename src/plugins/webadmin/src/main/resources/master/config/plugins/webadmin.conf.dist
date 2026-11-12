@@ -39,7 +39,7 @@ login.window.seconds=60
 # One background worker, at least one second between remote requests, exact release
 # names only. Missing files require Accept; mismatches require separate Replace approval.
 # Missing SFV/NFO files are uploaded through normal FTPS login/PRET/PASV/STOR/XCRC.
-# The active WebAdmin login credentials are held only in memory until logout/expiry.
+# A dedicated FTP account is required. WebAdmin login passwords are never reused.
 # Normal FTP login slots, IP permissions, upload selection and post-hooks apply.
 # Review decisions survive restarts. Interrupted imports require manual review/retry.
 # Scope scans use the index, capped per scan. Subdirectories (CD1, Subs...) must exist.
@@ -49,13 +49,16 @@ srrdb.maximum.bytes=1048576
 srrdb.state.file=userdata/webadmin/srrdb.json
 
 # Optional master FTP endpoint. Blank host uses local master.ip (or loopback when
-# bound to all interfaces); port 0 uses master.port. The explicitly requested
-# public hostname ftp.example.invalid is also allowed; other external hosts are not.
-# For that route, set srrdb.ftp.host=ftp.example.invalid and srrdb.ftp.port=2133.
-# Your WebAdmin FTP credentials are sent to this endpoint over FTPS.
+# bound to all interfaces); port 0 uses master.port. Explicit hosts must also
+# resolve to this master. External control endpoints are not supported.
 # PASV remains enabled and data still connects to the selected slave.
 srrdb.ftp.host=
 srrdb.ftp.port=0
+# Dedicated FTP account. The key "pasword" intentionally uses this spelling.
+# Restrict access to this file (for example chmod 600); never commit real secrets.
+# Reload WebAdmin/restart after editing these settings. Empty credentials refuse uploads.
+srrdb.ftp.user=
+srrdb.ftp.pasword=
 
 # Paths are relative to the master runtime directory unless absolute.
 # The editor only opens regular .conf/.conf.dist files below config.root and

@@ -46,6 +46,8 @@ final class WebAdminSettings {
     final int srrdbMaximumBytes;
     final String srrdbFtpHost;
     final int srrdbFtpPort;
+    final String srrdbFtpUser;
+    final String srrdbFtpPassword;
     final Set<String> allowedCommands;
 
     WebAdminSettings(Properties properties) {
@@ -85,6 +87,8 @@ final class WebAdminSettings {
         srrdbMaximumBytes = intValue(properties, "srrdb.maximum.bytes", 1048576, 1024, 4194304);
         srrdbFtpHost = properties.getProperty("srrdb.ftp.host", "").trim();
         srrdbFtpPort = intValue(properties, "srrdb.ftp.port", 0, 0, 65535);
+        srrdbFtpUser = properties.getProperty("srrdb.ftp.user", "").trim();
+        srrdbFtpPassword = properties.getProperty("srrdb.ftp.pasword", "");
         bindAddress = address(properties.getProperty("bind", "127.0.0.1"));
         allowedCommands = Collections.unmodifiableSet(loadAllowedCommands(properties));
     }
