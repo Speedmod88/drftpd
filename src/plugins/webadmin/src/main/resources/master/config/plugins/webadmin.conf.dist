@@ -48,8 +48,12 @@ srrdb.scan.limit=100
 srrdb.maximum.bytes=1048576
 srrdb.state.file=userdata/webadmin/srrdb.json
 
-# Optional LOCAL master FTP endpoint. Blank host uses master.ip (or loopback when
-# bound to all interfaces); port 0 uses master.port. No public/external FTP host.
+# Optional master FTP endpoint. Blank host uses local master.ip (or loopback when
+# bound to all interfaces); port 0 uses master.port. The explicitly requested
+# public hostname Archivesx.ddns.net is also allowed; other external hosts are not.
+# For that route, set srrdb.ftp.host=Archivesx.ddns.net and srrdb.ftp.port=2133.
+# Your WebAdmin FTP credentials are sent to this endpoint over FTPS.
+# PASV remains enabled and data still connects to the selected slave.
 srrdb.ftp.host=
 srrdb.ftp.port=0
 

@@ -129,6 +129,30 @@ class SrrdbFtpUploadTest {
         assertThrows(IOException.class, () -> SrrdbFtpUpload.endpoint(new WebAdminSettings(config), master));
     }
 
+    @Test void explicitlyConfiguredArchivesxHostnameUsesRequestedPort() throws Exception {
+        Properties config = new Properties();
+        config.setProperty("srrdb.ftp.host", "Archivesx.ddns.net");
+        config.setProperty("srrdb.ftp.port", "2133");
+        InetAddress address = InetAddress.getByName("192.0.2.45");
+        SrrdbFtpUpload.Hosts resolver = host -> {
+            assertEquals("Archivesx.ddns.net", host);
+            return new InetAddress[]{address};
+        };
+        var endpoint = SrrdbFtpUpload.endpoint(new WebAdminSettings(config), new Properties(), resolver);
+        assertEquals(address, endpoint.getAddress());
+        assertEquals(2133, endpoint.getPort());
+        config.setProperty("srrdb.ftp.host", "ARCHIVESX.DDNS.NET");
+        assertEquals(address, SrrdbFtpUpload.endpoint(new WebAdminSettings(config), new Properties(),
+                host -> new InetAddress[]{address}).getAddress());
+        config.setProperty("srrdb.ftp.host", "Archivesx.ddns.net.attacker.invalid");
+        assertThrows(IOException.class, () -> SrrdbFtpUpload.endpoint(new WebAdminSettings(config), new Properties(),
+                host -> new InetAddress[]{address}));
+        Properties master = new Properties();
+        master.setProperty("master.ip", "Archivesx.ddns.net");
+        assertThrows(IOException.class, () -> SrrdbFtpUpload.endpoint(new WebAdminSettings(new Properties()), master,
+                host -> new InetAddress[]{address}));
+    }
+
     @Test void expiredWebLoginFailsBeforeConnectingAndFilesWithSpacesUseVerifiedFtpRetr() throws Exception {
         FTPSClient ftp = connected();
         try (var uploader = new SrrdbFtpUpload(new WebAdminSettings(new Properties()),

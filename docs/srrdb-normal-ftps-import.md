@@ -16,7 +16,7 @@ parser tokenizes on spaces. No RAR payload is uploaded or repaired.
 
 ## Connection requirements
 
-Control login connects to a local IPv4 address of this master only. By default,
+Control login connects to a local IPv4 address of this master by default.
 it uses master.ip and master.port, with loopback when the master binds all
 interfaces. Optional webadmin.conf settings override this local endpoint:
 
@@ -25,9 +25,20 @@ srrdb.ftp.host=
 srrdb.ftp.port=0
 ```
 
-Blank/zero retains automatic selection. External FTP control hosts are refused
-to avoid sending WebAdmin login credentials to another server. The client uses
-the master's existing SSL context and TLS trust policy.
+Blank/zero retains automatic local selection. At the administrator's explicit
+request, the exact configured hostname Archivesx.ddns.net may also resolve to a
+public IPv4 address. Configure that route with:
+
+```properties
+srrdb.ftp.host=Archivesx.ddns.net
+srrdb.ftp.port=2133
+```
+
+Other external control hosts remain refused to prevent arbitrary destinations
+from receiving WebAdmin FTP credentials. The exception requires an explicit
+srrdb.ftp.host value, not just master.ip. The client uses the master's existing
+SSL context and TLS trust policy. PASV and PROT P remain enabled; changing the
+control host does not relay file data through the master.
 
 The account needs an available FTP login slot, permission to log in from the
 master's local source address, and normal CWD/upload/download/XCRC permissions.
