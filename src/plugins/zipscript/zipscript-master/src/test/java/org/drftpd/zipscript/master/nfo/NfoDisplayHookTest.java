@@ -28,7 +28,7 @@ class NfoDisplayHookTest {
                 new NfoDisplayHook().showNfo(mock(CommandRequest.class), response);
                 assertTrue(response.getComment().isEmpty());
             }
-            verify(display, never()).lines(any());
+            verify(display, never()).linesForCwd(any());
         }
     }
 
@@ -43,7 +43,7 @@ class NfoDisplayHookTest {
             FileHandle file = mock(FileHandle.class);
             when(file.getName()).thenReturn("release.nfo");
             when(dir.getFilesUnchecked()).thenReturn(java.util.Set.of(file));
-            when(display.lines(file)).thenReturn(List.of("Information", "Second line"));
+            when(display.linesForCwd(file)).thenReturn(List.of("Information", "Second line"));
             User user = mock(User.class);
             CommandRequest request = mock(CommandRequest.class);
             BaseFtpConnection conn = mock(BaseFtpConnection.class);
