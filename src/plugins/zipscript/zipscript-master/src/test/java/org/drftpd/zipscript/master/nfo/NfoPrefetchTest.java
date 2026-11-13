@@ -2,8 +2,9 @@ package org.drftpd.zipscript.master.nfo;
 
 import org.drftpd.master.GlobalContext;
 import org.drftpd.master.event.AsyncThreadSafeEventService;
-import org.drftpd.master.indexation.AdvancedSearchParams;
+import org.drftpd.master.indexation.IndexPathPage;
 import org.drftpd.master.indexation.IndexEngineInterface;
+import org.drftpd.master.slavemanagement.SlaveManager;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.slavemanagement.SlaveStatus;
 import org.drftpd.master.vfs.DirectoryHandle;
@@ -40,9 +41,13 @@ class NfoPrefetchTest {
             global.when(GlobalContext::getEventServiceSlowest).thenReturn(queue);
             var index = mock(IndexEngineInterface.class);
             when(context.getIndexEngine()).thenReturn(index);
+            var manager = mock(SlaveManager.class);
+            when(context.getSlaveManager()).thenReturn(manager);
+            when(manager.getSlaves()).thenReturn(java.util.List.of());
             DirectoryHandle root = mock(DirectoryHandle.class); when(context.getRoot()).thenReturn(root);
             String path = "/SECTION/Release-GRP/release.nfo";
-            when(index.advancedFind(eq(root), any(), eq("NFO-prefetch"))).thenReturn(Map.of(path, "file"));
+            when(index.scanFilePaths(anyString(), eq(".nfo"), eq(3), eq(2048)))
+                    .thenReturn(new IndexPathPage(java.util.List.of(path), path, false));
             RemoteSlave slave = mock(RemoteSlave.class);
             when(slave.getName()).thenReturn("test"); when(slave.isAvailable()).thenReturn(true);
             when(slave.getRenameQueue()).thenReturn(new ConcurrentLinkedDeque<>());
@@ -57,10 +62,10 @@ class NfoPrefetchTest {
                 try {
                     var maintain = NfoDisplay.class.getDeclaredMethod("maintain"); maintain.setAccessible(true);
                     maintain.invoke(display);
-                    verify(index).advancedFind(eq(root), argThat(params -> params.getLimit() == 3
-                            && params.getInodeType() == AdvancedSearchParams.InodeType.FILE
-                            && ".nfo".equals(params.getEndsWith())), eq("NFO-prefetch"));
+                    verify(index).scanFilePaths("", ".nfo", 3, 2048);
                     verify(slave, never()).sendCommand(any());
+                    maintain.invoke(display);
+                    verify(index, times(1)).scanFilePaths(anyString(), anyString(), anyInt(), anyInt());
                     when(status.getTransfers()).thenReturn(0);
                     when(slave.fetchIndex()).thenReturn("probe", "text");
                     when(slave.fetchResponseWithoutDisconnect("probe", 5000)).thenReturn(new AsyncResponseMaxPath("probe", NfoReader.CAPABILITY));
@@ -68,6 +73,12 @@ class NfoPrefetchTest {
                     var next = NfoDisplay.class.getDeclaredField("nextPrefetch"); next.setAccessible(true); next.set(display, 0L);
                     maintain.invoke(display);
                     verify(slave, times(2)).sendCommand(any());
+                    verify(index, never()).advancedFind(any(), any(), anyString());
+                    next.set(display, 0L);
+                    when(manager.getSlaves()).thenReturn(java.util.List.of(slave));
+                    when(slave.isRemerging()).thenReturn(true);
+                    maintain.invoke(display);
+                    verify(index, times(2)).scanFilePaths(anyString(), anyString(), anyInt(), anyInt());
                 } finally { display.stopPlugin("test"); }
             }
             try (var store = new NfoStore(directory)) {
@@ -85,6 +96,31 @@ class NfoPrefetchTest {
         assertThrows(IllegalArgumentException.class, () -> NfoDisplay.Storage.read(properties));
         properties.clear(); properties.setProperty("store.path", " ");
         assertThrows(IllegalArgumentException.class, () -> NfoDisplay.Storage.read(properties));
+    }
+
+    @Test void emptyBoundedPageSavesProgressWithoutEndingThePass() throws Exception {
+        try (var global = mockStatic(GlobalContext.class)) {
+            var context = mock(GlobalContext.class);
+            global.when(GlobalContext::getGlobalContext).thenReturn(context);
+            global.when(GlobalContext::getEventServiceSlowest).thenReturn(mock(AsyncThreadSafeEventService.class));
+            var manager = mock(SlaveManager.class);
+            when(context.getSlaveManager()).thenReturn(manager);
+            when(manager.getSlaves()).thenReturn(java.util.List.of());
+            var index = mock(IndexEngineInterface.class);
+            when(context.getIndexEngine()).thenReturn(index);
+            when(index.scanFilePaths("", ".nfo", 3, 2048))
+                    .thenReturn(new IndexPathPage(java.util.List.of(), "/ARCHIVES/last.rar", false));
+            var display = configured();
+            try {
+                var maintain = NfoDisplay.class.getDeclaredMethod("maintain"); maintain.setAccessible(true);
+                maintain.invoke(display);
+                var pass = NfoDisplay.class.getDeclaredField("nextPass"); pass.setAccessible(true);
+                assertEquals(0L, pass.getLong(display));
+            } finally { display.stopPlugin("test"); }
+            try (var store = new NfoStore(directory)) {
+                assertEquals("/ARCHIVES/last.rar", store.cursor("prefetch"));
+            }
+        }
     }
 
     @Test void deletionSubscriberUsesActualVfsDeletionBus() throws Exception {

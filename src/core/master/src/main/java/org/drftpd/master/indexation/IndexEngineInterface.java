@@ -33,6 +33,10 @@ import java.util.Set;
  * @version $Id$
  */
 public interface IndexEngineInterface {
+    /** Background discovery must be bounded even when no matching files exist. */
+    default IndexPathPage scanFilePaths(String after, String suffix, int limit, int budget) throws IndexException {
+        throw new IndexException("Bounded background discovery is not supported by this index engine");
+    }
     /**
      * This method should initialize the engine, making it ready to receive queries.<br>
      * Below a list of what might be done here:

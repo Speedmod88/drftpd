@@ -112,6 +112,16 @@ public class LuceneEngine implements IndexEngineInterface {
 
     private Directory _storage;
     private IndexWriter _iWriter;
+
+    @Override
+    public IndexPathPage scanFilePaths(String after, String suffix, int limit, int budget) throws IndexException {
+        // Read committed metadata: discovery must not force the live writer to flush on every batch.
+        try (IndexReader reader = IndexReader.open(_storage, true)) {
+            return IndexPathPage.read(reader, after, suffix, limit, budget);
+        } catch (IOException e) {
+            throw new IndexException("Unable to scan committed index paths", e);
+        }
+    }
     private final Sort SORT = new Sort();
 
     private int _maxHitsNumber;
