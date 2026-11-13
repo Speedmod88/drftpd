@@ -636,11 +636,11 @@ final class WebAdminServer {
                             catch (Exception e) { job.addOutput("Verification deferred: " + path + ": " + e.getMessage()); }
                             job.addOutput("Progress: " + (++done) + "/" + targets.size());
                         }
-                        job.dupeResults = org.drftpd.autofreespace.master.Dupe2Utils.reviewDuplicates(targets, 1000, true);
+                        var reviewed = org.drftpd.autofreespace.master.Dupe2Utils.reviewDuplicates(targets, 1000, true);
                         job.addOutput("Verification complete. Display limited to 1000 groups; all discovered targets were attempted.");
-                        List<org.drftpd.autofreespace.master.Dupe2Utils.ReviewResult> visible = new ArrayList<>();
-                        for (var item : job.dupeResults) {
-                            try { WebAdminDupe.directory(WebAdminDupe.user(job.username), item.path()); visible.add(item); }
+                        List<WebAdminDupe.Row> visible = new ArrayList<>();
+                        for (var item : reviewed) {
+                            try { WebAdminDupe.directory(WebAdminDupe.user(job.username), item.path()); visible.add(WebAdminDupe.row(item)); }
                             catch (IOException ignored) { }
                         }
                         job.dupeResults = visible;
@@ -1376,7 +1376,7 @@ final class WebAdminServer {
         private volatile boolean truncated;
         private volatile boolean dupeScan;
         private volatile List<org.drftpd.archive.master.archivetypes.ArchiveType.ReorganizationRow> archiveRows = List.of();
-        private volatile List<org.drftpd.autofreespace.master.Dupe2Utils.ReviewResult> dupeResults = List.of();
+        private volatile List<WebAdminDupe.Row> dupeResults = List.of();
         private volatile List<String> paths = List.of();
 
         private CommandJob(String id, String username, String command) {
