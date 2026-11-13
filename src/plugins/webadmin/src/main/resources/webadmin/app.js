@@ -123,7 +123,7 @@ async function showHistory() {
       const row = document.createElement("tr");
       const values = job.recovery
         ? [item.releasePath, item.file, item.status, item.source, JSON.stringify(item.local || {}), item.crc]
-        : item.key ? [item.key, item.status, item.score, item.path]
+        : item.key ? [item.key, item.status, Number.isInteger(item.completionPercent) ? item.completionPercent + "%" : "Unknown", item.score, item.path]
         : [item.source, item.destination, item.status];
       values.forEach(value => row.append(td(value == null ? "" : String(value))));
       rows.append(row);
@@ -738,7 +738,7 @@ function renderDupes() {
       const heading = document.createElement("tr");
       heading.className = "dupe-group";
       const label = td(item.key);
-      label.colSpan = 4;
+      label.colSpan = 5;
       heading.append(label);
       body.append(heading);
       previousKey = item.key;
@@ -764,7 +764,12 @@ function renderDupes() {
     const status = td(item.status);
     status.className = "dupe-status " + (item.status === "KEEP" ? "dupe-keep"
       : item.status === "Can delete" ? "dupe-delete" : "dupe-incomplete");
-    row.append(cell, status, td(String(item.score)), td(path));
+    const percent = Number.isInteger(item.completionPercent) && item.completionPercent >= 0 && item.completionPercent <= 100
+      ? item.completionPercent : null;
+    const completion = td(percent === null ? "Unknown" : percent + "%");
+    completion.className = "dupe-status dupe-completion " + (percent === 100 ? "dupe-keep" : "dupe-incomplete");
+    if (percent !== null) completion.title = item.completedFiles + " / " + item.totalFiles + " completed payload files";
+    row.append(cell, status, completion, td(String(item.score)), td(path));
     body.append(row);
   }
   $("#dupePage").textContent = dupeGroups().length + " groups - " + state.dupePaths.length + " results";
