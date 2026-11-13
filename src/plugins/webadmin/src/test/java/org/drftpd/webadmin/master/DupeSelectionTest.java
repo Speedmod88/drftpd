@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 class DupeSelectionTest {
     @Test void permitsExplicitReviewedSelectionsButRejectsInjectedPaths() {
-        var offered = List.of("/A/Movie.KEEP-GRP", "/B/Movie.UNKNOWN-GRP");
+        var offered = List.of("/A/Movie.KEEP-GRP", "/B/Movie.UNKNOWN-GRP", "/C/Movie.INCOMPLETE-GRP");
         assertEquals(offered, WebAdminDupe.selection(offered, offered));
         assertEquals(List.of(offered.get(0)), WebAdminDupe.selection(offered, List.of(offered.get(0), offered.get(0))));
         assertThrows(IllegalArgumentException.class, () -> WebAdminDupe.selection(offered, List.of("/other")));
