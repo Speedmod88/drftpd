@@ -99,10 +99,19 @@ final class NfoStore implements AutoCloseable {
     List<NfoDisplay.Key> page(String after, int limit) throws IOException {
         flushPending();
         refresh();
-        var hits = searcher.search(new TermRangeQuery("path", after, null, false, false), limit,
-                new Sort(new SortField("path", SortField.STRING)));
         List<NfoDisplay.Key> results = new ArrayList<>();
-        for (var hit : hits.scoreDocs) results.add(gson.fromJson(searcher.doc(hit.doc).get("identity"), NfoDisplay.Key.class));
+        TermEnum terms = reader.terms(new Term("path", after));
+        TermDocs docs = reader.termDocs();
+        try {
+            for (Term term = terms.term(); term != null && term.field().equals("path")
+                    && results.size() < limit; terms.next(), term = terms.term()) {
+                if (term.text().equals(after)) continue;
+                docs.seek(term);
+                if (docs.next()) results.add(gson.fromJson(reader.document(docs.doc()).get("identity"), NfoDisplay.Key.class));
+            }
+        } finally {
+            try { docs.close(); } finally { terms.close(); }
+        }
         return results;
     }
 

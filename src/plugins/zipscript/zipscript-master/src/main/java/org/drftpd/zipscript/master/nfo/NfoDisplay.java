@@ -11,7 +11,6 @@ import org.drftpd.master.event.MessageEvent;
 import org.drftpd.master.event.ReloadEvent;
 import org.drftpd.master.event.TransferEvent;
 import org.drftpd.master.GlobalContext;
-import org.drftpd.master.indexation.AdvancedSearchParams;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.vfs.FileHandle;
 import org.drftpd.master.vfs.event.VirtualFileSystemInodeDeletedEvent;
@@ -372,38 +371,46 @@ public final class NfoDisplay implements PluginInterface {
                 after = key.path;
             }
             store.cursor("prune", rows.isEmpty() ? "" : after);
-            nextPrune = now + (rows.isEmpty() ? 600000 : 1000);
+            nextPrune = now + (rows.isEmpty() ? 600000 : 10000);
         }
         Storage config = storage;
         if (!enabled() || !config.prefetch || now < nextPrefetch || now < nextPass
                 || GlobalContext.getEventServiceSlowest().getQueueSize() >= 5000) return;
-        nextPrefetch = now + config.interval;
-        AdvancedSearchParams params = new AdvancedSearchParams();
-        params.setAfterPath(store.cursor("prefetch")); params.setLimit(config.batch);
-        params.setInodeType(AdvancedSearchParams.InodeType.FILE); params.setEndsWith(".nfo");
         var context = GlobalContext.getGlobalContext();
-        var paths = context.getIndexEngine().advancedFind(context.getRoot(), params, "NFO-prefetch");
-        String last = null;
-        for (String path : paths.keySet()) {
-            if (closed || !worker.getQueue().isEmpty()) break;
-            last = path;
-            try {
-                FileHandle file = new FileHandle(path);
-                if (!eligible(file)) continue;
-                Key key = Key.of(file);
-                long currentRevision;
-                synchronized (this) {
-                    if (cache.containsKey(key)) continue;
-                    currentRevision = revision;
+        if (context.getSlaveManager().getSlaves().stream().anyMatch(RemoteSlave::isRemerging)) return;
+        long started = System.nanoTime();
+        try {
+            var page = context.getIndexEngine().scanFilePaths(store.cursor("prefetch"), ".nfo", config.batch, 2048);
+            String last = null;
+            boolean interrupted = false;
+            for (String path : page.paths()) {
+                if (closed || !worker.getQueue().isEmpty()) { interrupted = true; break; }
+                last = path;
+                try {
+                    FileHandle file = new FileHandle(path);
+                    if (!eligible(file)) continue;
+                    Key key = Key.of(file);
+                    long currentRevision;
+                    synchronized (this) {
+                        if (cache.containsKey(key)) continue;
+                        currentRevision = revision;
+                    }
+                    fetch(file, key, settings, currentRevision, new CompletableFuture<>(), true);
+                } catch (Exception e) {
+                    logger.debug("NFO prefetch candidate unavailable: path={} reason={}", path, e.toString());
                 }
-                fetch(file, key, settings, currentRevision, new CompletableFuture<>(), true);
-            } catch (Exception e) {
-                logger.debug("NFO prefetch candidate unavailable: path={} reason={}", path, e.toString());
             }
-        }
-        if (store != null) {
-            if (paths.isEmpty()) { store.cursor("prefetch", ""); nextPass = now + 3600000; }
-            else if (last != null) store.cursor("prefetch", last);
+            if (store != null) {
+                if (interrupted) {
+                    if (last != null) store.cursor("prefetch", last);
+                } else if (page.complete()) {
+                    store.cursor("prefetch", ""); nextPass = System.currentTimeMillis() + 3600000;
+                } else store.cursor("prefetch", page.afterPath());
+            }
+        } finally {
+            long elapsed = Math.max(1, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
+            // Allow at most roughly 10% background duty cycle; measured after work, not before it.
+            nextPrefetch = System.currentTimeMillis() + Math.max(config.interval, elapsed * 9);
         }
     }
 
