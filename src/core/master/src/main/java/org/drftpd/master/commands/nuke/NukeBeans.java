@@ -78,7 +78,7 @@ public class NukeBeans {
      *
      * @return NukeBeans.
      */
-    public static NukeBeans getNukeBeans() {
+    public static synchronized NukeBeans getNukeBeans() {
         if (_nukeBeans == null) {
             logger.debug("Instantiating NukeBeans.");
             newInstance();
@@ -91,9 +91,11 @@ public class NukeBeans {
      * Creates a new instance of NukeBeans. De-serialize the .json/xml.
      */
 
-    public static void newInstance() {
-        _nukeBeans = new NukeBeans();
-        _nukeBeans.loadLRUMap();
+    public static synchronized void newInstance() {
+        // Readers must never observe a registry whose nukelog has not finished loading.
+        NukeBeans loaded = new NukeBeans();
+        loaded.loadLRUMap();
+        _nukeBeans = loaded;
     }
 
     /**
@@ -278,7 +280,7 @@ public class NukeBeans {
         } catch (IOException e) {
             logger.error("IOException reading json nuke log file", e);
         }
-        _nukeBeans.setLRUMap(nukees);
+        setLRUMap(nukees);
     }
 
     /**
