@@ -13,6 +13,15 @@ import java.util.List;
 final class WebAdminDupe {
     private WebAdminDupe() { }
 
+    record Row(String path, String key, String status, int score, boolean eligible,
+               Integer completionPercent, long completedFiles, long totalFiles) { }
+
+    static Row row(Dupe2Utils.ReviewResult result) {
+        var progress = WebAdminDupeProgress.read(new DirectoryHandle(result.path()));
+        return new Row(result.path(), result.key(), result.status(), result.score(), result.eligible(),
+                progress.percent(), progress.completed(), progress.total());
+    }
+
     static User user(String name) throws Exception {
         if (Thread.currentThread().isInterrupted()) throw new IOException("Job stopped");
         User user = GlobalContext.getGlobalContext().getUserManager().getUserByNameIncludeDeleted(name);
@@ -41,20 +50,20 @@ final class WebAdminDupe {
         return limit;
     }
 
-    static List<Dupe2Utils.ReviewResult> scan(String username, String path, int limit) throws Exception {
+    static List<Row> scan(String username, String path, int limit) throws Exception {
         User user = user(username);
         if (!path.startsWith("/")) {
-            List<Dupe2Utils.ReviewResult> visible = new ArrayList<>();
+            List<Row> visible = new ArrayList<>();
             for (var result : Dupe2Utils.reviewRelease(path, limit)) {
-                try { directory(user, result.path()); visible.add(result); }
+                try { directory(user, result.path()); visible.add(row(result)); }
                 catch (IOException ignored) { }
             }
             return visible;
         }
         List<String> candidates = indexedDirectories(username, path);
-        List<Dupe2Utils.ReviewResult> results = new ArrayList<>();
+        List<Row> results = new ArrayList<>();
         for (var result : Dupe2Utils.reviewWeb(candidates, limit)) {
-            try { directory(user, result.path()); results.add(result); }
+            try { directory(user, result.path()); results.add(row(result)); }
             catch (IOException ignored) { }
         }
         return results;
