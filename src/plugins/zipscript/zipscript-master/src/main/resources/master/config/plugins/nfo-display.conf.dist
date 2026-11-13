@@ -17,6 +17,9 @@ cwd.wait.millis=500
 
 # Gradually discover NFOs through the index, not a recursive VFS/slave scan.
 # Background reads skip transferring/remerging slaves; each file is at most 64 KiB.
+# Discovery reads committed index paths: at most 2048 path terms per batch, no full-range sorting.
+# Discovery pauses while any slave remerges. Upload/CWD-triggered NFO reads are unchanged.
+# The interval is a minimum cooldown AFTER a batch; slow batches automatically wait longer.
 prefetch.enabled=true
 prefetch.batch=8
 prefetch.interval.seconds=2
