@@ -53,3 +53,13 @@
 
 4.filter=cycle
 
+# Optional reserve-aware upload preference. Put after section/removal rules and
+# before cycle, using consecutive filter numbers. Requires the updated master.
+# Adds usable bytes * multiplier to the score (1 strongly favors disk headroom).
+# A slave below minimum is skipped only if another allowed slave is at/above it.
+# This is not a new FULL threshold: each slave's diskselection reserves still apply.
+# Legacy slaves without reserve reports use physical free bytes as a fallback.
+#<n>.filter=usablefreespace
+#<n>.minimum=10GB
+#<n>.multiplier=1
+
