@@ -6,6 +6,7 @@ import org.apache.commons.net.ftp.FTPSClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
 import java.io.*;
 import java.net.*;
 import java.time.Duration;
@@ -32,7 +33,15 @@ final class SrrdbFtpUpload implements AutoCloseable {
     static final class Client extends FTPSClient {
         private volatile Socket data;
         private volatile boolean cancelled;
+        private volatile SrrdbFtpTrace trace;
+        private boolean dataSocketReady;
         Client(SSLContext context) { super(false, context); }
+        @Override protected void _connectAction_() throws IOException {
+            var diagnostic = trace;
+            if (diagnostic != null) diagnostic.event("control-tcp-connected", endpoints(_socket_));
+            super._connectAction_();
+            if (diagnostic != null) diagnostic.event("control-ready", endpoints(_socket_) + tls(_socket_));
+        }
         @Override protected void _parsePassiveModeReply(String reply) throws org.apache.commons.net.MalformedServerReplyException {
             // Commons Net supplies the first line, but DrFTPD puts the endpoint on the final 227 line.
             for (String line : getReplyStrings()) {
@@ -40,11 +49,40 @@ final class SrrdbFtpUpload implements AutoCloseable {
             }
             super._parsePassiveModeReply(reply);
             logger.info("srrDB FTPS passive data endpoint: host={} port={}", getPassiveHost(), getPassivePort());
+            if (trace != null) trace.event("pasv-advertised", "host=" + getPassiveHost() + " port=" + getPassivePort()
+                    + " addressSource=master-PASV-reply noAddressOverride=true");
+        }
+        @Override protected Socket _openDataConnection_(String command, String argument) throws IOException {
+            var diagnostic = trace;
+            dataSocketReady = false;
+            if (diagnostic != null) diagnostic.event("data-open-start", "operation=" + command);
+            try {
+                Socket socket = super._openDataConnection_(command, argument);
+                if (diagnostic != null) diagnostic.event(socket == null ? "data-open-refused" : "data-ready",
+                        diagnostic.state() + " " + endpoints(socket) + tls(socket));
+                return socket;
+            } catch (IOException e) {
+                if (diagnostic != null) diagnostic.event("data-open-failed", diagnostic.state()
+                        + " dataSocketReady=" + dataSocketReady + " passive=" + getPassiveHost() + ":" + getPassivePort()
+                        + " " + endpoints(dataSocketReady ? data : null) + " cause=" + e.getClass().getName() + ": " + e.getMessage());
+                throw e;
+            }
         }
         @Override protected void _prepareDataSocket_(Socket socket) throws IOException {
             data = socket;
-            if (cancelled) { socket.close(); throw new IOException("FTPS recovery cancelled"); }
+            if (cancelled) { if (socket != null) socket.close(); throw new IOException("FTPS recovery cancelled"); }
+            dataSocketReady = socket != null && socket.isConnected();
+            // Commons Net invokes this after TCP connect and the preliminary STOR/RETR reply, before data TLS.
+            if (trace != null && socket != null) trace.event("data-socket-prepared", endpoints(socket) + " dataTLSHandshakeComplete=false");
             super._prepareDataSocket_(socket);
+        }
+        private static String endpoints(Socket socket) {
+            return socket == null ? "local=unknown remote=unknown" : "local=" + socket.getLocalSocketAddress()
+                    + " remote=" + socket.getRemoteSocketAddress() + " closed=" + socket.isClosed();
+        }
+        private static String tls(Socket socket) {
+            return socket instanceof SSLSocket ssl ? " tls=" + ssl.getSession().getProtocol()
+                    + " cipher=" + ssl.getSession().getCipherSuite() : "";
         }
         void cancelData() {
             cancelled = true;
@@ -89,8 +127,14 @@ final class SrrdbFtpUpload implements AutoCloseable {
         String name = path.substring(path.lastIndexOf('/') + 1);
         String stage = "initialize dedicated FTP client";
         FTPSClient ftp = clients.get();
+        SrrdbFtpTrace trace = new SrrdbFtpTrace(settings.srrdbFtpPassword, logger::info);
+        ftp.addProtocolCommandListener(trace);
+        if (ftp instanceof Client client) client.trace = trace;
         active = ftp;
-        var deadline = deadlines.schedule(() -> disconnect(ftp), 120, TimeUnit.SECONDS);
+        var deadline = deadlines.schedule(() -> {
+            trace.event("deadline", "limitMs=120000 " + trace.state());
+            disconnect(ftp);
+        }, 120, TimeUnit.SECONDS);
         try {
             ftp.setConnectTimeout(10000);
             ftp.setDefaultTimeout(20000);
@@ -102,11 +146,16 @@ final class SrrdbFtpUpload implements AutoCloseable {
             // Distributed FTP data comes from the selected slave, not the master control peer.
             ftp.setRemoteVerificationEnabled(false);
             logger.info("srrDB FTPS import started: user={} master={} path={} size={} crc={}", username, endpoint, path, bytes.length, remote.crc());
+            trace.event("start", "master=" + endpoint + " endpointSource="
+                    + (settings.srrdbFtpHost.isEmpty() ? "automatic-local-master" : "configured-host")
+                    + " connectTimeoutMs=10000 controlTimeoutMs=20000 dataTimeoutMs=30000 mode=PASV protection=PROT-P path=" + path);
             stage = "connect to master";
             ftp.connect(endpoint.getAddress(), endpoint.getPort());
             require(FTPReply.isPositiveCompletion(ftp.getReplyCode()), ftp, "Master FTP greeting");
+            trace.event("control-connected", "local=" + ftp.getLocalAddress() + " remote=" + ftp.getRemoteAddress());
             stage = "FTP login";
             require(ftp.login(settings.srrdbFtpUser, settings.srrdbFtpPassword), ftp, "FTP login (check IP permissions and login slots)");
+            trace.event("login-complete", "dedicatedCredentials=true");
             stage = "configure protected FTP transfer";
             ftp.execPBSZ(0);
             ftp.execPROT("P");
@@ -116,6 +165,7 @@ final class SrrdbFtpUpload implements AutoCloseable {
             require(ftp.changeWorkingDirectory(parent), ftp, "CWD " + parent);
             stage = "FTP PRET STOR";
             require(FTPReply.isPositiveCompletion(ftp.sendCommand("PRET", "STOR " + name)), ftp, "PRET STOR " + name);
+            trace.event("pret-accepted", "next=PASV-data-connect-then-STOR");
             stage = "FTP passive data connection / STOR";
             try (var input = new ByteArrayInputStream(bytes)) {
                 require(ftp.storeFile(name, input), ftp, "STOR " + name);
@@ -145,14 +195,20 @@ final class SrrdbFtpUpload implements AutoCloseable {
                 SrrdbClient.verify(remote, copy.toByteArray());
             }
             logger.info("srrDB FTPS import verified: user={} master={} path={}", username, endpoint, path);
+            trace.event("verified", "size=" + bytes.length + " crc=" + remote.crc());
             return "master FTPS " + endpoint;
         } catch (Exception e) {
             String passive = ftp.getPassiveHost() == null ? "not advertised" : ftp.getPassiveHost() + ":" + ftp.getPassivePort();
+            trace.event("failed", "stage=" + stage + " " + trace.state() + " passive=" + passive
+                    + " cause=" + e.getClass().getName() + ": " + e.getMessage());
             throw new IOException("srrDB download succeeded; " + stage + " failed (master=" + endpoint
                     + ", passive=" + passive + "): " + e.getMessage(), e);
         } finally {
             deadline.cancel(false);
             disconnect(ftp);
+            ftp.removeProtocolCommandListener(trace);
+            if (ftp instanceof Client client) client.trace = null;
+            trace.event("closed", "stage=" + stage);
             active = null;
         }
     }
