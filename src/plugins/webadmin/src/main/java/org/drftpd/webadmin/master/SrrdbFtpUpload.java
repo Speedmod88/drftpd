@@ -36,6 +36,14 @@ final class SrrdbFtpUpload implements AutoCloseable {
         private volatile SrrdbFtpTrace trace;
         private boolean dataSocketReady;
         Client(SSLContext context) { super(false, context); }
+        @Override public int port(InetAddress address, int port) throws IOException {
+            if (trace != null) trace.event("active-advertised", "host=" + address.getHostAddress() + " port=" + port);
+            return super.port(address, port);
+        }
+        @Override public int eprt(InetAddress address, int port) throws IOException {
+            if (trace != null) trace.event("active-advertised", "host=" + address.getHostAddress() + " port=" + port);
+            return super.eprt(address, port);
+        }
         @Override protected void _connectAction_() throws IOException {
             var diagnostic = trace;
             if (diagnostic != null) diagnostic.event("control-tcp-connected", endpoints(_socket_));
@@ -62,7 +70,7 @@ final class SrrdbFtpUpload implements AutoCloseable {
                         diagnostic.state() + " " + endpoints(socket) + tls(socket));
                 return socket;
             } catch (IOException e) {
-                if (diagnostic != null) diagnostic.event("data-open-failed", diagnostic.state()
+                if (diagnostic != null) diagnostic.event("data-open-failed", "mode=" + getDataConnectionMode() + " " + diagnostic.state()
                         + " dataSocketReady=" + dataSocketReady + " passive=" + getPassiveHost() + ":" + getPassivePort()
                         + " " + endpoints(dataSocketReady ? data : null) + " cause=" + e.getClass().getName() + ": " + e.getMessage());
                 throw e;
@@ -123,6 +131,8 @@ final class SrrdbFtpUpload implements AutoCloseable {
         if (settings.srrdbFtpUser.isEmpty() || settings.srrdbFtpPassword.isEmpty())
             throw new IOException("Configure the dedicated srrdb.ftp.user and srrdb.ftp.pasword in webadmin.conf");
         InetSocketAddress endpoint = endpoint(settings, master);
+        Inet4Address activeAddress = settings.srrdbFtpActive ? SrrdbActiveAddress.choose(settings, master) : null;
+        String mode = settings.srrdbFtpActive ? "PORT" : "PASV";
         String parent = path.substring(0, path.lastIndexOf('/'));
         String name = path.substring(path.lastIndexOf('/') + 1);
         String stage = "initialize dedicated FTP client";
@@ -140,6 +150,7 @@ final class SrrdbFtpUpload implements AutoCloseable {
             ftp.setDefaultTimeout(20000);
             ftp.setDataTimeout(Duration.ofSeconds(30));
             ftp.setControlEncoding("UTF-8");
+            ftp.setUseClientMode(true);
             ftp.setUseEPSVwithIPv4(false);
             ftp.setIpAddressFromPasvResponse(true);
             ftp.setPassiveNatWorkaroundStrategy(null);
@@ -148,9 +159,14 @@ final class SrrdbFtpUpload implements AutoCloseable {
             logger.info("srrDB FTPS import started: user={} master={} path={} size={} crc={}", username, endpoint, path, bytes.length, remote.crc());
             trace.event("start", "master=" + endpoint + " endpointSource="
                     + (settings.srrdbFtpHost.isEmpty() ? "automatic-local-master" : "configured-host")
-                    + " connectTimeoutMs=10000 controlTimeoutMs=20000 dataTimeoutMs=30000 mode=PASV protection=PROT-P path=" + path);
+                    + " connectTimeoutMs=10000 controlTimeoutMs=20000 dataTimeoutMs=30000 mode=" + mode + " protection=PROT-P path=" + path);
             stage = "connect to master";
-            ftp.connect(endpoint.getAddress(), endpoint.getPort());
+            if (activeAddress == null) ftp.connect(endpoint.getAddress(), endpoint.getPort());
+            else {
+                // Keep PORT's source address consistent with normal private-address/FXP checks.
+                trace.event("active-control-bind", "local=" + activeAddress + " remote=" + endpoint);
+                ftp.connect(endpoint.getAddress(), endpoint.getPort(), activeAddress, 0);
+            }
             require(FTPReply.isPositiveCompletion(ftp.getReplyCode()), ftp, "Master FTP greeting");
             trace.event("control-connected", "local=" + ftp.getLocalAddress() + " remote=" + ftp.getRemoteAddress());
             stage = "FTP login";
@@ -160,13 +176,27 @@ final class SrrdbFtpUpload implements AutoCloseable {
             ftp.execPBSZ(0);
             ftp.execPROT("P");
             require(ftp.setFileType(FTP.BINARY_FILE_TYPE), ftp, "TYPE I");
-            ftp.enterLocalPassiveMode();
+            if (activeAddress == null) ftp.enterLocalPassiveMode();
+            else {
+                stage = "configure active FTPS listener";
+                ftp.setActiveExternalIPAddress(activeAddress.getHostAddress());
+                Inet4Address advertised = SrrdbActiveAddress.advertised(settings.srrdbFtpActiveAdvertisedHost, activeAddress);
+                ftp.setReportActiveExternalIPAddress(advertised.getHostAddress());
+                if (settings.srrdbFtpActivePortMin > 0)
+                    ftp.setActivePortRange(settings.srrdbFtpActivePortMin, settings.srrdbFtpActivePortMax);
+                ftp.enterLocalActiveMode();
+                trace.event("active-configured", "bind=" + activeAddress.getHostAddress() + " advertised="
+                        + advertised.getHostAddress()
+                        + " ports=" + settings.srrdbFtpActivePortMin + "-" + settings.srrdbFtpActivePortMax
+                        + " dataTLSRole=client");
+            }
             stage = "FTP CWD";
             require(ftp.changeWorkingDirectory(parent), ftp, "CWD " + parent);
             stage = "FTP PRET STOR";
             require(FTPReply.isPositiveCompletion(ftp.sendCommand("PRET", "STOR " + name)), ftp, "PRET STOR " + name);
-            trace.event("pret-accepted", "next=PASV-data-connect-then-STOR");
-            stage = "FTP passive data connection / STOR";
+            trace.event("pret-accepted", "next=" + (settings.srrdbFtpActive
+                    ? "PORT-then-STOR-then-accept-slave" : "PASV-data-connect-then-STOR"));
+            stage = "FTP " + (settings.srrdbFtpActive ? "active" : "passive") + " data connection / STOR";
             try (var input = new ByteArrayInputStream(bytes)) {
                 require(ftp.storeFile(name, input), ftp, "STOR " + name);
             }
@@ -199,10 +229,12 @@ final class SrrdbFtpUpload implements AutoCloseable {
             return "master FTPS " + endpoint;
         } catch (Exception e) {
             String passive = ftp.getPassiveHost() == null ? "not advertised" : ftp.getPassiveHost() + ":" + ftp.getPassivePort();
-            trace.event("failed", "stage=" + stage + " " + trace.state() + " passive=" + passive
+            String dataEndpoint = activeAddress == null ? "passive=" + passive : "activeBind=" + activeAddress
+                    + " advertised=" + (settings.srrdbFtpActiveAdvertisedHost.isEmpty() ? activeAddress : settings.srrdbFtpActiveAdvertisedHost);
+            trace.event("failed", "stage=" + stage + " mode=" + mode + " " + trace.state() + " " + dataEndpoint
                     + " cause=" + e.getClass().getName() + ": " + e.getMessage());
             throw new IOException("srrDB download succeeded; " + stage + " failed (master=" + endpoint
-                    + ", passive=" + passive + "): " + e.getMessage(), e);
+                    + ", " + dataEndpoint + "): " + e.getMessage(), e);
         } finally {
             deadline.cancel(false);
             disconnect(ftp);
