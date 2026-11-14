@@ -728,6 +728,10 @@ function visibleDupes() {
   return state.dupePaths;
 }
 
+function needsDupeVerification(item) {
+  return item.status === "UNKNOWN" || item.status === "MISSING SFV";
+}
+
 function renderDupes() {
   const visible = visibleDupes();
   const body = $("#dupeRows");
@@ -781,8 +785,8 @@ function renderDupes() {
   $("#deleteDupes").disabled = state.dupeBusy || !state.dupeSelected.size;
   $("#deleteDupes").textContent = "Delete selected (" + state.dupeSelected.size + ")";
   $("#scanDupe").disabled = state.dupeBusy;
-  $("#verifyDupes").disabled = state.dupeBusy || !state.dupePaths.some(item => item.status === "UNKNOWN" && state.dupeSelected.has(item.path));
-  $("#selectUnknown").disabled = state.dupeBusy || !state.dupePaths.some(item => item.status === "UNKNOWN");
+  $("#verifyDupes").disabled = state.dupeBusy || !state.dupePaths.some(item => needsDupeVerification(item) && state.dupeSelected.has(item.path));
+  $("#selectUnknown").disabled = state.dupeBusy || !state.dupePaths.some(needsDupeVerification);
   $("#verifySection").disabled = state.dupeBusy;
   $("#verifyAllSections").disabled = state.dupeBusy;
   $("#moveDupes").disabled = state.dupeBusy || !state.dupeSelected.size;
@@ -862,14 +866,14 @@ $("#deleteDupes").addEventListener("click", async () => {
 });
 
 $("#verifyDupes").addEventListener("click", async () => {
-  const paths = state.dupePaths.filter(item => item.status === "UNKNOWN" && state.dupeSelected.has(item.path)).map(item => item.path);
+  const paths = state.dupePaths.filter(item => needsDupeVerification(item) && state.dupeSelected.has(item.path)).map(item => item.path);
   if (!paths.length || !state.dupeJob || state.dupeBusy) return;
   if (!await confirmAction("Verify selected releases", "Fetch missing SFV/DIZ metadata and scan missing CRCs in the background? This reads slave disks; no files are deleted.\n\n" + paths.join("\n"))) return;
   await submitDupe({action: "verify", scanId: state.dupeJob, paths});
 });
 
 $("#selectUnknown").addEventListener("click", () => {
-  const unknown = state.dupePaths.filter(item => item.status === "UNKNOWN").map(item => item.path);
+  const unknown = state.dupePaths.filter(needsDupeVerification).map(item => item.path);
   state.dupeSelected = new Set(unknown.slice(0, 10000));
   if (unknown.length > 10000) toast("Selected 10000 UNKNOWN releases. Use section verification for the entire section.");
   renderDupes();

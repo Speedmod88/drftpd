@@ -60,14 +60,19 @@ final class WebAdminDupeVerification {
             if (sfv) new ZipscriptVFSDataSFV(dir).getSFVInfo();
             else if (zip) new ZipscriptVFSDataZip(dir).getDizInfo();
             GlobalContext.getEventService().publishAsync(new VirtualFileSystemInodeRefreshEvent(dir.getInode(), dir.getPath()));
-            output.accept(CachedCompletion.release(dir).name() + ": " + dir.getPath());
+            output.accept(WebAdminDupeStatus.label(dir, CachedCompletion.release(dir).name()) + ": " + dir.getPath());
         }
         // Child metadata is now populated; refresh the parent after, not only before, its discs.
         root = WebAdminDupe.directory(WebAdminDupe.user(username), path);
         GlobalContext.getEventService().publishAsync(new VirtualFileSystemInodeRefreshEvent(root.getInode(), root.getPath()));
         var status = CachedCompletion.release(root);
-        output.accept("Release status: " + status.name() + ": " + root.getPath());
-        if (status == CachedCompletion.Status.UNKNOWN) {
+        String label = WebAdminDupeStatus.label(root, status.name());
+        output.accept("Release status: " + label + ": " + root.getPath());
+        if (label.equals("MISSING SFV")) {
+            output.accept("MISSING SFV: no SFV found in the release or a numbered disc directory. "
+                    + "Recover the matching SFV, for example through srrDB recovery, then verify again. "
+                    + "Completeness remains unverified; no files deleted.");
+        } else if (status == CachedCompletion.Status.UNKNOWN) {
             output.accept("UNKNOWN means insufficient trusted SFV/DIZ/checksum metadata, not a completed verification. "
                     + "Review skipped files and missing manifests; CRC values alone cannot prove release completeness.");
         }
