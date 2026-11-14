@@ -55,6 +55,18 @@ srrdb.state.file=userdata/webadmin/srrdb.json
 # PASV remains enabled and data still connects to the selected slave.
 srrdb.ftp.host=
 srrdb.ftp.port=0
+# Recovery data connection mode only; normal FTP/FXP clients are unaffected.
+# Active mode uses PRET/PORT/STOR and PROT P; slaves connect back to this container.
+srrdb.ftp.mode=passive
+# Blank active address: use local master.ip or the sole non-loopback local IPv4.
+# Multiple candidate addresses require an explicit LOCAL bind address below.
+# Active control connections bind this address too: allow it on the dedicated FTP account.
+srrdb.ftp.active.address=
+# Optional different address to advertise through NAT (must route back to the listener).
+srrdb.ftp.active.advertised.host=
+# Both 0 uses OS-assigned ports. For a firewall, set an allowed positive port range.
+srrdb.ftp.active.port.min=0
+srrdb.ftp.active.port.max=0
 # Dedicated FTP account. The key "pasword" intentionally uses this spelling.
 # Restrict access to this file (for example chmod 600); never commit real secrets.
 # Reload WebAdmin/restart after editing these settings. Empty credentials refuse uploads.

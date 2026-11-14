@@ -11,6 +11,42 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class SrrdbFtpUploadTest {
+    @Test void activeListenerUsesActiveDataMode() throws Exception {
+        var client = new SrrdbFtpUpload.Client(javax.net.ssl.SSLContext.getDefault());
+        client.enterLocalActiveMode();
+        assertEquals(org.apache.commons.net.ftp.FTPClient.ACTIVE_LOCAL_DATA_CONNECTION_MODE, client.getDataConnectionMode());
+    }
+    @Test void activeModeKeepsPretProtectionAndVerificationAndBindsControlLocally() throws Exception {
+        FTPSClient ftp = connected();
+        Properties config = new Properties();
+        config.setProperty("srrdb.ftp.user", "recovery"); config.setProperty("srrdb.ftp.pasword", "password");
+        config.setProperty("srrdb.ftp.mode", "active");
+        config.setProperty("srrdb.ftp.active.port.min", "50000");
+        config.setProperty("srrdb.ftp.active.port.max", "50010");
+        var settings = new WebAdminSettings(config); var master = new Properties();
+        var local = (java.net.Inet4Address) InetAddress.getByName("192.0.2.15");
+        try (var addresses = mockStatic(SrrdbActiveAddress.class)) {
+            addresses.when(() -> SrrdbActiveAddress.choose(settings, master)).thenReturn(local);
+            addresses.when(() -> SrrdbActiveAddress.advertised("", local)).thenReturn(local);
+            try (var uploader = new SrrdbFtpUpload(settings, () -> ftp)) {
+                uploader.install("evo", "/SECTION/Release-GRP/release.nfo", remote, content, master);
+            }
+        }
+        verify(ftp).connect(InetAddress.getByName("127.0.0.1"), 2121, local, 0);
+        verify(ftp).execPROT("P");
+        verify(ftp).setUseClientMode(true);
+        verify(ftp).setActiveExternalIPAddress("192.0.2.15");
+        verify(ftp).setReportActiveExternalIPAddress("192.0.2.15");
+        verify(ftp).setActivePortRange(50000, 50010);
+        verify(ftp, never()).enterLocalPassiveMode();
+        var order = inOrder(ftp);
+        order.verify(ftp).enterLocalActiveMode();
+        order.verify(ftp).sendCommand("PRET", "STOR release.nfo");
+        order.verify(ftp).storeFile(eq("release.nfo"), any(InputStream.class));
+        order.verify(ftp).getSize("release.nfo");
+        order.verify(ftp).sendCommand("XCRC", "release.nfo");
+        verify(ftp, never()).deleteFile(anyString());
+    }
     private SrrdbFtpUpload.Client passiveClient(String... replies) throws Exception {
         var client = spy(new SrrdbFtpUpload.Client(javax.net.ssl.SSLContext.getDefault()));
         client.setIpAddressFromPasvResponse(true);

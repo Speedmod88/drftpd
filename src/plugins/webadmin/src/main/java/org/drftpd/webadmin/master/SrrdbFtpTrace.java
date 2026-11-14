@@ -12,7 +12,7 @@ import java.util.function.Consumer;
 /** Deliberately not a raw FTP transcript: credentials and reply bodies stay private. */
 final class SrrdbFtpTrace implements ProtocolCommandListener {
     private static final Set<String> SAFE_ARGUMENTS = Set.of(
-            "AUTH", "PBSZ", "PROT", "TYPE", "CWD", "PRET", "PASV", "EPSV", "STOR", "RETR", "SIZE", "XCRC", "QUIT");
+            "AUTH", "PBSZ", "PROT", "TYPE", "CWD", "PRET", "PASV", "EPSV", "PORT", "EPRT", "STOR", "RETR", "SIZE", "XCRC", "QUIT");
     private final String id = UUID.randomUUID().toString();
     private final String password;
     private final Consumer<String> sink;
@@ -54,5 +54,7 @@ final class SrrdbFtpTrace implements ProtocolCommandListener {
             // Includes DrFTPD's selected-slave comment and the advertised endpoint only.
             event("pasv-reply", event.getMessage());
         }
+        if ((lastCommand.equals("STOR") || lastCommand.equals("RETR")) && (lastReply == 150 || lastReply == 125))
+            event("transfer-preliminary", event.getMessage());
     }
 }
