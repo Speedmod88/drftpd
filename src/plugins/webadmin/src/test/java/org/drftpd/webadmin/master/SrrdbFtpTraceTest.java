@@ -6,6 +6,17 @@ import java.util.ArrayList;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SrrdbFtpTraceTest {
+    @Test void activePortAndPreliminaryReplyExposeRouteAndSelectedSlave() {
+        var lines = new ArrayList<String>();
+        var trace = new SrrdbFtpTrace("password", lines::add);
+        trace.protocolCommandSent(new ProtocolCommandEvent(this, "PORT", "PORT 192,0,2,15,195,80\r\n"));
+        trace.protocolCommandSent(new ProtocolCommandEvent(this, "STOR", "STOR release.sfv\r\n"));
+        trace.protocolReplyReceived(new ProtocolCommandEvent(this, 150,
+                "150 File status okay; about to open data connection to test-slave.\r\n"));
+        assertTrue(String.join("\n", lines).contains("PORT 192,0,2,15,195,80"));
+        assertTrue(String.join("\n", lines).contains("event=transfer-preliminary"));
+        assertTrue(String.join("\n", lines).contains("to test-slave"));
+    }
     @Test void neverLogsAuthenticationArgumentsOrReplyBodies() {
         var lines = new ArrayList<String>();
         var trace = new SrrdbFtpTrace("secret-password", lines::add);
