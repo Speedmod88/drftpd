@@ -3,6 +3,7 @@ package org.drftpd.webadmin.master;
 import org.drftpd.autofreespace.master.Dupe2Utils;
 import org.drftpd.master.GlobalContext;
 import org.drftpd.master.indexation.AdvancedSearchParams;
+import org.drftpd.master.indexation.IndexEngineInterface;
 import org.drftpd.master.usermanager.User;
 import org.drftpd.master.vfs.DirectoryHandle;
 import java.io.IOException;
@@ -11,6 +12,9 @@ import java.util.Collection;
 import java.util.List;
 
 final class WebAdminDupe {
+    private static final org.apache.logging.log4j.Logger logger =
+            org.apache.logging.log4j.LogManager.getLogger(WebAdminDupe.class);
+    static final int DISCOVERY_PAGE_SIZE = 1000;
     private WebAdminDupe() { }
 
     record Row(String path, String key, String status, int score, boolean eligible,
@@ -66,25 +70,47 @@ final class WebAdminDupe {
             try { directory(user, result.path()); results.add(row(result)); }
             catch (IOException ignored) { }
         }
+        logger.info("DUPE2 section scan: user={} scope={} indexedDirectories={} resultReleases={} groupLimit={} crossSectionMatches=true",
+                username, path, candidates.size(), results.size(), limit);
         return results;
     }
 
     static List<String> indexedDirectories(String username, String path) throws Exception {
         User user = user(username);
         DirectoryHandle root = directory(user, path);
+        List<String> candidates = new ArrayList<>();
+        for (String candidate : indexedDirectoryPaths(root, GlobalContext.getGlobalContext().getIndexEngine())) {
+            if (Thread.currentThread().isInterrupted()) throw new IOException("Scan stopped");
+            try { candidates.add(directory(user, candidate).getPath()); }
+            catch (IOException ignored) { }
+        }
+        return candidates;
+    }
+
+    static List<String> indexedDirectoryPaths(DirectoryHandle root, IndexEngineInterface index) throws Exception {
         AdvancedSearchParams params = new AdvancedSearchParams();
         params.setInodeType(AdvancedSearchParams.InodeType.DIRECTORY);
         params.setSortField("fullPath");
-        var indexed = GlobalContext.getGlobalContext().getIndexEngine().advancedFind(root, params, "WEBADMIN-DUPE2");
+        params.setLimit(DISCOVERY_PAGE_SIZE);
         List<String> candidates = new ArrayList<>();
         String prefix = root.getPath().equals("/") ? "/" : root.getPath() + "/";
-        for (var entry : indexed.entrySet()) {
-            String candidate = entry.getKey().replaceAll("/+$", "");
-            if (entry.getValue().equals("d") && candidate.startsWith(prefix)) {
-                try { candidates.add(directory(user, candidate).getPath()); }
-                catch (IOException ignored) { }
-            }
+        // A path cursor also makes ordering local to this query rather than shared index sort state.
+        String cursor = prefix;
+        while (true) {
             if (Thread.currentThread().isInterrupted()) throw new IOException("Scan stopped");
+            params.setAfterPath(cursor);
+            var indexed = index.advancedFind(root, params, "WEBADMIN-DUPE2");
+            if (indexed.isEmpty()) break;
+            String next = cursor;
+            for (var entry : indexed.entrySet()) {
+                String indexedPath = entry.getKey();
+                if (indexedPath.compareTo(cursor) <= 0) continue;
+                if (indexedPath.compareTo(next) > 0) next = indexedPath;
+                String candidate = indexedPath.replaceAll("/+$", "");
+                if ("d".equals(entry.getValue()) && candidate.startsWith(prefix)) candidates.add(candidate);
+            }
+            if (next.equals(cursor)) throw new IOException("DUPE2 index cursor did not advance for " + root.getPath());
+            cursor = next;
         }
         return candidates;
     }

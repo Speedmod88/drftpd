@@ -623,6 +623,7 @@ final class WebAdminServer {
                         job.dupeResults = WebAdminDupe.scan(job.username, payload.path, resultLimit);
                         job.paths = job.dupeResults.stream()
                                 .map(item -> item.path()).toList();
+                        job.addOutput("Scan scope: " + payload.path + "; matching duplicates may appear from other sections.");
                         job.addOutput("Duplicate group limit: " + resultLimit);
                         job.addOutput("Found " + job.paths.size() + " releases. Manual selection includes KEEP and UNKNOWN.");
                     } else if (verify) {
