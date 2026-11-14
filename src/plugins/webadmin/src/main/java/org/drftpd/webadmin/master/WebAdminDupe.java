@@ -21,8 +21,9 @@ final class WebAdminDupe {
                Integer completionPercent, long completedFiles, long totalFiles) { }
 
     static Row row(Dupe2Utils.ReviewResult result) {
-        var progress = WebAdminDupeProgress.read(new DirectoryHandle(result.path()));
-        return new Row(result.path(), result.key(), result.status(), result.score(), result.eligible(),
+        var directory = new DirectoryHandle(result.path());
+        var progress = WebAdminDupeProgress.read(directory);
+        return new Row(result.path(), result.key(), WebAdminDupeStatus.label(directory, result.status()), result.score(), result.eligible(),
                 progress.percent(), progress.completed(), progress.total());
     }
 
