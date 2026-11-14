@@ -20,7 +20,8 @@ reply, before data TLS. dataSocketReady=false alone does not prove TCP never
 connected. data-ready confirms the data socket/handshake returned successfully.
 
 USER/PASS/ACCT/ADAT and unrecognized command arguments are never logged. Server
-reply bodies are omitted except PASV 227 (for slave selection and endpoint).
+reply bodies are omitted except PASV 227 and preliminary transfer 125/150 replies
+(for slave selection and endpoint). Active mode also records PORT/EPRT addresses.
 This avoids dumping greetings, authentication challenges or CWD NFO contents.
 Trace text redacts the configured password, removes control characters and is
 length-limited. No file payloads or WebAdmin tokens are recorded. Server/slave

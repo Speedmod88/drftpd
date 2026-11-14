@@ -48,6 +48,10 @@ final class WebAdminSettings {
     final int srrdbFtpPort;
     final String srrdbFtpUser;
     final String srrdbFtpPassword;
+    final boolean srrdbFtpActive;
+    final String srrdbFtpActiveAddress;
+    final String srrdbFtpActiveAdvertisedHost;
+    final int srrdbFtpActivePortMin, srrdbFtpActivePortMax;
     final Set<String> allowedCommands;
 
     WebAdminSettings(Properties properties) {
@@ -89,6 +93,17 @@ final class WebAdminSettings {
         srrdbFtpPort = intValue(properties, "srrdb.ftp.port", 0, 0, 65535);
         srrdbFtpUser = properties.getProperty("srrdb.ftp.user", "").trim();
         srrdbFtpPassword = properties.getProperty("srrdb.ftp.pasword", "");
+        String mode = properties.getProperty("srrdb.ftp.mode", "passive").trim();
+        if (!mode.equalsIgnoreCase("active") && !mode.equalsIgnoreCase("passive"))
+            throw new IllegalArgumentException("srrdb.ftp.mode must be passive or active");
+        srrdbFtpActive = mode.equalsIgnoreCase("active");
+        srrdbFtpActiveAddress = properties.getProperty("srrdb.ftp.active.address", "").trim();
+        srrdbFtpActiveAdvertisedHost = properties.getProperty("srrdb.ftp.active.advertised.host", "").trim();
+        srrdbFtpActivePortMin = intValue(properties, "srrdb.ftp.active.port.min", 0, 0, 65535);
+        srrdbFtpActivePortMax = intValue(properties, "srrdb.ftp.active.port.max", 0, 0, 65535);
+        if ((srrdbFtpActivePortMin == 0) != (srrdbFtpActivePortMax == 0)
+                || srrdbFtpActivePortMax < srrdbFtpActivePortMin)
+            throw new IllegalArgumentException("Active port range must be 0/0 or an ordered positive pair");
         bindAddress = address(properties.getProperty("bind", "127.0.0.1"));
         allowedCommands = Collections.unmodifiableSet(loadAllowedCommands(properties));
     }
