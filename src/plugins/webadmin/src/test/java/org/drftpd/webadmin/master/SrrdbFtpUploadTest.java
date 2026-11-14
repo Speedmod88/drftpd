@@ -90,6 +90,8 @@ class SrrdbFtpUploadTest {
         order.verify(ftp).sendCommand("XCRC", "release.nfo");
         verify(ftp, never()).deleteFile(anyString());
         verify(ftp).disconnect();
+        verify(ftp).addProtocolCommandListener(any(SrrdbFtpTrace.class));
+        verify(ftp).removeProtocolCommandListener(any(SrrdbFtpTrace.class));
     }
     @Test void passiveTimeoutIdentifiesUploadStageAndEndpoint() throws Exception {
         FTPSClient ftp = connected();
