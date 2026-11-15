@@ -11,6 +11,37 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class SrrdbFtpUploadTest {
+    @Test void onlyGuardedZeroByteTargetIsDeletedBeforeUpload() throws Exception {
+        FTPSClient ftp = connected();
+        when(ftp.getSize("release.nfo")).thenReturn("0", Long.toString(content.length));
+        when(ftp.deleteFile("release.nfo")).thenReturn(true);
+        var guard = mock(SrrdbFtpUpload.ZeroByteGuard.class);
+        try (var uploader = uploader(ftp)) {
+            uploader.install("evo", "/SECTION/Release-GRP/release.nfo", remote, content, new Properties(), guard);
+        }
+        var order = inOrder(ftp, guard);
+        order.verify(guard).check();
+        order.verify(ftp).getSize("release.nfo");
+        order.verify(guard).check();
+        order.verify(ftp).deleteFile("release.nfo");
+        order.verify(ftp).sendCommand("PRET", "STOR release.nfo");
+        order.verify(ftp).storeFile(eq("release.nfo"), any(InputStream.class));
+        order.verify(ftp).getSize("release.nfo");
+        order.verify(ftp).sendCommand("XCRC", "release.nfo");
+    }
+
+    @Test void nonzeroOrActiveTargetsAreNeverDeletedOrUploaded() throws Exception {
+        for (boolean active : new boolean[]{false, true}) {
+            FTPSClient ftp = connected();
+            var guard = mock(SrrdbFtpUpload.ZeroByteGuard.class);
+            if (active) doThrow(new IOException("active transfer")).when(guard).check();
+            try (var uploader = uploader(ftp)) {
+                assertThrows(IOException.class, () -> uploader.install("evo", "/SECTION/Release-GRP/release.nfo", remote, content, new Properties(), guard));
+            }
+            verify(ftp, never()).deleteFile(anyString());
+            verify(ftp, never()).storeFile(anyString(), any(InputStream.class));
+        }
+    }
     @Test void activeListenerUsesActiveDataMode() throws Exception {
         var client = new SrrdbFtpUpload.Client(javax.net.ssl.SSLContext.getDefault());
         client.enterLocalActiveMode();
