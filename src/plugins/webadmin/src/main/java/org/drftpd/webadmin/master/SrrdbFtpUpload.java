@@ -16,6 +16,7 @@ import java.util.function.Supplier;
 
 /** Missing metadata is uploaded by a normal, authenticated FTP session. */
 final class SrrdbFtpUpload implements AutoCloseable {
+    interface ZeroByteGuard { void check() throws Exception; }
     private static final Logger logger = LogManager.getLogger("org.drftpd.webadmin.srrdb");
     interface Hosts { InetAddress[] resolve(String host) throws UnknownHostException; }
     private final WebAdminSettings settings;
@@ -126,6 +127,11 @@ final class SrrdbFtpUpload implements AutoCloseable {
     }
 
     String install(String username, String path, SrrdbClient.RemoteFile remote, byte[] bytes, Properties master) throws Exception {
+        return install(username, path, remote, bytes, master, null);
+    }
+
+    String install(String username, String path, SrrdbClient.RemoteFile remote, byte[] bytes, Properties master,
+                   ZeroByteGuard zeroByteGuard) throws Exception {
         SrrdbClient.verify(remote, bytes);
         if (closed) throw new IOException("FTPS recovery is stopped");
         if (settings.srrdbFtpUser.isEmpty() || settings.srrdbFtpPassword.isEmpty())
@@ -192,6 +198,14 @@ final class SrrdbFtpUpload implements AutoCloseable {
             }
             stage = "FTP CWD";
             require(ftp.changeWorkingDirectory(parent), ftp, "CWD " + parent);
+            if (zeroByteGuard != null) {
+                stage = "verify idle zero-byte target before FTP DELE";
+                zeroByteGuard.check();
+                if (!"0".equals(ftp.getSize(name))) throw new IOException("FTP target is no longer zero bytes; nothing deleted");
+                zeroByteGuard.check();
+                trace.event("zero-byte-cleanup", "path=" + path + " size=0 idleAndSnapshotChecked=true");
+                require(ftp.deleteFile(name), ftp, "DELE idle zero-byte " + name);
+            }
             stage = "FTP PRET STOR";
             require(FTPReply.isPositiveCompletion(ftp.sendCommand("PRET", "STOR " + name)), ftp, "PRET STOR " + name);
             trace.event("pret-accepted", "next=" + (settings.srrdbFtpActive

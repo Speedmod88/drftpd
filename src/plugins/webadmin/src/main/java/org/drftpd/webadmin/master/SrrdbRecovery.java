@@ -26,6 +26,11 @@ final class SrrdbRecovery implements AutoCloseable {
         }
         List<String> releases(String username, String path, boolean recursive, int limit) throws Exception;
         boolean missing(String username, String releasePath, String relativeFile) throws Exception;
+        default String reconcile(String username, String releasePath, SrrdbClient.RemoteFile file) throws Exception {
+            if (!missing(username, releasePath, file.name()))
+                throw new IOException("Target unavailable or no longer missing; nothing was overwritten");
+            return null;
+        }
         String install(String username, String releasePath, SrrdbClient.RemoteFile file, byte[] content) throws Exception;
         default String replace(String username, String releasePath, SrrdbClient.RemoteFile file,
                                byte[] content, LocalFile original, String transaction) throws Exception {
@@ -288,11 +293,19 @@ final class SrrdbRecovery implements AutoCloseable {
     }
 
     private void install(Entry entry, String username) {
+        boolean uploadAttempted = false;
         try {
             synchronized (this) { entry.state = "downloading"; entry.message = "Downloading approved metadata from srrDB"; save(); }
-            if (closed || (!entry.replacement && !library.missing(username, entry.releasePath, entry.file)))
-                throw new IOException("Target unavailable or no longer missing; inspect any stale zero-byte file through FTP before retrying. Nothing was overwritten");
+            if (closed) throw new IOException("Recovery cancelled");
             SrrdbClient.RemoteFile file = new SrrdbClient.RemoteFile(entry.file, entry.size, entry.crc);
+            if (!entry.replacement) {
+                String existing = library.reconcile(username, entry.releasePath, file);
+                if (existing != null) {
+                    synchronized (this) { entry.state = "installed"; entry.message = "Existing upload verified on " + existing; }
+                    logger.info("srrDB existing upload reconciled: path={}/{} size={} crc={}", entry.releasePath, entry.file, entry.size, entry.crc);
+                    return;
+                }
+            }
             byte[] content = client.download(releaseName(entry.releasePath), file);
             if (closed || Thread.currentThread().isInterrupted()) throw new IOException("Recovery cancelled");
             logger.info("srrDB download verified: path={}/{} size={} crc={}", entry.releasePath, entry.file, content.length, entry.crc);
@@ -301,6 +314,7 @@ final class SrrdbRecovery implements AutoCloseable {
                 entry.message = entry.replacement ? "Validating approved replacement" : "Uploading through master FTPS";
                 save();
             }
+            uploadAttempted = true;
             String slave = entry.replacement
                     ? library.replace(username, entry.releasePath, file, content, entry.original, entry.id)
                     : library.install(username, entry.releasePath, file, content);
@@ -310,6 +324,17 @@ final class SrrdbRecovery implements AutoCloseable {
             logger.info("srrDB import completed: user={} slave={} path={}/{} size={} crc={}",
                     username, slave, entry.releasePath, entry.file, entry.size, entry.crc);
         } catch (Exception e) {
+            if (uploadAttempted && !entry.replacement && !closed && !Thread.currentThread().isInterrupted()) {
+                try {
+                    String existing = library.reconcile(username, entry.releasePath,
+                            new SrrdbClient.RemoteFile(entry.file, entry.size, entry.crc));
+                    if (existing != null) {
+                        synchronized (this) { entry.state = "installed"; entry.message = "Upload reply failed, but existing file size/CRC verified on " + existing; }
+                        logger.info("srrDB upload reconciled after failure: path={}/{} originalFailure={}", entry.releasePath, entry.file, e.toString());
+                        return;
+                    }
+                } catch (Exception verification) { e.addSuppressed(verification); }
+            }
             synchronized (this) { entry.state = "failed"; entry.message = String.valueOf(e.getMessage()); }
             logger.warn("srrDB import failed: user={} path={}/{}", username, entry.releasePath, entry.file, e);
         } finally {

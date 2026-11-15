@@ -11,6 +11,28 @@ import java.util.function.BooleanSupplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SrrdbRecoveryTest {
+    @Test void retryRecognizesCompletedUploadWithoutAnotherDownloadOrWrite() throws Exception {
+        try (var recovery = open()) {
+            String id = scan(recovery);
+            library.missing = false;
+            library.reconciled = "VerifiedSlave";
+            recovery.decide(id, "accept", "siteop");
+            waitUntil(() -> entries(recovery).get(0).get("state").equals("installed"));
+            assertEquals(0, downloads.get());
+            assertEquals(0, library.installs.get());
+        }
+    }
+
+    @Test void lostCompletionReplyReconcilesVerifiedFileWithoutAnotherUpload() throws Exception {
+        try (var recovery = open()) {
+            String id = scan(recovery);
+            library.loseReply = true;
+            recovery.decide(id, "accept", "siteop");
+            waitUntil(() -> entries(recovery).get(0).get("state").equals("installed"));
+            assertEquals(1, downloads.get());
+            assertEquals(1, library.installs.get());
+        }
+    }
     @Test void completedScanResultsSurviveRestartWithoutDownloading() throws Exception {
         String id;
         try (var recovery = open()) {
@@ -240,6 +262,11 @@ class SrrdbRecoveryTest {
     }
 
     private static final class FakeLibrary implements SrrdbRecovery.Library {
+        volatile String reconciled;
+        volatile boolean loseReply;
+        @Override public String reconcile(String user, String path, SrrdbClient.RemoteFile file) throws Exception {
+            return reconciled != null ? reconciled : SrrdbRecovery.Library.super.reconcile(user, path, file);
+        }
         volatile boolean missing = true;
         final AtomicInteger installs = new AtomicInteger();
         volatile String installedPath;
@@ -260,10 +287,11 @@ class SrrdbRecoveryTest {
         }
         @Override public List<String> releases(String user, String path, boolean recursive, int limit) { return List.of(path); }
         @Override public boolean missing(String user, String path, String file) { return missing; }
-        @Override public String install(String user, String path, SrrdbClient.RemoteFile file, byte[] content) {
+        @Override public String install(String user, String path, SrrdbClient.RemoteFile file, byte[] content) throws Exception {
             assertTrue(missing);
             installedPath = path;
             installs.incrementAndGet();
+            if (loseReply) { reconciled = "VerifiedSlave"; throw new java.net.SocketTimeoutException("completion reply timed out"); }
             return "TestSlave";
         }
     }
