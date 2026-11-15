@@ -227,11 +227,56 @@ final class SrrdbLibrary implements SrrdbRecovery.Library {
     }
 
     @Override public String install(String username, String releasePath, SrrdbClient.RemoteFile remote, byte[] content) throws Exception {
-        user(username);
         SrrdbClient.verify(remote, content);
-        if (!missing(username, releasePath, remote.name())) throw new IOException("Metadata already exists (possibly a stale zero-byte reservation); inspect it through FTP before retrying. Nothing was overwritten");
+        String existing = reconcile(username, releasePath, remote);
+        if (existing != null) return existing;
+        FileHandle zero = importTarget(username, releasePath, remote.name());
+        Snapshot snapshot = zero == null ? null : new Snapshot(zero, zero.getSize(), zero.lastModified(), java.util.Set.copyOf(zero.getSlaves()));
         String path = releasePath + "/" + remote.name();
-        return uploads.install(username, path, remote, content, GlobalContext.getConfig().getMainProperties());
+        SrrdbFtpUpload.ZeroByteGuard guard = snapshot == null ? null : () -> {
+            user(username);
+            snapshot.check();
+            if (zero.getSize() != 0 || freshChecksum(zero, new ArrayList<>()) != 0)
+                throw new IOException("Zero-byte target changed; nothing deleted: " + path);
+            snapshot.check();
+        };
+        return uploads.install(username, path, remote, content, GlobalContext.getConfig().getMainProperties(), guard);
+    }
+
+    private FileHandle importTarget(String username, String releasePath, String relativeFile) throws Exception {
+        User user = user(username);
+        directory(user, releasePath);
+        if (!SrrdbClient.metadataPath(relativeFile)) throw new IOException("Invalid remote filename");
+        String full = releasePath + "/" + relativeFile;
+        DirectoryHandle parent = directory(user, full.substring(0, full.lastIndexOf('/')));
+        String name = full.substring(full.lastIndexOf('/') + 1);
+        String extension = name.substring(name.length() - 4).toLowerCase(Locale.ROOT);
+        FileHandle target = null;
+        for (var inode : parent.getInodeHandlesUnchecked()) {
+            if (!inode.getName().toLowerCase(Locale.ROOT).endsWith(extension)) continue;
+            if (inode.isLink() || !(inode instanceof FileHandle file) || inode.isHidden(user)
+                    || !inode.getName().equals(name) || target != null)
+                throw new IOException("Existing metadata name/type differs; rescan and review replacement. Nothing overwritten");
+            if (file.isTransferring()) throw new IOException("Metadata is still transferring; retry after completion");
+            target = file;
+        }
+        return target;
+    }
+
+    @Override public String reconcile(String username, String releasePath, SrrdbClient.RemoteFile remote) throws Exception {
+        FileHandle file = importTarget(username, releasePath, remote.name());
+        if (file == null || file.getSize() == 0) return null;
+        if (file.getSize() != remote.size()) throw new IOException("Existing non-empty metadata size differs; rescan and approve replacement. Nothing deleted");
+        long crc = freshChecksum(file, new ArrayList<>());
+        if (crc != Long.parseUnsignedLong(remote.crc(), 16))
+            throw new IOException("Existing non-empty metadata CRC differs; rescan and approve replacement. Nothing deleted");
+        if (file.getXfertime() == -1) file.setXfertime(0);
+        if (remote.name().toLowerCase(Locale.ROOT).endsWith(".sfv"))
+            new org.drftpd.zipscript.master.sfv.vfs.ZipscriptVFSDataSFV(file.getParent()).getSFVInfo();
+        file.requestRefresh(false);
+        file.getParent().requestRefresh(false);
+        logger.info("srrDB existing metadata verified from physical copies: path={} size={} crc={}", file.getPath(), remote.size(), remote.crc());
+        return "existing physical copies (size/CRC verified)";
     }
 
     @Override public void close() {
