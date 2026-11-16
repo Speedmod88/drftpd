@@ -1,7 +1,7 @@
 # Admin IRC account lookup
 
 An identified siteop can run !whois irc_nickname only in the configured sysop channel.
-The response stays in that channel: WHOIS: irc_nickname -> ftp_username/example_group.
+The response stays in that channel: WHOIS: irc_nickname -> ftp_username/group.
 The group is the linked FTP account's current primary group, not a slave name.
 
 Lookup uses the receiving SiteBot's existing IDENT/INVITE association. It does

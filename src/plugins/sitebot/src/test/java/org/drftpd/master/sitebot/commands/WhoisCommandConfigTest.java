@@ -19,6 +19,6 @@ class WhoisCommandConfigTest {
         assertNotNull(ftpWhois);
         assertEquals("=siteop", ftpWhois.getProperty("perms"));
         assertTrue(ftpWhois.getProperty("help.specific").contains("[botname]"));
-        assertTrue(ftpWhois.getProperty("help.specific").contains("ftp_username/example_group"));
+        assertTrue(ftpWhois.getProperty("help.specific").contains("ftp_username/group"));
     }
 }

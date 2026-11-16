@@ -14,7 +14,7 @@ class KnownFtpUserTest {
         var details = mock(UserDetails.class);
         when(details.getFtpUser()).thenReturn("ftp_username");
         users.put("irc_nickname", details);
-        assertEquals("ftp_username", bot.getKnownFtpUser("irc_nickname"));
+        assertEquals("ftp_username", bot.getKnownFtpUser("IRC_NICKNAME"));
         assertNull(bot.getKnownFtpUser("unknown"));
         assertNull(new SiteBot("another/").getKnownFtpUser("irc_nickname"));
         users.remove("irc_nickname");
