@@ -51,29 +51,65 @@ public class UserHandler extends CommandInterface {
             session.printOutput("WHOIS: Permission denied (siteop only).");
             return null;
         }
+        String channel = request.getProperties() == null ? "" : request.getProperties().getProperty("channel", "").trim();
+        String[] destinations = session.getDestination();
+        if (!channel.startsWith("#") || !channel.equalsIgnoreCase(session.getSource())
+                || destinations == null || destinations.length != 1 || !channel.equalsIgnoreCase(destinations[0])) {
+            session.printOutput("WHOIS: This command is restricted to its configured sysop channel.");
+            return null;
+        }
         String nick = request.getArgument();
+        validateWhoisNick(nick);
+        session.printOutput(whois(session.getBot(), nick));
+        return null;
+    }
+
+    public CommandResponse doSITE_WHOIS(CommandRequest request) throws ImproperUsageException {
+        User actor = request.getSession().getUserNull(request.getUser());
+        if (actor == null || actor.isDeleted() || !actor.isMemberOf("siteop"))
+            return new CommandResponse(530, "WHOIS: Permission denied (siteop only).");
+        StringTokenizer args = new StringTokenizer(request.getArgument() == null ? "" : request.getArgument());
+        if (args.countTokens() < 1 || args.countTokens() > 2) throw new ImproperUsageException();
+        String nick = args.nextToken();
+        validateWhoisNick(nick);
+        String botName = args.hasMoreTokens() ? args.nextToken() : null;
+        java.util.List<org.drftpd.master.sitebot.SiteBot> bots = new java.util.ArrayList<>();
+        for (PluginInterface plugin : GlobalContext.getGlobalContext().getPlugins())
+            if (plugin instanceof SiteBotWrapper wrapper) bots.addAll(wrapper.getBots());
+        if (bots.isEmpty()) return new CommandResponse(500, "No SiteBots loaded");
+        if (botName == null && bots.size() != 1)
+            return new CommandResponse(501, "Multiple SiteBots loaded: use SITE WHOIS <nick> <botname>");
+        for (var bot : bots) {
+            if (botName == null || bot.getBotName().equalsIgnoreCase(botName))
+                return new CommandResponse(200, whois(bot, nick));
+        }
+        return new CommandResponse(501, "Unknown SiteBot");
+    }
+
+    private static void validateWhoisNick(String nick) throws ImproperUsageException {
         if (nick == null || nick.isBlank() || nick.length() > 128
                 || nick.chars().anyMatch(c -> Character.isWhitespace(c) || Character.isISOControl(c)))
             throw new ImproperUsageException();
-        String username = session.getBot().getKnownFtpUser(nick);
+    }
+
+    private String whois(org.drftpd.master.sitebot.SiteBot bot, String nick) {
+        String username = bot.getKnownFtpUser(nick);
         if (username == null) {
-            session.printOutput("WHOIS: " + nick + " -> No identified DrFTPD account known to this SiteBot.");
-            return null;
+            return "WHOIS: " + nick + " -> No identified DrFTPD account known to this SiteBot.";
         }
         try {
             User target = GlobalContext.getGlobalContext().getUserManager().getUserByName(username);
             if (target.isDeleted()) {
-                session.printOutput("WHOIS: " + nick + " -> No active DrFTPD account linked.");
+                return "WHOIS: " + nick + " -> No active DrFTPD account linked.";
             } else {
-                session.printOutput("WHOIS: " + nick + " -> " + target.getName() + "/" + target.getGroup().getName());
+                return "WHOIS: " + nick + " -> " + target.getName() + "/" + target.getGroup().getName();
             }
         } catch (NoSuchUserException e) {
-            session.printOutput("WHOIS: " + nick + " -> No active DrFTPD account linked.");
+            return "WHOIS: " + nick + " -> No active DrFTPD account linked.";
         } catch (UserFileException e) {
             logger.warn("WHOIS could not read linked FTP user {}", username, e);
-            session.printOutput("WHOIS: Unable to read the linked DrFTPD account; check master logs.");
+            return "WHOIS: Unable to read the linked DrFTPD account; check master logs.";
         }
-        return null;
     }
 
     public CommandResponse doIdent(CommandRequest request) throws ImproperUsageException {
