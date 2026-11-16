@@ -2900,6 +2900,12 @@ public class SiteBot implements ReplyConstants, Runnable {
         }
     }
 
+    /** Read an existing bot-scoped association without creating users or issuing network WHOIS. */
+    public String getKnownFtpUser(String nick) {
+        UserDetails details = _users.get(nick);
+        return details == null ? null : details.getFtpUser();
+    }
+
     private UserDetails getUserDetails(String nick, String ident) {
         UserDetails user = _users.get(nick);
         if (user == null) {
