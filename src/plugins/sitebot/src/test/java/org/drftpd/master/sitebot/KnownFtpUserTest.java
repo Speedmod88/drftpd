@@ -12,12 +12,12 @@ class KnownFtpUserTest {
         @SuppressWarnings("unchecked")
         var users = (java.util.Map<String, UserDetails>) field.get(bot);
         var details = mock(UserDetails.class);
-        when(details.getFtpUser()).thenReturn("G6");
-        users.put("puff", details);
-        assertEquals("G6", bot.getKnownFtpUser("PUFF"));
+        when(details.getFtpUser()).thenReturn("ftp_username");
+        users.put("irc_nickname", details);
+        assertEquals("ftp_username", bot.getKnownFtpUser("IRC_NICKNAME"));
         assertNull(bot.getKnownFtpUser("unknown"));
-        assertNull(new SiteBot("another/").getKnownFtpUser("puff"));
-        users.remove("puff");
-        assertNull(bot.getKnownFtpUser("puff"));
+        assertNull(new SiteBot("another/").getKnownFtpUser("irc_nickname"));
+        users.remove("irc_nickname");
+        assertNull(bot.getKnownFtpUser("irc_nickname"));
     }
 }

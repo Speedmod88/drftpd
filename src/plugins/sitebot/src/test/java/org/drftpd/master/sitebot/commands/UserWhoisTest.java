@@ -31,23 +31,23 @@ class UserWhoisTest {
     }
 
     @Test void returnsCurrentPrimaryGroupForKnownAccount() throws Exception {
-        var request = request("puff");
-        when(bot.getKnownFtpUser("puff")).thenReturn("G6");
+        var request = request("irc_nickname");
+        when(bot.getKnownFtpUser("irc_nickname")).thenReturn("ftp_username");
         var global = mock(GlobalContext.class, RETURNS_DEEP_STUBS);
         var target = mock(User.class, RETURNS_DEEP_STUBS);
-        when(global.getUserManager().getUserByName("G6")).thenReturn(target);
-        when(target.getName()).thenReturn("G6");
-        when(target.getGroup().getName()).thenReturn("ROSiN");
+        when(global.getUserManager().getUserByName("ftp_username")).thenReturn(target);
+        when(target.getName()).thenReturn("ftp_username");
+        when(target.getGroup().getName()).thenReturn("group");
         try (var context = mockStatic(GlobalContext.class)) {
             context.when(GlobalContext::getGlobalContext).thenReturn(global);
             new UserHandler().doWhois(request);
-            verify(session).printOutput("WHOIS: puff -> G6/ROSiN");
+            verify(session).printOutput("WHOIS: irc_nickname -> ftp_username/group");
             when(target.getGroup().getName()).thenReturn("NewGroup");
             new UserHandler().doWhois(request);
-            verify(session).printOutput("WHOIS: puff -> G6/NewGroup");
+            verify(session).printOutput("WHOIS: irc_nickname -> ftp_username/NewGroup");
             when(target.isDeleted()).thenReturn(true);
             new UserHandler().doWhois(request);
-            verify(session).printOutput("WHOIS: puff -> No active DrFTPD account linked.");
+            verify(session).printOutput("WHOIS: irc_nickname -> No active DrFTPD account linked.");
         }
     }
 
@@ -57,7 +57,7 @@ class UserWhoisTest {
     }
 
     @Test void rejectsPrivateOtherChannelAndPrivateOutputRouting() throws Exception {
-        var request = request("puff");
+        var request = request("irc_nickname");
         when(session.getSource()).thenReturn("admin");
         new UserHandler().doWhois(request);
         when(session.getSource()).thenReturn("#public");
@@ -70,23 +70,23 @@ class UserWhoisTest {
     }
 
     @Test void ftpUsesSelectedBotAndKeepsAdminProtection() throws Exception {
-        var request = request("puff");
+        var request = request("irc_nickname");
         var global = mock(GlobalContext.class, RETURNS_DEEP_STUBS);
         var wrapper = mock(org.drftpd.master.sitebot.SiteBotWrapper.class);
         when(global.getPlugins()).thenReturn(java.util.List.of(wrapper));
         when(wrapper.getBots()).thenReturn(new java.util.ArrayList<>(java.util.List.of(bot)));
-        when(bot.getKnownFtpUser("puff")).thenReturn("G6");
+        when(bot.getKnownFtpUser("irc_nickname")).thenReturn("ftp_username");
         when(bot.getBotName()).thenReturn("TestBot");
         var target = mock(User.class, RETURNS_DEEP_STUBS);
-        when(global.getUserManager().getUserByName("G6")).thenReturn(target);
-        when(target.getName()).thenReturn("G6");
-        when(target.getGroup().getName()).thenReturn("ROSiN");
+        when(global.getUserManager().getUserByName("ftp_username")).thenReturn(target);
+        when(target.getName()).thenReturn("ftp_username");
+        when(target.getGroup().getName()).thenReturn("group");
         try (var context = mockStatic(GlobalContext.class)) {
             context.when(GlobalContext::getGlobalContext).thenReturn(global);
-            assertEquals("WHOIS: puff -> G6/ROSiN", new UserHandler().doSITE_WHOIS(request).getMessage());
+            assertEquals("WHOIS: irc_nickname -> ftp_username/group", new UserHandler().doSITE_WHOIS(request).getMessage());
             when(wrapper.getBots()).thenReturn(new java.util.ArrayList<>(java.util.List.of(bot, mock(SiteBot.class))));
             assertEquals(501, new UserHandler().doSITE_WHOIS(request).getCode());
-            when(request.getArgument()).thenReturn("puff TestBot");
+            when(request.getArgument()).thenReturn("irc_nickname TestBot");
             assertEquals(200, new UserHandler().doSITE_WHOIS(request).getCode());
             when(actor.isMemberOf("siteop")).thenReturn(false);
             assertEquals(530, new UserHandler().doSITE_WHOIS(request).getCode());
@@ -94,7 +94,7 @@ class UserWhoisTest {
     }
 
     @Test void rejectsNonAdminsEvenIfCommandPermissionsAreMisconfigured() throws Exception {
-        var request = request("puff");
+        var request = request("irc_nickname");
         when(actor.isMemberOf("siteop")).thenReturn(false);
         new UserHandler().doWhois(request);
         verify(session).printOutput("WHOIS: Permission denied (siteop only).");
@@ -102,7 +102,7 @@ class UserWhoisTest {
     }
 
     @Test void rejectsMissingExtraAndControlArguments() {
-        for (String argument : new String[]{"", "puff another", "puff\r\n", "x".repeat(129)}) {
+        for (String argument : new String[]{"", "irc_nickname another", "irc_nickname\r\n", "x".repeat(129)}) {
             assertThrows(ImproperUsageException.class, () -> new UserHandler().doWhois(request(argument)));
         }
     }
