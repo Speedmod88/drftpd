@@ -37,11 +37,11 @@ class UserWhoisTest {
         var target = mock(User.class, RETURNS_DEEP_STUBS);
         when(global.getUserManager().getUserByName("ftp_username")).thenReturn(target);
         when(target.getName()).thenReturn("ftp_username");
-        when(target.getGroup().getName()).thenReturn("example_group");
+        when(target.getGroup().getName()).thenReturn("group");
         try (var context = mockStatic(GlobalContext.class)) {
             context.when(GlobalContext::getGlobalContext).thenReturn(global);
             new UserHandler().doWhois(request);
-            verify(session).printOutput("WHOIS: irc_nickname -> ftp_username/example_group");
+            verify(session).printOutput("WHOIS: irc_nickname -> ftp_username/group");
             when(target.getGroup().getName()).thenReturn("NewGroup");
             new UserHandler().doWhois(request);
             verify(session).printOutput("WHOIS: irc_nickname -> ftp_username/NewGroup");
@@ -80,10 +80,10 @@ class UserWhoisTest {
         var target = mock(User.class, RETURNS_DEEP_STUBS);
         when(global.getUserManager().getUserByName("ftp_username")).thenReturn(target);
         when(target.getName()).thenReturn("ftp_username");
-        when(target.getGroup().getName()).thenReturn("example_group");
+        when(target.getGroup().getName()).thenReturn("group");
         try (var context = mockStatic(GlobalContext.class)) {
             context.when(GlobalContext::getGlobalContext).thenReturn(global);
-            assertEquals("WHOIS: irc_nickname -> ftp_username/example_group", new UserHandler().doSITE_WHOIS(request).getMessage());
+            assertEquals("WHOIS: irc_nickname -> ftp_username/group", new UserHandler().doSITE_WHOIS(request).getMessage());
             when(wrapper.getBots()).thenReturn(new java.util.ArrayList<>(java.util.List.of(bot, mock(SiteBot.class))));
             assertEquals(501, new UserHandler().doSITE_WHOIS(request).getCode());
             when(request.getArgument()).thenReturn("irc_nickname TestBot");
