@@ -44,6 +44,38 @@ public class UserHandler extends CommandInterface {
 
     private static final Logger logger = LogManager.getLogger(UserHandler.class);
 
+    public CommandResponse doWhois(CommandRequest request) throws ImproperUsageException {
+        if (!(request.getSession() instanceof ServiceCommand session)) return new CommandResponse(530, "IRC command only");
+        User actor = session.getUserNull(request.getUser());
+        if (actor == null || actor.isDeleted() || !actor.isMemberOf("siteop")) {
+            session.printOutput("WHOIS: Permission denied (siteop only).");
+            return null;
+        }
+        String nick = request.getArgument();
+        if (nick == null || nick.isBlank() || nick.length() > 128
+                || nick.chars().anyMatch(c -> Character.isWhitespace(c) || Character.isISOControl(c)))
+            throw new ImproperUsageException();
+        String username = session.getBot().getKnownFtpUser(nick);
+        if (username == null) {
+            session.printOutput("WHOIS: " + nick + " -> No identified DrFTPD account known to this SiteBot.");
+            return null;
+        }
+        try {
+            User target = GlobalContext.getGlobalContext().getUserManager().getUserByName(username);
+            if (target.isDeleted()) {
+                session.printOutput("WHOIS: " + nick + " -> No active DrFTPD account linked.");
+            } else {
+                session.printOutput("WHOIS: " + nick + " -> " + target.getName() + "/" + target.getGroup().getName());
+            }
+        } catch (NoSuchUserException e) {
+            session.printOutput("WHOIS: " + nick + " -> No active DrFTPD account linked.");
+        } catch (UserFileException e) {
+            logger.warn("WHOIS could not read linked FTP user {}", username, e);
+            session.printOutput("WHOIS: Unable to read the linked DrFTPD account; check master logs.");
+        }
+        return null;
+    }
+
     public CommandResponse doIdent(CommandRequest request) throws ImproperUsageException {
         StringTokenizer st = new StringTokenizer(request.getArgument());
         if (st.countTokens() < 2) {
