@@ -1,7 +1,7 @@
 # Admin IRC account lookup
 
-An identified siteop can run !whois puff only in the configured sysop channel.
-The response stays in that channel: WHOIS: puff -> G6/ROSiN.
+An identified siteop can run !whois irc_nickname only in the configured sysop channel.
+The response stays in that channel: WHOIS: irc_nickname -> ftp_username/group.
 The group is the linked FTP account's current primary group, not a slave name.
 
 Lookup uses the receiving SiteBot's existing IDENT/INVITE association. It does
@@ -16,7 +16,7 @@ distributed placeholder is #sysop), and keep output source. The handler enforces
 that source and sole output destination match channel; PMs and other channels
 cannot disclose identities even if input is accidentally broadened.
 
-FTP siteops can run SITE WHOIS puff, or SITE WHOIS puff BotName when multiple
+FTP siteops can run SITE WHOIS irc_nickname, or SITE WHOIS irc_nickname BotName when multiple
 bots are loaded. The result is returned on the FTP control connection, not IRC.
 
 Deploy the updated SiteBot master JAR with the master stopped. Merge the whois
