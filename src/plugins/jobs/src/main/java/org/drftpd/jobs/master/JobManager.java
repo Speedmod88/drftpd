@@ -124,7 +124,8 @@ public class JobManager implements PluginInterface {
             Collection<RemoteSlave> availableSlaves = null;
 
             try {
-                availableSlaves = tempJob.getFile().getAvailableSlaves();
+                if (tempJob.isSourceRestricted() && tempJob.checkIfArchived()) return tempJob;
+                availableSlaves = tempJob.getAvailableSourceSlaves();
             } catch (NoAvailableSlaveException e) {
                 continue; // can't transfer what isn't online
             } catch (FileNotFoundException e) {
@@ -194,6 +195,10 @@ public class JobManager implements PluginInterface {
                  */
                 if (job.checkIfArchived()) {
                     job.cleanup();
+                    if (job.isSourceRestricted() && !job.isDone()) {
+                        skipJobs.add(job);
+                        continue;
+                    }
                     removeJobFromQueue(job);
 
                     logger.info("!! processJob return - job archive done already");
@@ -201,8 +206,11 @@ public class JobManager implements PluginInterface {
                 }
 
                 try {
-                    sourceSlave = getGlobalContext().getSlaveSelectionManager().getASlaveForJobDownload(job.getFile(), job.getSlaveObjects(job.getSlavesToTransferTo()));
+                    sourceSlave = getGlobalContext().getSlaveSelectionManager().getASlaveForJobDownload(job.getFile(), job.getDownloadExclusions());
+                    if (sourceSlave != null && !job.isAllowedSource(sourceSlave))
+                        throw new NoAvailableSlaveException("Selected source is outside the offload scope");
                 } catch (NoAvailableSlaveException e) {
+                    if (job.isSourceRestricted()) { skipJobs.add(job); continue; }
                     try {
                         busySlavesDown.addAll(job.getFile().getSlaves());
                     } catch (FileNotFoundException e1) {

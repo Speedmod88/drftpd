@@ -20,9 +20,9 @@ package org.drftpd.archive.master.archivetypes;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.drftpd.archive.master.Archive;
+import org.drftpd.jobs.master.Job;
 import org.drftpd.common.util.PropertyHelper;
 import org.drftpd.master.GlobalContext;
-import org.drftpd.master.exceptions.NoAvailableSlaveException;
 import org.drftpd.master.sections.SectionInterface;
 import org.drftpd.master.slavemanagement.RemoteSlave;
 import org.drftpd.master.vfs.DirectoryHandle;
@@ -118,20 +118,24 @@ public class MoveReleaseOffSlavesToMostFreeSlaves extends ArchiveType {
                 }
             } else {
                 try {
-                    for (RemoteSlave rslave : ((FileHandle) inode).getAvailableSlaves()) {
+                    for (RemoteSlave rslave : ((FileHandle) inode).getSlaves()) {
                         if (_offOfSlaves.contains(rslave)) {
                             return false;
                         }
                     }
-                } catch (NoAvailableSlaveException e) {
-                    throw new OfflineSlaveException("There were no available slaves for " + inode.getPath());
                 } catch (FileNotFoundException e) {
                     throw new FileNotFoundException("File was not found " + inode.getPath());
                 }
             }
         }
-        return isArchivedToSpecificSlaves(lrf, _numOfSlaves, findDestinationSlaves());
+        return true;
 
+    }
+
+    @Override
+    protected Job createTransferJob(FileHandle file, Set<RemoteSlave> destinations) throws FileNotFoundException {
+        if (java.util.Collections.disjoint(file.getSlaves(), _offOfSlaves)) return null;
+        return Job.forOffload(file, _priority, _numOfSlaves, destinations, _offOfSlaves);
     }
 
     /*
