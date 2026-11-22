@@ -54,6 +54,48 @@ public class Job {
 
     private Set<String> _destSlaves;
 
+    // Null preserves legacy consolidation; restricted offloads may delete only these sources.
+    private Set<String> _offloadSources;
+
+    public static Job forOffload(FileHandle file, int priority, int copies,
+                                 Collection<RemoteSlave> destinations, Collection<RemoteSlave> sources) {
+        Job job = new Job(file, priority, copies, destinations);
+        Set<String> names = new HashSet<>();
+        for (RemoteSlave slave : sources) names.add(slave.getName());
+        if (names.isEmpty() || copies < 1 || copies > job._destSlaves.size()
+                || !Collections.disjoint(names, job._destSlaves))
+            throw new IllegalArgumentException("Offload requires distinct nonempty sources and sufficient destinations");
+        job._offloadSources = Set.copyOf(names);
+        return job;
+    }
+
+    public boolean isSourceRestricted() { return _offloadSources != null; }
+
+    public boolean isAllowedSource(RemoteSlave slave) {
+        return !isSourceRestricted() || _offloadSources.contains(slave.getName());
+    }
+
+    public Collection<RemoteSlave> getAvailableSourceSlaves() throws FileNotFoundException, NoAvailableSlaveException {
+        Collection<RemoteSlave> sources = new ArrayList<>(getFile().getAvailableSlaves());
+        sources.removeIf(slave -> !isAllowedSource(slave));
+        if (sources.isEmpty()) throw new NoAvailableSlaveException();
+        return sources;
+    }
+
+    public Collection<RemoteSlave> getDownloadExclusions() throws FileNotFoundException, ObjectNotFoundException {
+        Set<RemoteSlave> excluded = new HashSet<>(getSlaveObjects(getSlavesToTransferTo()));
+        if (isSourceRestricted()) {
+            for (RemoteSlave slave : getFile().getSlaves())
+                if (!isAllowedSource(slave)) excluded.add(slave);
+        }
+        return excluded;
+    }
+
+    private boolean hasOffloadCopies() throws FileNotFoundException {
+        for (RemoteSlave slave : getFile().getSlaves()) if (isAllowedSource(slave)) return true;
+        return false;
+    }
+
     private final FileHandle _file;
 
     private final int _priority;
@@ -141,6 +183,10 @@ public class Job {
      * is where files are possibly deleted from slaves.
      */
     public void cleanup() {
+        if (isSourceRestricted()) {
+            cleanupOffload();
+            return;
+        }
         try {
             // remove slaves that aren't in the destination list
             for (RemoteSlave rslave : new ArrayList<>(getFile().getSlaves())) {
@@ -173,6 +219,30 @@ public class Job {
             logger.error("File was not found anymore for this Job, it existed during creation of the Job. Not sure how to handle so ignoring");
         } finally {
             _deleteDone = true;
+        }
+    }
+
+    private void cleanupOffload() {
+        try {
+            if (!hasOffloadCopies()) { _transferNum = 0; _deleteDone = true; return; }
+            if (getFile().isTransferring()) return;
+            long availableCopies = getFile().getSlaves().stream()
+                    .filter(slave -> _destSlaves.contains(slave.getName()) && slave.isAvailable()).count();
+            if (availableCopies < _originalTransferNum) return;
+            for (RemoteSlave slave : new ArrayList<>(getFile().getSlaves())) {
+                if (!isAllowedSource(slave)) continue;
+                if (!slave.isAvailable() || slave.isRemerging()) continue;
+                // Recheck before each deletion; unrelated holders are never trimmed to the copy count.
+                long copies = getFile().getSlaves().stream()
+                        .filter(holder -> _destSlaves.contains(holder.getName()) && holder.isAvailable()).count();
+                if (copies < _originalTransferNum || getFile().isTransferring()) return;
+                slave.simpleDelete(getFile().getPath());
+                getFile().removeSlave(slave);
+            }
+            if (!hasOffloadCopies()) { _transferNum = 0; _deleteDone = true; }
+        } catch (FileNotFoundException e) {
+            logger.warn("Offload file disappeared during cleanup; no unrelated copies deleted", e);
+            abort();
         }
     }
 
@@ -342,6 +412,8 @@ public class Job {
     public void transfer(boolean checkCRC, boolean secureTransfer, RemoteSlave sourceSlave, RemoteSlave destSlave)
             throws FileNotFoundException {
 
+        if (!isAllowedSource(sourceSlave)) throw new IllegalArgumentException("Source is outside this offload scope");
+
         synchronized (this) {
             if (_slaveTransfer != null) {
                 throw new IllegalStateException("Job is already transferring");
@@ -480,6 +552,13 @@ public class Job {
      * on at least "_transferNum" of them.
      */
     public boolean checkIfArchived() {
+        if (isSourceRestricted()) {
+            try {
+                if (!hasOffloadCopies()) return true;
+                return getFile().getSlaves().stream()
+                        .filter(slave -> _destSlaves.contains(slave.getName()) && slave.isAvailable()).count() >= _originalTransferNum;
+            } catch (FileNotFoundException e) { return true; }
+        }
         int numofslaves = _originalTransferNum;
         try {
             for (String destSlave : _destSlaves) {

@@ -522,12 +522,17 @@ public abstract class ArchiveType {
             jobQueue.addAll(recursiveSend(directoryHandle, destinations));
         }
         for (FileHandle file : lrf.getFilesUnchecked()) {
+            Job job = createTransferJob(file, destinations);
+            if (job == null) continue;
             logger.info("Adding {} to the job queue", file.getPath());
-            Job job = new Job(file, _priority, _numOfSlaves, new HashSet<>(destinations));
             jobQueue.add(job);
         }
 
         return jobQueue;
+    }
+
+    protected Job createTransferJob(FileHandle file, Set<RemoteSlave> destinations) throws FileNotFoundException {
+        return new Job(file, _priority, _numOfSlaves, new HashSet<>(destinations));
     }
 
     /*
