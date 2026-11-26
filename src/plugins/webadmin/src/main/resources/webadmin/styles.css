@@ -49,6 +49,7 @@
 #archiveRows td { vertical-align: top; }
 #dupeRows .dupe-status { font-weight: 700; min-width: 115px; }
 #dupeRows .dupe-completion { min-width: 80px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#dupeRows .dupe-size { min-width: 80px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #view-dupe2 th:nth-child(3) { text-align: right; }
 .dupe-keep { color: #13795b; }
 .dupe-incomplete { color: #a45100; }
@@ -327,6 +328,7 @@ tbody tr:last-child td { border-bottom: 0; }
   box-shadow: 0 10px 28px rgba(0, 0, 0, .2);
 }
 dialog { width: min(430px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 7px; padding: 20px; }
+#confirmDialog { width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
 dialog::backdrop { background: rgba(19, 25, 23, .55); }
 dialog h3 { margin-top: 0; }
 #confirmText { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; }
