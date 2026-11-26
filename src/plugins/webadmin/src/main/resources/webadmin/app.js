@@ -123,7 +123,7 @@ async function showHistory() {
       const row = document.createElement("tr");
       const values = job.recovery
         ? [item.releasePath, item.file, item.status, item.source, JSON.stringify(item.local || {}), item.crc]
-        : item.key ? [item.key, item.status, Number.isInteger(item.completionPercent) ? item.completionPercent + "%" : "Unknown", item.score, item.path]
+        : item.key ? [item.key, item.status, Number.isInteger(item.completionPercent) ? item.completionPercent + "%" : "Unknown", dupeSize(item.sizeBytes), item.score, item.path]
         : [item.source, item.destination, item.status];
       values.forEach(value => row.append(td(value == null ? "" : String(value))));
       rows.append(row);
@@ -732,6 +732,10 @@ function needsDupeVerification(item) {
   return item.status === "UNKNOWN" || item.status === "MISSING SFV";
 }
 
+function dupeSize(bytes) {
+  return typeof bytes === "number" && Number.isFinite(bytes) && bytes >= 0 ? formatBytes(bytes) : "Unknown";
+}
+
 function renderDupes() {
   const visible = visibleDupes();
   const body = $("#dupeRows");
@@ -742,7 +746,7 @@ function renderDupes() {
       const heading = document.createElement("tr");
       heading.className = "dupe-group";
       const label = td(item.key);
-      label.colSpan = 5;
+      label.colSpan = 6;
       heading.append(label);
       body.append(heading);
       previousKey = item.key;
@@ -773,7 +777,10 @@ function renderDupes() {
     const completion = td(percent === null ? "Unknown" : percent + "%");
     completion.className = "dupe-status dupe-completion " + (percent === 100 ? "dupe-keep" : "dupe-incomplete");
     if (percent !== null) completion.title = item.completedFiles + " / " + item.totalFiles + " completed payload files";
-    row.append(cell, status, completion, td(String(item.score)), td(path));
+    const size = td(dupeSize(item.sizeBytes));
+    size.className = "dupe-size";
+    if (typeof item.sizeBytes === "number" && item.sizeBytes >= 0) size.title = item.sizeBytes + " bytes (VFS)";
+    row.append(cell, status, completion, size, td(String(item.score)), td(path));
     body.append(row);
   }
   $("#dupePage").textContent = dupeGroups().length + " groups - " + state.dupePaths.length + " results";
