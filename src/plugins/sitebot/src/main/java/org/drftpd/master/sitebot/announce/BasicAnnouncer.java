@@ -27,6 +27,8 @@ import org.drftpd.master.event.DirectoryFtpEvent;
 import org.drftpd.master.event.MasterEvent;
 import org.drftpd.master.event.SlaveEvent;
 import org.drftpd.master.exceptions.SlaveUnavailableException;
+import org.drftpd.master.sections.SectionInterface;
+import org.drftpd.master.sections.conf.DatedSection;
 import org.drftpd.master.sitebot.AbstractAnnouncer;
 import org.drftpd.master.sitebot.AnnounceWriter;
 import org.drftpd.master.sitebot.MessagePriority;
@@ -334,7 +336,28 @@ public class BasicAnnouncer extends AbstractAnnouncer {
         env.put("user", direvent.getUser().getName());
         env.put("group", direvent.getUser().getGroup());
         env.put("section", writer.getSectionName(dir));
-        env.put("sectioncolor", GlobalContext.getGlobalContext().getSectionManager().lookup(dir).getColor());
-        env.put("path", writer.getPath(dir));
+        SectionInterface section = GlobalContext.getGlobalContext().getSectionManager().lookup(dir);
+        env.put("sectioncolor", section.getColor());
+        env.put("path", directoryEventPath(direvent, writer, section));
+    }
+
+    static String directoryEventPath(DirectoryFtpEvent event, AnnounceWriter writer, SectionInterface section) {
+        DirectoryHandle dir = event.getDirectory();
+        boolean wipe = "WIPE".equals(event.getCommand());
+        // Dated-section announcement rules hide the date prefix for releases, not for a wiped datedir itself.
+        if (wipe && section instanceof DatedSection
+                && dir.getParent().getPath().equals(section.getBaseDirectory().getPath())) return dir.getName();
+        String path;
+        try {
+            path = writer.getPath(dir);
+        } catch (IndexOutOfBoundsException e) {
+            if (!wipe) throw e;
+            path = null;
+        }
+        if (wipe && (path == null || path.isBlank())) {
+            logger.debug("Using directory name for empty WIPE announcement path: {}", dir.getPath());
+            return dir.getName().isBlank() ? dir.getPath() : dir.getName();
+        }
+        return path;
     }
 }
