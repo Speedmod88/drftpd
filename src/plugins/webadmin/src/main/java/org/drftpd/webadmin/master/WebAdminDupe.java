@@ -18,13 +18,22 @@ final class WebAdminDupe {
     private WebAdminDupe() { }
 
     record Row(String path, String key, String status, int score, boolean eligible,
-               Integer completionPercent, long completedFiles, long totalFiles) { }
+               Integer completionPercent, long completedFiles, long totalFiles, Long sizeBytes) { }
 
     static Row row(Dupe2Utils.ReviewResult result) {
         var directory = new DirectoryHandle(result.path());
         var progress = WebAdminDupeProgress.read(directory);
         return new Row(result.path(), result.key(), WebAdminDupeStatus.label(directory, result.status()), result.score(), result.eligible(),
-                progress.percent(), progress.completed(), progress.total());
+                progress.percent(), progress.completed(), progress.total(), releaseSize(directory));
+    }
+
+    static Long releaseSize(DirectoryHandle directory) {
+        try {
+            long size = directory.getSize();
+            return size >= 0 ? size : null;
+        } catch (java.io.FileNotFoundException e) {
+            return null;
+        }
     }
 
     static User user(String name) throws Exception {
